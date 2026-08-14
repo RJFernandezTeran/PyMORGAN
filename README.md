@@ -18,7 +18,7 @@
 [![GitHub Stars](https://img.shields.io/github/stars/RJFernandezTeran/PyMORGAN?style=flat&logo=github)](https://github.com/RJFernandezTeran/PyMORGAN/stargazers)
 [![GitHub Forks](https://img.shields.io/github/forks/RJFernandezTeran/PyMORGAN?style=flat&logo=github)](https://github.com/RJFernandezTeran/PyMORGAN/network/members)
 [![GitHub Issues](https://img.shields.io/github/issues/RJFernandezTeran/PyMORGAN?logo=github)](https://github.com/RJFernandezTeran/PyMORGAN/issues)
-[![PyPI - Downloads](https://img.shields.io/pypi/dm/pymorgan.svg?logo=pypi&logoColor=white)](https://pypi.org/project/pymorgan/)
+[![Downloads](https://img.shields.io/pepy/dt/pymorgan?label=downloads)](https://pepy.tech/project/pymorgan)
 
 Plotting and analysis of ultrafast time-resolved spectroscopy data in **1D**
 (pump–probe, transient IR, FLUPS, …) and **2D** (2D-IR, 2D-ES, 2D-VE, 2D-EV), plus
