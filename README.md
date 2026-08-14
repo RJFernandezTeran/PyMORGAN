@@ -7,7 +7,6 @@
 [![PyPI - Version](https://img.shields.io/pypi/v/pymorgan.svg?logo=pypi&logoColor=white&label=PyPI)](https://pypi.org/project/pymorgan/)
 [![GitHub Release](https://img.shields.io/github/v/release/RJFernandezTeran/PyMORGAN?logo=github&label=Release)](https://github.com/RJFernandezTeran/PyMORGAN/releases)
 [![Python >= 3.12](https://img.shields.io/badge/python-%3E%3D3.12-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
-[![PyPI - Python Version](https://img.shields.io/pypi/pyversions/pymorgan.svg?logo=python&logoColor=white)](https://pypi.org/project/pymorgan/)
 [![GUI: PyQt6](https://img.shields.io/badge/GUI-PyQt6-41CD52.svg?logo=qt&logoColor=white)](https://riverbankcomputing.com/software/pyqt/)
 [![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)](https://github.com/astral-sh/uv)
 [![Code style: Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
