@@ -7,7 +7,6 @@
 [![PyPI - Version](https://img.shields.io/pypi/v/pymorgan.svg?logo=pypi&logoColor=white&label=PyPI)](https://pypi.org/project/pymorgan/)
 [![GitHub Release](https://img.shields.io/github/v/release/RJFernandezTeran/PyMORGAN?logo=github&label=Release)](https://github.com/RJFernandezTeran/PyMORGAN/releases)
 [![Python >= 3.12](https://img.shields.io/badge/python-%3E%3D3.12-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
-[![PyPI - Python Version](https://img.shields.io/pypi/pyversions/pymorgan.svg?logo=python&logoColor=white)](https://pypi.org/project/pymorgan/)
 [![GUI: PyQt6](https://img.shields.io/badge/GUI-PyQt6-41CD52.svg?logo=qt&logoColor=white)](https://riverbankcomputing.com/software/pyqt/)
 [![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)](https://github.com/astral-sh/uv)
 [![Code style: Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
@@ -18,7 +17,7 @@
 [![GitHub Stars](https://img.shields.io/github/stars/RJFernandezTeran/PyMORGAN?style=flat&logo=github)](https://github.com/RJFernandezTeran/PyMORGAN/stargazers)
 [![GitHub Forks](https://img.shields.io/github/forks/RJFernandezTeran/PyMORGAN?style=flat&logo=github)](https://github.com/RJFernandezTeran/PyMORGAN/network/members)
 [![GitHub Issues](https://img.shields.io/github/issues/RJFernandezTeran/PyMORGAN?logo=github)](https://github.com/RJFernandezTeran/PyMORGAN/issues)
-[![PyPI - Downloads](https://img.shields.io/pypi/dm/pymorgan.svg?logo=pypi&logoColor=white)](https://pypi.org/project/pymorgan/)
+[![Downloads](https://img.shields.io/pepy/dt/pymorgan?label=downloads)](https://pepy.tech/project/pymorgan)
 
 Plotting and analysis of ultrafast time-resolved spectroscopy data in **1D**
 (pump–probe, transient IR, FLUPS, …) and **2D** (2D-IR, 2D-ES, 2D-VE, 2D-EV), plus
