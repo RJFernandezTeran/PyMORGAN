@@ -296,6 +296,11 @@ class Dataset1D:
                 return np.nanstd(zss, axis=-1)
         return None
 
+    @property
+    def has_noise(self) -> bool:
+        """True if non-trivial noise or single-scan standard deviation is available."""
+        return self.noise_array() is not None
+
     def _noise_array(self):
         """Deprecated alias of :meth:`noise_array`.
 

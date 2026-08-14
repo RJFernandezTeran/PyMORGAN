@@ -515,6 +515,32 @@ def plot_map(
                 handlelength=0.75,
             )
 
+    _x_arr = np.asarray(X, dtype=float)
+    _y_arr = np.asarray(Y, dtype=float)
+    _z_grid = np.asarray(Z_contour)
+
+    def _format_coord(x, y):
+        try:
+            if (
+                _x_arr.size == 0
+                or _y_arr.size == 0
+                or x < np.nanmin(_x_arr)
+                or x > np.nanmax(_x_arr)
+                or y < np.nanmin(_y_arr)
+                or y > np.nanmax(_y_arr)
+            ):
+                return f"x={x:.4g}, y={y:.4g}"
+            ix = int(np.nanargmin(np.abs(_x_arr - x)))
+            iy = int(np.nanargmin(np.abs(_y_arr - y)))
+            val = _z_grid[iy, ix]
+            if np.ma.is_masked(val) or np.isnan(val):
+                return f"x={x:.4g}, y={y:.4g}, z=NaN"
+            return f"x={x:.4g}, y={y:.4g}, z={val:.4g}"
+        except Exception:
+            return f"x={x:.4g}, y={y:.4g}"
+
+    ax.format_coord = _format_coord
+
     return Map2DAxes(ax=ax, top=ax_top, cbar=cax)
 
 

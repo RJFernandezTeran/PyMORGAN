@@ -1,4 +1,4 @@
-# Form implementation generated from reading ui file 'src/pymorgan/gui/main_window.ui'
+# Form implementation generated from reading ui file 'src\pymorgan\gui\main_window.ui'
 #
 # Created by: PyQt6 UI code generator 6.11.0
 #
@@ -109,7 +109,7 @@ class Ui_MainWindow(object):
 "                                stop: 0 #E1E1E1, stop: 0.4 #EEEEEE,\n"
 "                                stop: 0.5 #EFEFEF, stop: 1.0 #D3D3D3);\n"
 "    border: 1px solid #C4C4C3;\n"
-"    border-bottom-color: #C2C7CB; /* same as the pane colour */\n"
+"    border-bottom-color: #C2C7CB; /* same as the pane color */\n"
 "    border-top-left-radius: 5px;\n"
 "    border-top-right-radius: 5px;\n"
 "    min-width: 30ex;\n"
@@ -124,7 +124,7 @@ class Ui_MainWindow(object):
 "\n"
 "QTabWidget#MainTabs > QTabBar::tab:selected {\n"
 "    border-color: #9B9B9B;\n"
-"    border-bottom-color: #C2C7CB; /* same as pane colour */\n"
+"    border-bottom-color: #C2C7CB; /* same as pane color */\n"
 "}\n"
 "\n"
 "QTabWidget#MainTabs > QTabBar::tab:!selected {\n"
@@ -315,6 +315,7 @@ class Ui_MainWindow(object):
         self.PP_shiftT0_btn.setObjectName("PP_shiftT0_btn")
         self.horizontalLayout_4.addWidget(self.PP_shiftT0_btn)
         self.PP_plotNoise_btn = QtWidgets.QPushButton(parent=self.oneD_PreProcessing_box)
+        self.PP_plotNoise_btn.setEnabled(False)
         sizePolicy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Policy.MinimumExpanding, QtWidgets.QSizePolicy.Policy.Fixed)
         sizePolicy.setHorizontalStretch(1)
         sizePolicy.setVerticalStretch(0)
@@ -649,6 +650,18 @@ class Ui_MainWindow(object):
         self.PC_arcsinh.setChecked(False)
         self.PC_arcsinh.setObjectName("PC_arcsinh")
         self.plotControlsGrid.addWidget(self.PC_arcsinh, 2, 6, 1, 1)
+        self.PC_arcsinhPct = QtWidgets.QDoubleSpinBox(parent=self.PC_box)
+        self.PC_arcsinhPct.setEnabled(False)
+        self.PC_arcsinhPct.setMinimumSize(QtCore.QSize(68, 0))
+        self.PC_arcsinhPct.setMaximumSize(QtCore.QSize(68, 16777215))
+        self.PC_arcsinhPct.setKeyboardTracking(False)
+        self.PC_arcsinhPct.setDecimals(1)
+        self.PC_arcsinhPct.setMinimum(0.1)
+        self.PC_arcsinhPct.setMaximum(100.0)
+        self.PC_arcsinhPct.setSingleStep(1.0)
+        self.PC_arcsinhPct.setProperty("value", 5.0)
+        self.PC_arcsinhPct.setObjectName("PC_arcsinhPct")
+        self.plotControlsGrid.addWidget(self.PC_arcsinhPct, 3, 6, 1, 1)
         self.PC_lblSmooth = QtWidgets.QLabel(parent=self.PC_box)
         self.PC_lblSmooth.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight|QtCore.Qt.AlignmentFlag.AlignTrailing|QtCore.Qt.AlignmentFlag.AlignVCenter)
         self.PC_lblSmooth.setObjectName("PC_lblSmooth")
@@ -1707,7 +1720,7 @@ class Ui_MainWindow(object):
         self.PP_reloadData_btn.setToolTip(_translate("MainWindow", "Reload the current dataset from disk"))
         self.PP_reloadData_btn.setText(_translate("MainWindow", "Reload"))
         self.oneD_PreProcessing_box.setTitle(_translate("MainWindow", "Pre-processing"))
-        self.PP_fitChirp_btn.setToolTip(_translate("MainWindow", "Fit a chirp/dispersion correction curve to the coherent artefact"))
+        self.PP_fitChirp_btn.setToolTip(_translate("MainWindow", "Fit a chirp/dispersion correction curve to the coherent artifact"))
         self.PP_fitChirp_btn.setText(_translate("MainWindow", "Fit Chirp"))
         self.PP_loadChirpCorr_btn.setToolTip(_translate("MainWindow", "Load a saved chirp correction curve from file"))
         self.PP_loadChirpCorr_btn.setText(_translate("MainWindow", "Load Chirp. Corr."))
@@ -1782,6 +1795,8 @@ class Ui_MainWindow(object):
         self.PC_autoYcuts.setText(_translate("MainWindow", "Auto-Y in cuts"))
         self.PC_xMaxLabel.setText(_translate("MainWindow", "Max probe"))
         self.PC_arcsinh.setText(_translate("MainWindow", "arcsinh"))
+        self.PC_arcsinhPct.setToolTip(_translate("MainWindow", "Linear threshold for arcsinh color scaling as a percentage of the active amplitude limit."))
+        self.PC_arcsinhPct.setSuffix(_translate("MainWindow", " %"))
         self.PC_lblSmooth.setText(_translate("MainWindow", "Smooth"))
         self.PC_lblMaxTime.setText(_translate("MainWindow", "Max time"))
         self.PC_lblWhite.setText(_translate("MainWindow", "White levels"))
@@ -1854,7 +1869,7 @@ class Ui_MainWindow(object):
         self.twoD_otherplots_lbl.setText(_translate("MainWindow", "Other 2D plot subroutines"))
         self.twoD_subtabs.setTabText(self.twoD_subtabs.indexOf(self.twoD_otherplots_tab), _translate("MainWindow", "Other Plots"))
         self.twoD_sd_grp.setTitle(_translate("MainWindow", "Spectral Diffusion Overlays"))
-        self.twoD_show_cls_chk.setText(_translate("MainWindow", "Show CLS (Centre-Line Slope)"))
+        self.twoD_show_cls_chk.setText(_translate("MainWindow", "Show CLS (Center-Line Slope)"))
         self.twoD_show_ivcls_chk.setText(_translate("MainWindow", "Show IvCLS (Inverse CLS)"))
         self.twoD_show_nls_chk.setText(_translate("MainWindow", "Show NLS (Nodal Line Slope)"))
         self.twoD_plot_sd_kinetics_btn.setText(_translate("MainWindow", "Plot SD Kinetics"))

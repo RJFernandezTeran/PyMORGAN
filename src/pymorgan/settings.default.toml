@@ -42,6 +42,9 @@ traces_cmap = "rainbow"
 # Default number of zero levels or white levels forced to midpoint/zero colour.
 white_levels = 0.0
 
+# Linear threshold for arcsinh color scaling as a percentage of the active amplitude limit.
+asinh_pct = 5.0
+
 # Default number of contour levels for 1D and 2D plots.
 n_contours = 40
 

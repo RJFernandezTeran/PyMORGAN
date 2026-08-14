@@ -15,6 +15,7 @@ import string
 
 import matplotlib.pyplot as plt
 import matplotlib.ticker as tkr
+import matplotlib.colors as mcolors
 import mpl_axes_aligner
 import numpy as np
 from matplotlib.legend_handler import HandlerLine2D
@@ -182,14 +183,50 @@ def _add_complementary_axis(where, sec, labelStyle, side="top"):
     return ax2
 
 
+def _asinh_colorbar_ticks(vmin, vmax, linear_width):
+    """Generate clean, rounded tick values for an asinh colorbar without crowding near 0."""
+    z_max = max(abs(vmin), abs(vmax))
+    if z_max <= 0 or not np.isfinite(z_max):
+        return [0.0]
+    s = max(1e-9, float(linear_width))
+    exp_min = int(np.floor(np.log10(s * 0.7)))
+    exp_max = int(np.ceil(np.log10(z_max * 1.05)))
+    candidates = []
+    for exp in range(exp_min, exp_max + 1):
+        base = 10.0 ** exp
+        for mult in (1.0, 2.0, 5.0):
+            val = mult * base
+            if val >= s * 0.75 and val <= z_max * 1.05:
+                candidates.append(val)
+    candidates = sorted(set(candidates))
+    if len(candidates) == 0:
+        pos_ticks = [z_max]
+    elif len(candidates) <= 3:
+        pos_ticks = list(candidates)
+    elif len(candidates) == 4:
+        pos_ticks = [candidates[0], candidates[1], candidates[3]]
+    else:
+        mid_target = np.sqrt(candidates[0] * candidates[-1])
+        mid_idx = int(np.argmin([abs(np.log(c) - np.log(mid_target)) for c in candidates[1:-1]])) + 1
+        pos_ticks = [candidates[0], candidates[mid_idx], candidates[-1]]
+    ticks = []
+    if vmin < 0:
+        ticks += [-x for x in reversed(pos_ticks) if x <= abs(vmin) * 1.05]
+    ticks.append(0.0)
+    if vmax > 0:
+        ticks += [x for x in pos_ticks if x <= vmax * 1.05]
+    return ticks
+
+
 def _attach_colorbar(
     where,
     mappable,
     *,
-    labelStyle,
-    Units,
-    Asinh=False,
-    cbarLbl="top",
+    labelStyle=None,
+    Units=None,
+    Asinh: bool = False,
+    asinh_linear_width: float | None = None,
+    cbarLbl: str = "top",
     show_label=True,
 ):
     """Attach a divider-based colorbar with smart (overflow-safe) tick labels.
@@ -211,29 +248,30 @@ def _attach_colorbar(
     """
     divider = make_axes_locatable(where)
     cax = divider.append_axes("right", size=_CBAR_WIDTH_IN, pad=_CBAR_PAD_IN)
-    cbar = where.figure.colorbar(mappable, cax=cax, ticks=tkr.AutoLocator())
+    if Asinh and asinh_linear_width is not None and getattr(mappable, "norm", None) is not None:
+        norm = mappable.norm
+        ticks = _asinh_colorbar_ticks(norm.vmin, norm.vmax, asinh_linear_width)
+    else:
+        ticks = tkr.MaxNLocator(5, steps=[1, 2, 2.5, 5, 10])
+    cbar = where.figure.colorbar(mappable, cax=cax, ticks=ticks)
     _fmt = tkr.ScalarFormatter(useMathText=True)
     _fmt.set_powerlimits(_CBAR_POWERLIMITS)
     cbar.ax.yaxis.set_major_formatter(_fmt)
     zstyle = _z_label_style(labelStyle, Units)
     if show_label:
-        if Asinh:
-            if cbarLbl == "top":
-                cbar.ax.set_title(r"%s" % Units["unitsZ_lbl"], loc="left")
-            elif cbarLbl == "side":
-                cbar.set_label(r"%s" % Units["unitsZ_lbl"])
-        else:
-            if cbarLbl == "top":
-                cbar.ax.set_title(
-                    hlp.fmtZlabel(zstyle, Units["unitsZ_lbl"], Units["unitsZ_ltx"], twoLines=True),
-                    fontsize=14,
-                    loc="left",
-                )
-            elif cbarLbl == "side":
-                cbar.set_label(
-                    hlp.fmtZlabel(zstyle, Units["unitsZ_lbl"], Units["unitsZ_ltx"], twoLines=False)
-                )
-    cbar.ax.tick_params(axis="y", direction="out")
+        if cbarLbl == "top":
+            cbar.ax.set_title(
+                hlp.fmtZlabel(zstyle, Units["unitsZ_lbl"], Units["unitsZ_ltx"], twoLines=True),
+                fontsize=14,
+                loc="left",
+            )
+        elif cbarLbl == "side":
+            cbar.set_label(
+                hlp.fmtZlabel(zstyle, Units["unitsZ_lbl"], Units["unitsZ_ltx"], twoLines=False),
+                fontsize=14,
+            )
+    cbar.ax.tick_params(axis="y", direction="out", labelsize=14)
+    cbar.ax.yaxis.offsetText.set_fontsize(14)
     return cbar
 
 
@@ -385,6 +423,7 @@ def plot_contour(
     Nskip=None,
     white_levels=None,
     Asinh=False,
+    asinh_pct=None,
     cbarLbl="top",
     cmap_ID=None,
     anisotropy=False,
@@ -455,9 +494,12 @@ def plot_contour(
         Number of central levels forced to white, which suppresses noise around
         the zero crossing. Defaults to ``Settings.white_levels``.
     Asinh : bool, default False
-        Plot ``arcsinh(Z)`` instead of ``Z``, compressing large amplitudes so
-        weak and strong bands can share one scale. The colorbar label is
-        annotated accordingly.
+        Apply arcsinh color scaling and non-linear contour levels, compressing
+        large amplitudes so weak and strong bands can share one scale while
+        preserving native signal units on the data and colorbar.
+    asinh_pct : float, optional
+        Linear threshold for arcsinh color scaling as a percentage of the active
+        amplitude limit (Zscale / Zmax). Defaults to ``Settings.asinh_pct`` (5.0%).
     cbarLbl : {"side", "top"}, default "side"
         Place the colorbar unit label beside or above the bar.
     cmap_ID : str, optional
@@ -520,6 +562,8 @@ def plot_contour(
         time_axis_label = s.time_axis_label.value
     if white_levels is None:
         white_levels = s.white_levels
+    if asinh_pct is None:
+        asinh_pct = getattr(s, "asinh_pct", 5.0)
 
     created = ax is None
     pFig, where = _new_axes(ax, figsize=s.contour_figsize)
@@ -528,10 +572,6 @@ def plot_contour(
     Zavg_C = data._detector_slice(detector)
     Y_t = data.delays
     X_l = _get_probe(data, detector)
-
-    if Asinh:
-        Zavg_C = np.arcsinh(Zavg_C)
-        Units["unitsZ_lbl"] = r"arcsinh (%s/%s)" % (Units["unitsZ_lbl"], Units["unitsZ_ltx"])
 
     if ProbeDir == "Y":
         Zavg_C = Zavg_C.T
@@ -588,7 +628,24 @@ def plot_contour(
     else:
         Y_t = _xplot
 
-    ctrLvl_F = np.unique(np.linspace(Zmin, Zmax, NctrF))
+    asinh_linear_width = None
+    if Asinh:
+        zspan = max(abs(Zmin), abs(Zmax))
+        if zspan == 0 or np.isnan(zspan):
+            zspan = 1.0
+        s_val = max(1e-9, (float(asinh_pct) / 100.0) * zspan)
+        asinh_linear_width = s_val
+        norm = mcolors.AsinhNorm(linear_width=s_val, vmin=Zmin, vmax=Zmax)
+
+        u_min = -np.arcsinh(abs(Zmin) / s_val) if Zmin < 0 else np.arcsinh(Zmin / s_val)
+        u_max = np.arcsinh(Zmax / s_val) if Zmax > 0 else -np.arcsinh(abs(Zmax) / s_val)
+        ctrLvl_F = np.unique(s_val * np.sinh(np.linspace(u_min, u_max, NctrF)))
+        ctrLvl_L = s_val * np.sinh(np.linspace(u_min, u_max, NctrL))
+    else:
+        norm = mcolors.Normalize(vmin=Zmin, vmax=Zmax)
+        ctrLvl_F = np.unique(np.linspace(Zmin, Zmax, NctrF))
+        ctrLvl_L = np.linspace(Zmin, Zmax, NctrL)
+
     mappable = None
     quick = bool(s.quick_plots if quick is None else quick)
     if quick:
@@ -598,18 +655,16 @@ def plot_contour(
             X_l,
             Y_t,
             Zavg_C,
-            vmin=Zmin,
-            vmax=Zmax,
+            norm=norm,
             cmap=cm_obj,
             shading="nearest",
             rasterized=True,
         )
     elif filled:
         mappable = where.contourf(
-            X_l, Y_t, Zavg_C, vmin=Zmin, vmax=Zmax, levels=ctrLvl_F, cmap=cm_obj, extend="neither"
+            X_l, Y_t, Zavg_C, norm=norm, levels=ctrLvl_F, cmap=cm_obj, extend="neither"
         )
 
-    ctrLvl_L = np.linspace(Zmin, Zmax, NctrL)
     if Nskip > 1:
         ctrLvl_LP = ctrLvl_L[ctrLvl_L >= 0]
         ctrLvl_LN = ctrLvl_L[ctrLvl_L <= 0]
@@ -636,10 +691,8 @@ def plot_contour(
             X_l,
             Y_t,
             _Z_for_lines,
-            vmin=Zmin,
-            vmax=Zmax,
+            norm=norm,
             levels=ctrLvl_L,
-            locator=tkr.LinearLocator(),
             linewidths=0.5,
             colors=LCol,
         )
@@ -648,10 +701,8 @@ def plot_contour(
             X_l,
             Y_t,
             Zavg_C,
-            vmin=Zmin,
-            vmax=Zmax,
+            norm=norm,
             levels=ctrLvl_L,
-            locator=tkr.LinearLocator(),
             linewidths=0.5,
             cmap=cm_obj,
             extend="neither",
@@ -770,9 +821,8 @@ def plot_contour(
     if show_colorbar:
         if mappable is None:
             from matplotlib.cm import ScalarMappable
-            from matplotlib.colors import Normalize
 
-            mappable = ScalarMappable(norm=Normalize(Zmin, Zmax), cmap=cm_obj)
+            mappable = ScalarMappable(norm=norm, cmap=cm_obj)
             mappable.set_array([])
         _attach_colorbar(
             where,
@@ -780,9 +830,36 @@ def plot_contour(
             labelStyle=labelStyle,
             Units=Units,
             Asinh=Asinh,
+            asinh_linear_width=asinh_linear_width,
             cbarLbl=cbarLbl,
             show_label=show_colorbar_label,
         )
+
+    _x_arr = np.asarray(X_l, dtype=float)
+    _y_arr = np.asarray(Y_t, dtype=float)
+    _z_grid = np.asarray(Zavg_C)
+
+    def _format_coord(x, y):
+        try:
+            if (
+                _x_arr.size == 0
+                or _y_arr.size == 0
+                or x < np.nanmin(_x_arr)
+                or x > np.nanmax(_x_arr)
+                or y < np.nanmin(_y_arr)
+                or y > np.nanmax(_y_arr)
+            ):
+                return f"x={x:.4g}, y={y:.4g}"
+            ix = int(np.nanargmin(np.abs(_x_arr - x)))
+            iy = int(np.nanargmin(np.abs(_y_arr - y)))
+            val = _z_grid[iy, ix]
+            if np.ma.is_masked(val) or np.isnan(val):
+                return f"x={x:.4g}, y={y:.4g}, z=NaN"
+            return f"x={x:.4g}, y={y:.4g}, z={val:.4g}"
+        except Exception:
+            return f"x={x:.4g}, y={y:.4g}"
+
+    where.format_coord = _format_coord
 
     _finalize_layout(where.figure, created)
     if created:

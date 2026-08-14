@@ -6,6 +6,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 import numpy as np
 import pytest
 import synthetic
@@ -212,5 +213,38 @@ def test_plot_spectra_and_kinetics_traces_cmap(tmp_path):
     lines_k = ax.get_lines()
     assert len(lines_k) >= 3
     plt.close(fig)
+
+
+def test_format_coord_1D(dataset):
+    fig, ax = plt.subplots()
+    dataset.plot_contour(ax=ax)
+    assert hasattr(ax, "format_coord")
+    # Query within data bounds
+    coord_str = ax.format_coord(dataset.probe[5], dataset.delays[5])
+    assert "z=" in coord_str
+    assert "x=" in coord_str and "y=" in coord_str
+    plt.close(fig)
+
+
+def test_format_coord_2D(p2dat_dataset):
+    fig, ax = plt.subplots()
+    map_axes = p2dat_dataset.plot_map(p2dat_dataset.delays[0], ax=ax)
+    assert hasattr(map_axes.ax, "format_coord")
+    coord_str = map_axes.ax.format_coord(p2dat_dataset.probe[2], p2dat_dataset.pump[2])
+    assert "z=" in coord_str
+    assert "x=" in coord_str and "y=" in coord_str
+    plt.close(fig)
+
+
+def test_asinh_contour_and_ticks(dataset):
+    fig, ax = plt.subplots()
+    ax_out = dataset.plot_contour(ax=ax, Asinh=True, asinh_pct=5.0)
+    assert isinstance(ax_out, Axes)
+    # Check that norm is AsinhNorm
+    mappable = ax.collections[0]
+    assert isinstance(mappable.norm, mcolors.AsinhNorm)
+    plt.close(fig)
+
+
 
 

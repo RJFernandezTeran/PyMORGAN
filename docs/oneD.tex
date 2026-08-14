@@ -228,6 +228,12 @@ The label style, colourmap, time-axis scale and \dA{} unit convention are taken
 from the active settings (\S\ref{sec:settings}); any of them can be overridden
 per figure through the corresponding keyword argument.
 
+For datasets with high dynamic range where weak features would otherwise be washed out by dominant bleach or ESA peaks, \code{plot_contour} provides non-linear $\operatorname{arcsinh}$ colour scaling via \code{Asinh=True} (also toggled in the GUI plot controls). Rather than modifying the underlying signal values, PyMORGAN applies an inverse hyperbolic sine colour normalization (\code{matplotlib.colors.AsinhNorm}) paired with non-linear $\sinh$-spaced contour levels:
+\begin{equation}
+  z_k = s \cdot \sinh(u_k), \quad u_k \in \left[-\operatorname{arcsinh}\left(\frac{|Z_{\min}|}{s}\right), \operatorname{arcsinh}\left(\frac{Z_{\max}}{s}\right)\right],
+\end{equation}
+where $s = \frac{p}{100} \cdot \max(|Z_{\min}|, |Z_{\max}|)$ is the linear crossover threshold set by \code{asinh_pct} ($p$, default $5.0\%$). Signals within $\pm s$ behave linearly, while larger amplitudes are compressed logarithmically. Because the underlying data array is not mutated, coordinates and hover values retain their physical units ($\mathrm{mOD}$), and colorbar ticks remain linear and clean (centred at zero and rounded to sensible numbers).
+
 \subsection{Composing figures and displaying}
 By default every plotter creates its own figure and axis. Passing an existing
 axis through \code{ax=} draws into it instead, which is how panels are combined

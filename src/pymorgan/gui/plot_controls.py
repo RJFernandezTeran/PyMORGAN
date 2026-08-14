@@ -108,6 +108,7 @@ _WIDGETS = {
     "n_contours": "PC_nContours",
     "showlines_chk": "PC_showLines",
     "arcsinh_chk": "PC_arcsinh",
+    "arcsinh_pct": "PC_arcsinhPct",
     "n_skip": "PC_nSkip",
     "z_slider": "PC_zSlider",
     "z_pct": "PC_zPct",
@@ -233,8 +234,11 @@ class PlotControlsPanel(QObject):
         for w in (self.n_contours, self.n_skip):
             w.valueChanged.connect(lambda *_: self.renderRequested.emit())
         self.white_spin.valueChanged.connect(lambda v: self._on_setting("white_levels", float(v)))
-        for chk in (self.filled_chk, self.showlines_chk, self.arcsinh_chk):
+        for chk in (self.filled_chk, self.showlines_chk):
             chk.toggled.connect(lambda *_: self.renderRequested.emit())
+        self.arcsinh_chk.toggled.connect(self._on_arcsinh_toggled)
+        if hasattr(self, "arcsinh_pct") and self.arcsinh_pct is not None:
+            self.arcsinh_pct.valueChanged.connect(lambda v: self._on_setting("asinh_pct", float(v)))
         self.sym_chk.toggled.connect(self._on_symmetric)
         self.restore_btn.clicked.connect(self.restore_limits)
         self.cmb_scale.currentTextChanged.connect(lambda v: self._on_setting("time_axis_scale", v))
@@ -246,6 +250,11 @@ class PlotControlsPanel(QObject):
     # ------------------------------------------------------------------ #
     #                                Slots                               #
     # ------------------------------------------------------------------ #
+    def _on_arcsinh_toggled(self, checked: bool):
+        if hasattr(self, "arcsinh_pct") and self.arcsinh_pct is not None:
+            self.arcsinh_pct.setEnabled(checked)
+        self.renderRequested.emit()
+
     def _on_z_edited(self, edited, other):
         """Mirror the partner field when the symmetric lock is active."""
         if self.sym_chk.isChecked():
@@ -423,6 +432,10 @@ class PlotControlsPanel(QObject):
         self.white_spin.blockSignals(True)
         self.white_spin.setValue(int(s.white_levels))
         self.white_spin.blockSignals(False)
+        if hasattr(self, "arcsinh_pct") and self.arcsinh_pct is not None:
+            self.arcsinh_pct.blockSignals(True)
+            self.arcsinh_pct.setValue(float(getattr(s, "asinh_pct", 5.0)))
+            self.arcsinh_pct.blockSignals(False)
         if hasattr(self, "n_contours") and self.n_contours is not None:
             self.n_contours.blockSignals(True)
             self.n_contours.setValue(int(getattr(s, "n_contours", 40)))
@@ -640,13 +653,17 @@ class PlotControlsPanel(QObject):
         """Per-view keyword arguments for ``plot_contour``."""
         zmin, zmax = self.zlimits()
         asinh = self.arcsinh_chk.isChecked()
-        if asinh:  # plot_contour applies arcsinh to Z; match the limits to that space
-            zmin, zmax = float(np.arcsinh(zmin)), float(np.arcsinh(zmax))
+        asinh_pct = (
+            float(self.arcsinh_pct.value())
+            if hasattr(self, "arcsinh_pct") and self.arcsinh_pct is not None
+            else 5.0
+        )
         return {
             "detector": self.detector,
             "Zmin": zmin,
             "Zmax": zmax,
             "Asinh": asinh,
+            "asinh_pct": asinh_pct,
             "filled": self.filled_chk.isChecked(),
             "ShowLines": self.showlines_chk.isChecked(),
             "smooth": self.smooth(),

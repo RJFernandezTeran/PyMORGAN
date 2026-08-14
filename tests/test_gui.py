@@ -336,6 +336,31 @@ def test_quick_plots_checkbox_toggles_setting(qapp):
         win.close()
 
 
+def test_plot_noise_button_enabled_state(qapp, tmp_path):
+    win = MainWindow()
+    assert hasattr(win, "PP_plotNoise_btn")
+    assert not win.PP_plotNoise_btn.isEnabled()
+
+    # Load PDAT without noise -> remains disabled
+    pdat_info = synthetic.make_synthetic_pdat(tmp_path / "pdat_no_noise.pdat")
+    win.load_path(pdat_info["path"], "PDAT")
+    assert not win.PP_plotNoise_btn.isEnabled()
+
+    # Load PDAT with .pdatn sibling -> enabled
+    pdat2_info = synthetic.make_synthetic_pdat(tmp_path / "pdat_with_noise.pdat")
+    synthetic.make_synthetic_pdatn(pdat2_info["path"])
+    win.load_path(pdat2_info["path"], "PDAT")
+    assert win.PP_plotNoise_btn.isEnabled()
+
+    # Load MESS dataset with single scans -> enabled
+    mess_info = synthetic.make_synthetic_mess(tmp_path / "mess_noise", nscans=3)
+    win.load_path(mess_info["folder"], "MESS_TRIR")
+    assert win.PP_plotNoise_btn.isEnabled()
+
+    win.close()
+
+
+
 
 
 

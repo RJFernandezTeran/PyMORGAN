@@ -144,15 +144,17 @@ class OneDTabMixin:
 
             btn_noise = getattr(self, "PP_plotNoise_btn", None)
             if btn_noise is not None:
-                has_noise = self.dataset.noise_array() is not None
-                btn_noise.setEnabled(has_noise)
+                btn_noise.setEnabled(bool(self.dataset.has_noise))
 
             btn_counts = getattr(self, "PP_plotCounts_btn", None)
             if btn_counts is not None:
-                has_counts = bool(self.dataset is not None and getattr(self.dataset, "counts", None) is not None)
+                has_counts = bool(getattr(self.dataset, "counts", None) is not None)
                 btn_counts.setVisible(has_counts)
                 btn_counts.setEnabled(has_counts)
         else:
+            btn_noise = getattr(self, "PP_plotNoise_btn", None)
+            if btn_noise is not None:
+                btn_noise.setEnabled(False)
             btn_counts = getattr(self, "PP_plotCounts_btn", None)
             if btn_counts is not None:
                 btn_counts.setVisible(False)
@@ -804,7 +806,7 @@ class OneDTabMixin:
         self._update_sample_info()
         btn_noise = getattr(self, "PP_plotNoise_btn", None)
         if btn_noise is not None:
-            btn_noise.setEnabled(self.dataset.noise_array() is not None)
+            btn_noise.setEnabled(bool(self.dataset.has_noise))
         self.statusBar().showMessage(
             f"Recalculated noise-weighted average over {len(idx)} scan(s): {text.strip()}"
         )

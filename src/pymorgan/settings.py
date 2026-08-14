@@ -409,6 +409,7 @@ class Settings:
     cmap: str = "DkRd/Wh/DkBu"
     traces_cmap: TracesCmap = TracesCmap.RAINBOW
     white_levels: float = 2.0
+    asinh_pct: float = 5.0
     n_contours: int = 40
     show_uncertainties: bool = True
     round_uncertainties: bool = True
@@ -844,6 +845,15 @@ class Settings:
                 "max": 20.0,
                 "step": 1.0,
                 "tab": "common",
+            },
+            "asinh_pct": {
+                "label": "arcsinh linear %",
+                "kind": "float",
+                "min": 0.1,
+                "max": 100.0,
+                "step": 1.0,
+                "tab": "common",
+                "tooltip": "Linear threshold for arcsinh color scaling as a percentage of the active amplitude limit (Zscale).",
             },
             "n_contours": {
                 "label": "Number of contours",
