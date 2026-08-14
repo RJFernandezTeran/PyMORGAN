@@ -139,11 +139,15 @@ class PlotControlsPanel(QObject):
         self._x_display = "nm"  # current spectral display unit of the X spin boxes
         self._x_scaled = False
 
-        missing = [n for n in _WIDGETS.values() if getattr(host, n, None) is None]
+        _OPTIONAL_WIDGETS = {"arcsinh_pct"}
+        missing = [
+            n for attr, n in _WIDGETS.items()
+            if attr not in _OPTIONAL_WIDGETS and getattr(host, n, None) is None
+        ]
         if missing:
             raise RuntimeError(f"PC_box widgets missing from main_window.ui: {missing}")
         for attr, name in _WIDGETS.items():
-            setattr(self, attr, getattr(host, name))
+            setattr(self, attr, getattr(host, name, None))
 
         # The choice combos are authoritative from Settings, not the .ui items.
         self._populate_choice_combo(self.cmb_scale, "time_axis_scale")
