@@ -1,0 +1,156 @@
+\section{Extending PyMORGAN (optional)}\label{sec:extending}
+
+This optional chapter explains how to (i)~modify the GUI layout and behaviour
+and (ii)~add a reader for a new instrument file format. Neither is required for
+day-to-day use.
+
+\subsection{Editing the GUI}
+The window layout lives in a single Qt Designer file,
+\code{pymorgan/gui/main\_window.ui}; the controller
+\code{pymorgan/gui/main\_window.py} binds to the widgets \emph{by their
+object name}. Editing the layout therefore means editing the \code{.ui} file,
+and only \emph{new} widgets need code.
+
+\subsubsection{Opening the layout}
+Qt Designer edits the \code{.ui} regardless of the Qt binding. The easiest way to launch it is using the provided command:
+
+\begin{lstlisting}[language=bash, style=py]
+pymorgan-edit-gui
+\end{lstlisting}
+
+Alternatively, you can launch it manually using \code{uvx}:
+
+\begin{lstlisting}[language=bash, style=py]
+uvx --from pyside6-essentials pyside6-designer src/pymorgan/gui/main_window.ui
+\end{lstlisting}
+
+\subsubsection{Moving or resizing widgets}
+Drag, resize and regroup freely. Because the controller looks widgets up by
+object name (\code{getattr(self, "PP\_CtrPlot\_btn", \dots)}), rearranging the
+layout breaks nothing as long as the object names are unchanged. Save the
+\code{.ui} and re-run \code{pymorgan-gui}; no reinstall is needed because the
+editable install reads the file at run time.
+
+\subsubsection{Adding a widget}
+\begin{enumerate}
+  \item In Designer, add the widget and give it a clear \textbf{object name}
+        (e.g.\ \code{PP\_exportFig\_btn}). After loading it is available as
+        \code{self.PP\_exportFig\_btn}.
+  \item In \code{main\_window.py}, inside \code{\_wire()}, connect it with the
+        defensive helpers and write the slot:
+\begin{lstlisting}
+self._connect("PP_exportFig_btn", self.export_figure)   # buttons (clicked)
+self._connect_text("SomeField", self.on_text_changed)   # QLineEdit (editingFinished)
+\end{lstlisting}
+        \code{\_connect}/\code{\_connect\_text} only attach if the widget
+        exists, so adding-without-wiring (or removing a wired widget) never
+        crashes the window.
+  \item Read the widget's state in the slot (\code{self.<name>.currentText()},
+        \code{.value()}, \code{.isChecked()}, \dots).
+\end{enumerate}
+
+\subsubsection{Plot areas and icons}
+\begin{itemize}
+  \item \textbf{A new plot area:} promote a \code{QWidget} to the class
+        \code{WidgetPlot} with header \code{pymorgan.gui.widgetplot}
+        (right-click~$\to$~\emph{Promote to\dots}), exactly like the existing
+        \code{PPaxes}. In code it then exposes \code{.figure}, \code{.ax} and
+        \code{.canvas}, so any pipeline plotter can draw into it via
+        \code{data.plot\_contour(ax=widget.ax)}.
+  \item \textbf{Icons:} do \emph{not} assign icons in Designer --- that embeds a
+        compiled \code{.qrc} resource dependency that breaks \code{loadUi}.
+        Instead drop the image in \code{pymorgan/gui/icons/} and add an entry to
+        \code{\_BUTTON\_ICONS} in \code{main\_window.py} (applied by
+        \code{\_apply\_icons}).
+  \item Keep signal/slot wiring in Python (in \code{\_wire}), not in Designer's
+        connection editor; the handlers live in \code{main\_window.py}.
+\end{itemize}
+
+\subsubsection{Do not rename}
+The controller references these object names; renaming them in Designer requires
+updating the matching strings in \code{main\_window.py}: \code{PPaxes},
+\code{MainTabs}, \code{PP\_datatype\_cbx}, \code{PP\_datafolderlist\_lst},
+\code{RootDir\_field}, the \code{PP\_*Plot\_btn} buttons, \code{PP\_SubtactBkg\_chk},
+\code{PP\_bkg\_tmin}/\code{tmax} and \code{PP\_Normalise\_chk}. After any change,
+confirm the window still builds:
+
+\begin{lstlisting}[language=bash, style=py]
+QT_QPA_PLATFORM=offscreen uv run pytest tests/test_gui.py
+\end{lstlisting}
+
+\subsection{Adding a new data-format parser}
+A \emph{loader} maps a file path to the fields a dataset needs. Registering it
+with the matching decorator makes its data-type name appear in
+\code{pm.available\_*\_loaders()} and in the GUI's data-type combo.
+Table~\ref{tab:loadercontracts} lists the three contracts.
+
+\begin{table}[h]
+  \centering
+  \begin{tabular}{lll}
+    \toprule
+    Branch & Decorator & Returns \\
+    \midrule
+    1-D          & \code{@pm.register\_loader} & \code{(Zavg\_R, delays, probe, Units, Nscans, Zss\_R, Zstdv)} \\
+    2-D          & \code{@pm.register\_map\_loader} & \code{(Z, pump, probe, delays, units, freq\_units)} \\
+    steady-state & \code{@pm.register\_spectrum\_loader} & \code{(x, y, x\_units)} \\
+    \bottomrule
+  \end{tabular}
+  \caption{Loader return contracts (see chapters~\ref{sec:oneD},~\ref{sec:twoD}).}
+  \label{tab:loadercontracts}
+\end{table}
+
+\subsubsection{A 1-D reader}
+The signal is stored as \code{[Ndelays $\times$ Npixels $\times$ Ndetectors]};
+the unit dictionary is built with \code{helpers.units2dic(unitsL, unitsT, unitsZ)}.
+A minimal comma-separated reader:
+
+\begin{lstlisting}
+import numpy as np
+import helpers as hlp
+import pymorgan as pm
+
+@pm.register_loader("MyTA")
+def read_my_ta(path):
+    raw = np.loadtxt(path, delimiter=",")
+    delays = raw[1:, 0]                       # first column  = delays
+    probe  = raw[0, 1:]                        # first row     = probe axis
+    Zavg   = raw[1:, 1:][..., np.newaxis]      # add a detector axis
+    Units  = hlp.units2dic("nm", "ps", "mOD")  # (probe, time, signal) units
+    Nscans = np.nan                            # no single-scan information
+    Zss    = np.nan * np.zeros_like(Zavg[..., np.newaxis])
+    Zstdv  = np.zeros_like(Zavg)
+    return Zavg, delays, probe, Units, Nscans, Zss, Zstdv
+\end{lstlisting}
+
+The data type is then available everywhere:
+
+\begin{lstlisting}
+data = pm.load_1D("scan.myta", data_type="MyTA")
+\end{lstlisting}
+
+\paragraph{Where to register.}
+The decorator runs when its module is imported. For a permanent format, place the
+reader in \code{pymorgan/oneD/load.py} (imported with the package). For a one-off,
+defining it anywhere before calling \code{pm.load\_1D} is enough.
+
+\paragraph{Exposing it in the GUI.}
+Add the file extension to \code{\_DATATYPE\_GLOB} in
+\code{pymorgan/gui/main\_window.py} so the dataset browser lists matching files,
+for example \code{"MyTA": "*.myta"} (unlisted types fall back to \code{"*"}).
+
+\subsubsection{2-D and steady-state readers}
+The pattern is identical, only the returned tuple differs
+(Table~\ref{tab:loadercontracts}). A 2-D reader returns the cube
+\code{Z[pump, probe, t2]} with its pump/probe/t2 axes, a unit dictionary and the
+spectral-axis unit string; a steady-state reader returns the \code{x}/\code{y}
+arrays and a best-guess spectral unit (or \code{None}). Register them with
+\code{@pm.register\_map\_loader("Name")} and
+\code{@pm.register\_spectrum\_loader("Name")} respectively.
+
+\subsubsection{The unit dictionary}
+\code{helpers.units2dic(unitsL, unitsT, unitsZ)} accepts the spectral unit
+\code{unitsL} (\code{"nm"}, \code{"cm\textasciicircum\{-1\}"} or \code{"eV"}),
+the time unit \code{unitsT} (e.g.\ \code{"ps"}), and the signal unit
+\code{unitsZ} (\code{"mOD"}, \code{"x1E3"} or \code{"int"} for intensity). The
+\dA{} display convention (m\,OD vs $\times 10^{3}$) is then a presentation choice
+handled by the settings (\S\ref{sec:settings}).

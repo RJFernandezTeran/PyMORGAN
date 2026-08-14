@@ -1,0 +1,94 @@
+% PyMORGAN — Data processing and user manual.
+% Build with:  pdflatex main.tex  (run twice, for the table of contents)
+% Requires Python >= 3.12 and uv (https://docs.astral.sh/uv/)
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[UKenglish]{isodate} % To fix the date
+\usepackage[T1]{fontenc}
+\usepackage{tgtermes}
+
+\usepackage[utf8]{inputenc}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{listings}
+\usepackage[hidelinks]{hyperref}
+
+\usepackage{microtype}        % best single improvement
+	\emergencystretch=3em         % last-resort stretch to avoid overfull
+	\tolerance=800                % default 200; higher = more flexible
+	\hbadness=1000                % silence minor warnings
+
+% --- Code listing style ----------------------------------------------------
+\definecolor{codegray}{gray}{0.95}
+\definecolor{codekw}{rgb}{0.10,0.30,0.65}
+\definecolor{codestr}{rgb}{0.20,0.50,0.20}
+\definecolor{codecom}{rgb}{0.45,0.45,0.45}
+\lstdefinestyle{py}{
+  language=Python,
+  backgroundcolor=\color{codegray},
+  basicstyle=\ttfamily\small,
+  keywordstyle=\color{codekw}\bfseries,
+  stringstyle=\color{codestr},
+  commentstyle=\color{codecom}\itshape,
+  showstringspaces=false,
+  breaklines=true,
+  frame=single,
+  rulecolor=\color{codegray},
+  columns=fullflexible,
+}
+\lstset{style=py}
+
+% --- Convenience macros ----------------------------------------------------
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\dA}{\ensuremath{\Delta A}}
+
+\title{\textbf{PyMORGAN}\\[0.3em]
+  \large Multidimensional Optical spectroscopy Graphical Analysis iNterface\\
+  \large Data processing and user manual}
+\author{Dr. Ricardo J. Fernández-Terán}
+\date{\today}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\bigskip
+
+\section{Introduction}
+PyMORGAN provides a unified interface to load, process and plot ultrafast
+time-resolved spectroscopy data. The package is organised by dimensionality:
+the \code{oneD} module handles one-dimensional data (transient absorption /
+pump--probe, time-resolved IR, fluorescence up-conversion), while \code{twoD}
+targets two-dimensional data (2D-IR, 2D-ES, 2D-VE, 2D-EV), from raw
+interferograms through phasing and Fourier transformation to the
+spectral-diffusion and Kubo lineshape analyses. A common design
+runs through both: a single dataset object wraps the raw arrays and exposes
+processing and plotting methods, data formats are resolved through a loader
+registry, and all presentation choices are centralised in a settings object.
+
+This manual documents both the data-processing model and the programming
+interface. Chapter~\ref{sec:installation} covers installation;
+chapter~\ref{sec:oneD} covers the one-dimensional workflow;
+chapter~\ref{sec:twoD} covers the two-dimensional workflow, including the
+spectral-diffusion analysis; chapter~\ref{sec:steadyState} covers steady-state
+absorption, emission and excitation spectra; chapter~\ref{sec:settings}
+documents every setting and the configuration file;
+chapter~\ref{sec:calibration} documents the spectrometer and pulse shaper
+wavelength calibration engine; and chapter~\ref{sec:extending} (optional)
+explains how to extend the GUI and add a parser for a new data format.
+
+\input{installation}
+\input{oneD}
+\input{twoD}
+\input{steadyState}
+\input{settings}
+\input{calibration}
+\input{extending}
+
+\section{License}\label{sec:license}
+PyMORGAN is free software released under the \textbf{GNU Affero General Public License version~3.0} (\textsf{AGPLv3}).
+You are free to run, inspect, modify and redistribute this software under the terms of the license. Any derivative works or modifications made available over a network or server must also make their complete corresponding source code available under the same license terms.
+
+\end{document}

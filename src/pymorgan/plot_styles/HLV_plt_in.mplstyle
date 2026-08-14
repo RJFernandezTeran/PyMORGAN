@@ -1,0 +1,99 @@
+### Fonts
+font.family: sans-serif
+font.sans-serif: TeX Gyre Heros, Helvetica, Arial
+
+
+mathtext.fontset : custom
+
+mathtext.bf:  sans:bold
+mathtext.bfit: sans:italic:bold
+mathtext.cal: cursive
+mathtext.it:  sans:italic
+mathtext.rm:  sans
+mathtext.sf:  sans
+mathtext.tt:  monospace
+mathtext.fallback: cm
+
+figure.titleweight : bold
+axes.labelweight : bold
+
+### Font Sizes
+axes.titlesize : 18
+axes.labelsize : 18
+legend.fontsize : 15
+xtick.labelsize : 16
+ytick.labelsize : 16
+
+### Axes
+axes.formatter.use_mathtext : True
+
+### Lines
+lines.linewidth : 2
+axes.linewidth  : 1
+hatch.linewidth: 0.5
+
+lines.markersize : 10
+
+contour.negative_linestyle : --
+
+lines.antialiased : True
+patch.antialiased : True
+
+### Ticks
+	xtick.top: False
+	xtick.bottom: True
+	xtick.major.size: 8.0
+	xtick.minor.size: 4.0
+	xtick.major.width: 0.75
+	xtick.minor.width: 0.75
+	xtick.direction: in
+	xtick.minor.visible: True
+#	xtick.major.top: True
+#	xtick.major.bottom: True
+#	xtick.minor.top: True
+#	xtick.minor.bottom: True
+	xtick.major.pad: 7.0
+	xtick.minor.pad: 7.0
+
+	ytick.left: True
+	ytick.right: False
+	ytick.major.size: 8.0
+	ytick.minor.size: 4.0
+	ytick.major.width: 0.75
+	ytick.minor.width: 0.75
+	ytick.direction: in
+	ytick.minor.visible: True
+#	ytick.major.left: True
+#	ytick.major.right: True
+#	ytick.minor.left: True
+#	ytick.minor.right: True
+	ytick.major.pad: 7.0
+	ytick.minor.pad: 7.0
+
+### Legend
+	legend.frameon: False
+
+### Figure size
+	figure.figsize: 7, 4.375 # golden ratio
+	#figure.figsize: 7, 3.5
+	figure.subplot.left: 0.125
+	figure.subplot.bottom: 0.175
+	figure.subplot.top: 0.95
+	figure.subplot.right: 0.95
+	figure.autolayout : False
+
+### TEX
+	text.usetex : False
+#	text.latex.preamble : \usepackage{amsmath} \usepackage{bm}
+#	text.latex.preamble: \usepackage{tgheros} \usepackage{sansmath} \sansmath \usepackage[separate-uncertainty=true]{siunitx} \sisetup{detect-all} \usepackage{amsmath} \usepackage{mhchem}
+# 	text.latex.preamble: \usepackage[T1]{fontenc} \usepackage{amsmath} \usepackage{uarial}
+	
+### Saving figures
+	path.simplify : True
+	savefig.dpi : 600
+	savefig.format : pdf
+
+	ps.useafm : True
+	pdf.use14corefonts : False
+	pdf.compression : 9
+	

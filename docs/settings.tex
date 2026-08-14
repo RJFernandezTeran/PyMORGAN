@@ -1,0 +1,212 @@
+\section{Settings}\label{sec:settings}
+
+Every presentation choice that is not intrinsic to the data lives in a single
+\code{Settings} object: the matplotlib style profile, label and unit
+conventions, colour scale, axis units and the parameters of the spectral
+diffusion analysis. One instance is active at a time; the plotting routines read
+it, and any call may override individual values.
+
+\begin{lstlisting}
+import pymorgan as pm
+
+pm.load_settings("settings.toml")     # read a file
+pm.update_settings(cmap="Seismic", quick_plots=True)
+s = pm.get_settings()                 # the active object
+pm.save_settings("settings.toml")     # write it back, comments preserved
+
+with pm.use_settings(profile="poster"):   # temporary override
+    data.plot_contour()
+\end{lstlisting}
+
+Values are coerced to the declared type, so a string from a text field or a TOML
+file becomes the right enum, number, path or pair: \code{pm.update\_settings(
+contour\_figsize="9, 5")} and \code{pm.update\_settings(x\_axis\_unit="nm")} both
+work. An unknown name raises \code{TypeError} rather than being silently stored.
+
+\subsection{The configuration file}
+\code{settings.toml} is read at start-up (the GUI looks in the working directory
+first, then next to the package) and written back by \emph{Save permanently} in
+the settings dialog. The file is edited in place, so comments and ordering
+survive a round trip. Keys map one-to-one onto the tables below; a key that is
+absent keeps its default, and an unknown key is ignored.
+
+\subsection{Editing settings in the GUI}
+\emph{View $\to$ Aesthetics / Settings\ldots} opens a panel whose widgets are
+generated from the settings themselves and grouped in four tabs --- Common, 1D,
+2D, and GUI \& Defaults --- matching the tables that follow. Changes apply to
+the current session immediately (the embedded preview re-renders);
+\emph{Save permanently} writes them to \code{settings.toml}.
+
+\subsection{Common settings}
+Shared by every plot: style profile, labels, colour scale and the units of the spectral axis.
+
+\begin{table}[h]
+  \centering
+  \small
+  \begin{tabular}{p{0.26\textwidth}p{0.28\textwidth}p{0.30\textwidth}l}
+    \toprule
+    Key & Label in the panel & Type & Default \\
+    \midrule
+    \code{profile} & Style profile & choice: \code{regular}, \code{poster}, \code{inset} & \code{regular} \\
+    \code{font\_scale} & Font scale & float & \code{1} \\
+    \code{label\_style} & Axis-label style & choice: \code{()}, \code{[]}, \code{/}, (empty) & \code{()} \\
+    \code{delta\_a\_units} & \dA{} units & choice: \code{mOD}, \code{x1E3} & \code{x1E3} \\
+    \code{cmap} & Colourmap & choice: \code{DkRd/Wh/DkBu}, \code{Rd/Wh/Bu v2}, \code{Seismic}, \code{Jet} & \code{DkRd/Wh/DkBu} \\
+    \code{white\_levels} & White/Zero levels & float & \code{0} \\
+    \code{x\_axis\_unit} & Spectral X-axis unit & choice: \code{native}, \code{nm}, \code{cm-1}, \code{eV}, \code{THz} & \code{native} \\
+    \code{secondary\_axis} & Complementary X axis & bool & \code{false} \\
+    \code{round\_labels} & Round trace labels & bool & \code{true} \\
+    \code{quick\_plots} & Use quick plots (fast redraws) & bool & \code{false} \\
+    \code{ss\_line\_dashes} & Steady-state dash pattern (on, off) & text & \code{4, 3} \\
+    \bottomrule
+  \end{tabular}
+  \caption{Common settings.}
+  \label{tab:settings:common}
+\end{table}
+
+\subsection{1-D settings}
+Delay-axis scaling and the appearance of kinetic / transient-spectra traces.
+
+\begin{table}[h]
+  \centering
+  \small
+  \begin{tabular}{p{0.26\textwidth}p{0.28\textwidth}p{0.30\textwidth}l}
+    \toprule
+    Key & Label in the panel & Type & Default \\
+    \midrule
+    \code{time\_axis\_scale} & Time-axis scale & choice: \code{symlog}, \code{log}, \code{lin} & \code{symlog} \\
+    \code{time\_axis\_label} & Time-axis labels & choice: \code{power}, \code{decimal}, \code{mixed} & \code{power} \\
+    \code{kinetics\_marker\_size} & Kinetics marker size & float & \code{6} \\
+    \code{kinetics\_line\_width} & Kinetics line width & float & \code{1.5} \\
+    \code{legend\_label\_spacing} & Legend entry spacing & float & \code{0.5} \\
+    \code{prune\_legend} & Prune legend & bool & \code{true} \\
+    \code{max\_legend\_entries} & Max legend entries & float & \code{15} \\
+    \code{ss\_abs\_color} & Steady-state abs. colour & text & \code{b} \\
+    \code{ss\_em\_color} & Steady-state em. colour & text & \code{r} \\
+    \code{ss\_line\_width} & Steady-state line width & float & \code{1.5} \\
+    \code{ss\_line\_alpha} & Steady-state line alpha & float & \code{0.15} \\
+    \code{ss\_fill\_alpha} & Steady-state fill alpha & float & \code{0.05} \\
+    \code{inherit\_cut\_limits} & Cuts inherit plot limits & bool & \code{true} \\
+    \code{load\_single\_scans} & Load single scans & bool & \code{false} \\
+    \code{chirp\_boundary\_handling} & Chirp boundary handling & choice: \code{crop}, \code{extrapolate} & \code{crop} \\
+    \code{parallel\_fitting} & Chirp parallel fitting & choice: \code{threadpool}, \code{processpool}, \code{disabled} & \code{threadpool} \\
+    \code{solvent\_per\_pixel\_dt} & Per-pixel solvent t$_0$ offset & bool & \code{false} \\
+    \code{solvent\_per\_pixel\_scale} & Per-pixel solvent amplitude scale & bool & \code{true} \\
+    \code{error\_shading} & Error shading ($\pm$1 std) & bool & \code{false} \\
+    \code{error\_shading\_alpha} & Error shading alpha & float & \code{0.2} \\
+    \bottomrule
+  \end{tabular}
+  \caption{1-D settings.}
+  \label{tab:settings:oneD}
+\end{table}
+
+\subsection{2-D settings}
+Map appearance, axis units and the spectral-diffusion analysis.
+
+\begin{table}[h]
+  \centering
+  \small
+  \begin{tabular}{p{0.26\textwidth}p{0.28\textwidth}p{0.30\textwidth}l}
+    \toprule
+    Key & Label in the panel & Type & Default \\
+    \midrule
+    \code{freq\_label} & 2-D frequency labels & choice: \code{Omega\_n}, \code{Omega\_PP}, \code{Pump-Probe}, \code{Omega\_n/2pic} & \code{Omega\_n} \\
+    \code{pump\_axis} & 2-D pump axis orientation & choice: \code{Horizontal}, \code{Vertical} & \code{Horizontal} \\
+    \code{twoD\_freq\_unit} & 2-D axis unit & choice: \code{cm-1}, \code{in-1}, \code{nm}, \code{THz}, \code{eV} & \code{cm-1} \\
+    \code{t2\_label\_style} & t$_2$ delay label format & choice: \code{t2=}, \code{plain} & \code{t2=} \\
+    \code{cls\_color} & CLS colour & text & \code{b} \\
+    \code{ivcls\_color} & IvCLS colour & text & \code{r} \\
+    \code{nls\_color} & NLS colour & text & \code{g} \\
+    \code{overlay\_draw\_style} & Overlay draw style & choice: \code{Points}, \code{Lines}, \code{Both} & \code{Points} \\
+    \code{overlay\_linewidth} & Overlay linewidth & float & \code{1.5} \\
+    \code{sd\_intensity\_threshold} & Intensity threshold (top x\%) & float & \code{0.1} \\
+    \code{sd\_peak\_range} & Peak search range (cm$^{-1}$) & float & \code{10} \\
+    \code{sd\_peak\_type} & Target peak type & choice: \code{min}, \code{max} & \code{min} \\
+    \code{sd\_interpolation} & Peak interpolation & choice: \code{quadratic}, \code{cubic}, \code{quartic}, \code{gaussian}, \code{lorentzian}, \code{none} & \code{quadratic} \\
+    \code{sd\_interpolation\_factor} & Interpolation factor (axis upsampling) & int & \code{4} \\
+    \code{kubo\_ftir\_weight} & Kubo joint fit FTIR vs 2D weight & float & \code{1} \\
+    \bottomrule
+  \end{tabular}
+  \caption{2-D settings.}
+  \label{tab:settings:twoD}
+\end{table}
+
+\subsection{GUI and defaults settings}
+Application preferences and the values pre-selected when the GUI starts.
+
+\begin{table}[h]
+  \centering
+  \small
+  \begin{tabular}{p{0.26\textwidth}p{0.28\textwidth}p{0.30\textwidth}l}
+    \toprule
+    Key & Label in the panel & Type & Default \\
+    \midrule
+    \code{gui\_theme} & GUI theme & choice: \code{Fusion}, \code{Fusion Dark} & \code{Fusion} \\
+    \code{splash\_duration} & Splash-screen duration (s, 0 disables) & float & \code{2} \\
+    \code{default\_datadir} & Default data directory & text & (none) \\
+    \code{default\_oneD\_datatype} & Default 1D data type & choice: \code{Helios\_TA}, \code{MESS\_TRIR}, \code{MESS\_TRUVIS}, \code{PDAT}, \code{UniGE\_FLUPSnew}, \code{UniGE\_FLUPSold}, \code{UniGE\_fsTA}, \code{UniGE\_nsTA}, \code{UoS\_IRpp} & \code{PDAT} \\
+    \code{default\_twoD\_datatype} & Default 2D data type & choice: \code{MESS\_2DIR}, \code{P2DAT}, \code{RAL\_Proc}, \code{RAL\_RAW}, \code{UoS\_2DIR} & \code{P2DAT} \\
+    \code{default\_calibration\_datatype} & Default calibration setup & text & \code{UniGE TRIR (Intensity)} \\
+    \code{styles\_dir} & Style directory (blank = bundled) & text & (none) \\
+    \code{contour\_figsize} & Contour figure size (w, h in) & text & \code{8, 6} \\
+    \code{kinetics\_figsize} & Kinetics figure size (w, h in) & text & \code{7.5, 4.5} \\
+    \code{spectra\_figsize} & Spectra figure size (w, h in) & text & \code{7.5, 4.375} \\
+    \bottomrule
+  \end{tabular}
+  \caption{GUI and defaults settings.}
+  \label{tab:settings:gui}
+\end{table}
+
+\subsection{Declared axis units}\label{sec:units:axes}
+Both dataset classes report the units of their axes through
+\code{axis\_units()}, which returns a \code{DatasetUnits} record holding one
+entry per axis: \code{x} and \code{y} for the plotted axes, \code{z} for the
+signal, and \code{t2} for the population time of a 2-D dataset (\code{None} in
+1-D, where the delay is already a plotted axis). Each entry carries the measured
+quantity, the machine-readable unit token, the mathtext used on plots, and the
+factor the values are divided by for display.
+
+\begin{lstlisting}
+u = data.axis_units()            # 1-D: x = probe, y = delay, z = signal
+u.x.unit                         # 'cm-1'
+u.x.label()                      # 'Wavenumber (cm$^{-1}$)'
+u.y.quantity                     # 'Delay'
+print(u)                         # a readable summary of all axes
+u.as_dict()                      # plain nested dict, e.g. for export
+
+v = d2.axis_units()              # 2-D: x = pump, y = probe, z = signal, t2 = delay
+v.t2.unit                        # 'ps'
+\end{lstlisting}
+
+By default the \emph{stored} units are reported. With \code{display=True} the
+axes are described as they would be plotted: converted to
+\code{x\_axis\_unit} (1-D) or \code{twoD\_freq\_unit} (2-D), carrying the
+$10^3$ factor where one is applied (\S\ref{sec:twoD:units}), and with \code{x}
+and \code{y} swapped when \code{pump\_axis} is \code{Vertical}. The
+\code{label()} method renders the axis label in any of the delimiter
+conventions of \code{label\_style}, so a caller can annotate a figure of its own
+without duplicating the unit logic.
+
+\subsection{Notes on individual settings}
+\begin{description}
+  \item[\code{quick\_plots}] Draws contour maps as a single image
+    (\code{pcolormesh}) and skips the contour lines, which makes dragging the
+    colour-scale slider or stepping through $t_2$ far quicker. It overrides the
+    \emph{Filled} and \emph{Show lines} options of the plot-controls panel, so
+    turn it off for final figures.
+  \item[\code{x\_axis\_unit}, \code{secondary\_axis}] Control the spectral axis
+    of 1-D plots: the axis is converted to the chosen unit, and a complementary
+    axis (cm$^{-1}\leftrightarrow$nm) can be added on the opposite side.
+  \item[\code{twoD\_freq\_unit}] The same idea for the pump/probe axes of 2-D
+    maps, including reciprocal inches, with the $10^3$ rescaling described in
+    \S\ref{sec:twoD:units}.
+  \item[\code{sd\_*}] The spectral-diffusion family: search window, amplitude
+    threshold, peak type, and the interpolation factor and model used for the
+    sub-pixel refinement (\S\ref{sec:twoD:sd}).
+  \item[\code{parallel\_fitting}] Chooses how the per-pixel chirp fit is
+    distributed: a thread pool, a process pool (true parallelism, best for large
+    datasets), or sequentially on the calling thread.
+  \item[\code{gui\_theme}] Any Qt style available on the machine; appending
+    \emph{Dark} (e.g. \code{Fusion Dark}) switches to the dark palette, which
+    also recolours the embedded plots.
+\end{description}

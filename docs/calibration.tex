@@ -1,0 +1,237 @@
+% PyMORGAN — Calibration chapter
+\section{Spectrometer \& Pulse Shaper Wavelength Calibration}\label{sec:calibration}
+
+Wavelength and wavenumber axis calibration maps detector pixel indices $p \in \{1, \dots, N_\text{pix}\}$ to physical spectral values (wavelength $\lambda$ in nm or wavenumber $\tilde{\nu}$ in \text{cm}$^{-1}$). PyMORGAN provides a dedicated calibration engine in the \code{pymorgan.cal} module, supporting both \emph{spectrometer calibration} (for probe beam spectrographs) and \emph{pulse shaper calibration} (for optical pulse shaper pump beam masks).
+
+\subsection{Pipeline Overview}
+
+The calibration workflow matches an experimentally measured absorption spectrum $I_\text{meas}(p)$ against a high-resolution reference FTIR spectrum $A_\text{ref}(\lambda)$ (such as liquid 1,4-dioxane, liquid polystyrene, or atmospheric water vapour). Non-linear least-squares (NLS) optimisation fits optical dispersion parameters so that the synthetic spectrum evaluated through the dispersion function reproduces the reference absorption features.
+
+The workflow proceeds in six stages:
+\begin{enumerate}
+  \item \textbf{Load Reference Spectrum:} Load $A_\text{ref}(\lambda)$ or $A_\text{ref}(\tilde{\nu})$ with automatic delimiter and unit detection (\code{load\_reference\_spectrum}).
+  \item \textbf{Load Experimental Data:} Parse raw detector intensity or absorbance arrays for one of ten hardware setups (\code{load\_experimental\_spectrum}).
+  \item \textbf{Pre-alignment (Template Scanning):} Perform 1D cross-correlation scanning to estimate initial wavelength shift $\lambda_1$ at pixel~1.
+  \item \textbf{NLS Parameter Fitting:} Optimise dispersion coefficients and additive polynomial baseline using \code{scipy.optimise.least\_squares} with 1st or 2nd derivative filtering.
+  \item \textbf{Axis Inversion:} Invert pixel-to-wavelength mapping $p(\lambda) \to \lambda(p)$ analytically or numerically.
+  \item \textbf{Export \& Integration:} Save calibrated axis arrays (\code{CalibratedProbe.csv}, \code{CalibratedPump.csv}, \code{SingleMask.txt}, \code{MultipleMask.txt}).
+\end{enumerate}
+
+\subsection{Data Model \& Data Structures}
+
+The \code{pymorgan.cal} package defines four primary immutable data structures:
+
+\begin{description}
+  \item[\code{ReferenceSpectrum}:] Container for reference spectra library items.
+\begin{lstlisting}
+class ReferenceSpectrum(NamedTuple):
+    name: str             # Spectrum name (e.g. 'FTIR-Dioxane')
+    spectral_axis: ndarray# Spectral grid (nm or cm-1)
+    absorbance: ndarray   # Absorbance array A(x)
+    axis_unit: str        # Unit hint ('nm' or 'cm-1')
+\end{lstlisting}
+
+  \item[\code{ExperimentalData}:] Container for loaded experimental spectrograph measurements.
+\begin{lstlisting}
+class ExperimentalData(NamedTuple):
+    detector_data: list[ndarray]  # Raw detector intensity/absorbance arrays
+    gratings: list[float]         # Grating groove density (grooves/mm)
+    cwl: list[float]              # Central wavelength setting (nm or cm-1)
+    file_path: Path               # File path on disk
+    min_wl: float | None = None   # Lower spectral bound from metadata
+    max_wl: float | None = None   # Upper spectral bound from metadata
+\end{lstlisting}
+
+  \item[\code{CalibrationResult}:] Output container returned by \code{fit\_wavelength\_axis}.
+\begin{lstlisting}
+class CalibrationResult(NamedTuple):
+    wavelength_nm: ndarray   # Calibrated wavelength axis (nm)
+    wavenumber_cm1: ndarray  # Calibrated wavenumber axis (cm-1)
+    fit_params: ndarray      # Optimised dispersion parameters vector p
+    residuals: ndarray       # Fit residual array
+    ref_x_cut: ndarray       # Reference spectral axis in active cut region
+    ref_y_cut: ndarray       # Reference absorbance in active cut region
+    model_y_fit: ndarray     # Modelled experimental absorbance fit
+    baseline_fit: ndarray    # Additive polynomial baseline curve
+    exp_corr_y_fit: ndarray  # Baseline-corrected experimental absorbance
+    ref_y_corr: ndarray      # Baseline-corrected reference spectrum
+\end{lstlisting}
+
+  \item[\code{SpectrumFitResult}:] Container for 1D Gaussian pump beam profile diagnostics.
+\begin{lstlisting}
+class SpectrumFitResult(NamedTuple):
+    amplitude: float   # Peak amplitude (Counts)
+    w0: float          # Central frequency w0 (cm-1 or nm)
+    fwhm: float        # Full-Width at Half-Maximum (FWHM)
+    fit_curve: ndarray # High-density fitted Gaussian profile
+    axis_fit: ndarray  # High-density evaluation axis
+\end{lstlisting}
+
+  \item[\code{ProbeFitResult}:] Container returned by \code{fit\_probe\_spectrum}, which
+  wraps up multi-detector Gaussian diagnostics for the probe beam profile.
+\begin{lstlisting}
+class ProbeFitResult(NamedTuple):
+    fits: list[SpectrumFitResult]  # Per-detector Gaussian fit results
+    detector_data: list[ndarray]   # Raw detector arrays that were fitted
+\end{lstlisting}
+\end{description}
+
+\subsection{Mathematical Optical Dispersion Models}
+
+PyMORGAN supports three physical models for mapping reference wavelength $\lambda$ (in nm) to detector pixel index $p(\lambda) \in [1, N_\text{pix}]$:
+
+\subsubsection{Linear Grating Dispersion Model}
+For diffraction grating spectrographs in first-order paraxial approximation, the pixel position $p(\lambda)$ varies linearly with wavelength around the central wavelength $\lambda_0$:
+\begin{equation}\label{eq:dispersion_linear}
+  p(\lambda) = (\lambda - \lambda_0) \cdot d + c_\text{pix}
+\end{equation}
+where $\lambda_0$ is the central wavelength mapped to the central pixel $c_\text{pix} = (1 + N_\text{pix})/2$, and $d$ is the linear dispersion in pixels/nm.
+
+\subsubsection{Polynomial Grating Dispersion Model}
+For wide-bandwidth spectrographs or non-paraxial grating setups (such as UniGE TRUVIS-II), higher-order geometric distortion is modelled via a 2nd- or 3rd-order polynomial expansion around central wavelength $\lambda_0$:
+\begin{equation}\label{eq:dispersion_poly}
+  p(\lambda) = (\lambda - \lambda_0) \cdot d + 10^{-4} \, c_2 \, (\lambda - \lambda_0)^2 + 10^{-7} \, c_3 \, (\lambda - \lambda_0)^3 + c_\text{pix}
+\end{equation}
+where $c_2$ and $c_3$ are quadratic and cubic dispersion curvature coefficients.
+
+\subsubsection{Prism Dispersion Model (SF10 Glass)}
+For prism-based spectrographs (e.g.\ UniGE NIR-TA using an SF10 Flint glass equilateral prism), dispersion is governed by Snell's law and the Sellmeier equation. The refractive index $n(\lambda)$ for SF10 glass is:
+\begin{equation}\label{eq:sellmeier}
+  n(\lambda) = \sqrt{1 + \sum_{i=1}^{3} \frac{B_i \, \lambda_{\mu\text{m}}^2}{\lambda_{\mu\text{m}}^2 - C_i}}
+\end{equation}
+with Sellmeier coefficients:
+\begin{equation*}
+  \begin{aligned}
+    B_1 &= 1.62153902, & B_2 &= 0.256287842, & B_3 &= 1.64447552 \\
+    C_1 &= 0.0122241457, & C_2 &= 0.0595736775, & C_3 &= 147.468793
+  \end{aligned}
+\end{equation*}
+where $\lambda_{\mu\text{m}} = \lambda / 1000$. The deflection output angle $\theta_\text{out}(\lambda)$ from a prism with apex angle $\alpha = 60.84^\circ$ at incidence angle $\theta_\text{in}$ is:
+\begin{equation}\label{eq:prism_angle}
+  \theta_\text{out}(\lambda) = \arcsin\!\left[ n(\lambda) \sin\!\left( \alpha - \arcsin\!\left( \frac{\sin\theta_\text{in}}{n(\lambda)} \right) \right) \right]
+\end{equation}
+The pixel index $p(\lambda)$ is then determined by focal length $f_\text{mm}$ and detector pixel shift $x_\text{shift}$:
+\begin{equation}\label{eq:prism_pixel}
+  p(\lambda) = f_\text{mm} \cdot \left( \frac{1000}{25} \right) \cdot \sin\!\big[ \theta_\text{out}(\lambda) - \theta_\text{out}(\lambda_\text{ref}) \big] + x_\text{shift}
+\end{equation}
+
+\subsection{Forward Model, Baseline Correction, and Optimisation Cost Function}
+
+\subsubsection{Forward Synthetic Spectrum Model}
+Given measured experimental spectrum array $I_\text{meas}(p)$, the model synthesises an experimental absorbance curve $y_\text{model}(\lambda)$ matched to reference grid points $\lambda$:
+\begin{equation}\label{eq:forward_model}
+  y_\text{model}(\lambda) = I_\text{meas}\!\big[p(\lambda)\big] \cdot s + b_0 + 10^{-6} \, b_1 \, (\lambda - \lambda_0) + 10^{-6} \, b_2 \, (\lambda - \lambda_0)^2
+\end{equation}
+where $s$ is a global scaling factor, and $(b_0, b_1, b_2)$ parameterise a smooth background baseline polynomial.
+
+\subsubsection{Derivative Cost Function}
+To eliminate broad solvent/background baseline drift during fitting, optimisation is performed in derivative space using Savitzky--Golay numerical filters (window size $W$, polynomial order 2):
+\begin{equation}\label{eq:residuals}
+  \mathbf{r}(\mathbf{p}) = \frac{d^k}{d\lambda^k} y_\text{model}(\lambda; \mathbf{p}) - \frac{d^k}{d\lambda^k} A_\text{ref}(\lambda) \quad (k \in \{1, 2\})
+\end{equation}
+The parameters $\mathbf{p}$ are optimised by bounded Non-Linear Least Squares:
+\begin{equation}\label{eq:least_squares}
+  \min_{\mathbf{p}} \frac{1}{2} \|\mathbf{r}(\mathbf{p})\|_2^2 \quad \text{subject to } \mathbf{lb} \le \mathbf{p} \le \mathbf{ub}
+\end{equation}
+
+\subsection{Axis Inversion Procedures}
+
+Once optimal parameters $\mathbf{p}^*$ are found, the calibrated wavelength axis $\lambda(p)$ for pixel indices $p \in \{1, \dots, N_\text{pix}\}$ is calculated:
+
+\begin{itemize}
+  \item \textbf{Linear Grating:} $\lambda(p) = \frac{p - 1}{d} + \lambda_1$.
+  \item \textbf{Polynomial Grating:} Inverted via dense 1D grid interpolation over $\lambda \in [250, 1000]$\,nm.
+  \item \textbf{Prism Model:} Inverted via KDTree spatial nearest-neighbor search against dense evaluation grid $p(\lambda)$.
+\end{itemize}
+
+Wavenumbers $\tilde{\nu}$ (in \text{cm}$^{-1}$) are directly converted via:
+\begin{equation}
+  \tilde{\nu}(p) = \frac{10^7}{\lambda(p)}
+\end{equation}
+
+\subsection{1D Gaussian Pump Spectrum Profile Diagnostics}
+
+Pump beam profiles in optical pulse shaper calibration are fitted with a 3-parameter Gaussian distribution:
+\begin{equation}\label{eq:gaussian_fit}
+  G(x) = A \cdot \exp\!\left[ -4 \ln 2 \left( \frac{x - \omega_0}{\text{FWHM}} \right)^{\!2} \right]
+\end{equation}
+where $A$ is peak amplitude, $\omega_0$ is central frequency (\text{cm}$^{-1}$), and $\text{FWHM}$ is Full-Width at Half-Maximum.
+
+\subsection{Supported Hardware Setup Configurations}
+
+The calibration engine pre-configures ten spectrograph hardware setups:
+
+\begin{table}[h]
+  \centering
+  \caption{Pre-configured calibration setup codes and default parameter estimates.}\label{tab:cal_setups}
+  \begin{tabular}{llcccc}
+    \toprule
+    Code & Setup Name & Default $\lambda_0$ & Dispersion Guess & Degree & Default Bounds ($\Delta\lambda_\text{rel}$) \\
+    \midrule
+    1  & UoS TRIR                 & 2000 cm$^{-1}$ & 0.30 px/cm$^{-1}$ & 2      & [-1000, +1666] nm \\
+    2  & UniGE TA                 & 530 nm         & 1.10 px/nm        & 2      & [-180, +210] nm \\
+    3  & UniGE nsTA               & 530 nm         & 1.10 px/nm        & 2      & [-180, +210] nm \\
+    4  & UZH Lab 2                & 2000 cm$^{-1}$ & 0.30 px/cm$^{-1}$ & 2      & [-455, +1250] nm \\
+    5  & UniGE NIR-TA             & 1000 nm        & 1.00 px/nm        & Prism  & [-200, +600] nm \\
+    6  & RAL Absorbance           & 2000 cm$^{-1}$ & 0.30 px/cm$^{-1}$ & 2      & [-653, +882] nm \\
+    7  & RAL Intensity            & 2000 cm$^{-1}$ & 0.30 px/cm$^{-1}$ & 2      & [-653, +882] nm \\
+    8  & UniGE TRIR (Int.)        & 2000 cm$^{-1}$ & 0.30 px/cm$^{-1}$ & 2      & [-200, +200] nm \\
+    9  & UniGE TRIR (Abs.)        & 2000 cm$^{-1}$ & 0.30 px/cm$^{-1}$ & 2      & [-200, +200] nm \\
+    10 & UniGE TRUVIS-II          & 530 nm         & 1.20 px/nm        & 3      & [-150, +220] nm \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The initial parameter bounds and dispersion guesses for each mode can be
+queried programmatically with \code{get\_default\_calibration\_params(cal\_type\_code)},
+which returns a dictionary with keys \code{p0}, \code{lb}, \code{ub},
+\code{cwl\_guess} and \code{degree}.
+
+\subsection{Graphical User Interface (Calibration Tab)}
+
+The GUI incorporates a dedicated \textbf{Calibration Tab} featuring 4 synchronized subplots:
+\begin{enumerate}
+  \item \textbf{Raw Measurements:} Overlay of Pump (Air) black curve, Pump (Solvent) red curve, Single Mask cyan shaded area ($\alpha=0.4$), and Multiple Mask blue curve.
+  \item \textbf{Calculated Absorbance \& Physical Baseline:} Purple absorbance spectrum with dashed orange background polynomial baseline.
+  \item \textbf{Reference Overlay:} Reference FTIR spectrum overlaid against experimental absorbance, with zero-levels aligned via \code{mpl\_axes\_aligner}.
+  \item \textbf{Calibration Fit:} Calibrated Wavelength (nm) vs.\ Pixel index dispersion curve with linear reference line and central crosshairs.
+\end{enumerate}
+
+The \textbf{Fit Controls} panel provides a global \emph{``Do baseline correction''} checkbox and defaults the \emph{``Fit Axis Unit''} selector to \textbf{Wavelength (nm)}. A standalone interactive Gaussian pump spectrum popup window allows interactive zoom/pan toolbar navigation and legend dragging.
+
+\subsection{Programmatic Usage Example}
+
+\begin{lstlisting}[language=Python]
+import pymorgan.cal as cal
+
+# 1. Load reference FTIR spectrum
+ref = cal.load_reference_spectrum("FTIR-Dioxane.csv")
+
+# 2. Load experimental probe spectrum (e.g. UniGE TRIR setup 9)
+exp = cal.load_experimental_spectrum("pump_air.csv", cal_type_code=9)
+
+# 3. Perform wavelength calibration fit
+res = cal.fit_wavelength_axis(
+    meas_y=exp.detector_data[0],
+    ref_x=ref.spectral_axis,
+    ref_y=ref.absorbance,
+    cal_type_code=9,
+    cwl=2000.0,
+    use_derivative="1st",
+)
+
+print(f"Calibrated span: {res.wavelength_nm[0]:.2f} nm to {res.wavelength_nm[-1]:.2f} nm")
+
+# 4. Save calibrated vector
+cal.save_calibration_file(res.wavenumber_cm1, "output_dir", filename="CalibratedProbe.csv")
+
+# 5. Fit probe beam Gaussian profiles (multi-detector)
+probe_fit = cal.fit_probe_spectrum(exp.detector_data, exp.cwl)
+for det_idx, fit in enumerate(probe_fit.fits):
+    print(f"Detector {det_idx}: w0={fit.w0:.1f} cm-1, FWHM={fit.fwhm:.1f} cm-1")
+
+# 6. Query default parameters for a given setup
+params = cal.get_default_calibration_params(cal_type_code=9)
+print(params["degree"])       # polynomial degree
+print(params["cwl_guess"])    # initial central-wavelength guess
+\end{lstlisting}

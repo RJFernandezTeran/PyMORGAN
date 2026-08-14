@@ -1,0 +1,155 @@
+% PyMORGAN — Steady-state spectra chapter
+\section{Steady-state spectra}\label{sec:steadyState}
+
+The \code{pymorgan.steadyState} module provides lightweight wrappers for
+absorption, emission and excitation spectra. Its design mirrors the
+one-dimensional branch (chapter~\ref{sec:oneD}): data are held in a plain
+object (\code{Spectrum}), file formats are resolved through a loader registry,
+and presentation is driven by the shared \code{Settings}.
+
+\subsection{Data model}
+
+\subsubsection{\code{SpectrumKind}}
+
+\code{SpectrumKind} is a string enum that labels the physical quantity
+measured:
+
+\begin{lstlisting}
+class SpectrumKind(StrEnum):
+    ABSORPTION = "absorption"
+    EMISSION   = "emission"
+    EXCITATION = "excitation"
+\end{lstlisting}
+
+\subsubsection{\code{Spectrum}}
+
+A single steady-state measurement. The spectral axis \code{x} and signal
+\code{y} are stored as \code{numpy} arrays; the remaining fields are metadata:
+
+\begin{table}[h]
+  \centering
+  \begin{tabular}{lll}
+    \toprule
+    Attribute & Type & Meaning \\
+    \midrule
+    \code{x}       & \code{ndarray} & Spectral axis (values in \code{x\_units}) \\
+    \code{y}       & \code{ndarray} & Signal (absorbance or intensity) \\
+    \code{kind}    & \code{SpectrumKind} & Measurement type \\
+    \code{x\_units}& \code{str} & Spectral-axis unit token (\code{"nm"}, \code{"cm-1"}, \code{"eV"}) \\
+    \code{label}   & \code{str | None} & Legend label \\
+    \code{source}  & \code{str | None} & File path (set automatically on load) \\
+    \bottomrule
+  \end{tabular}
+  \caption{Attributes of a \code{Spectrum} object.}
+  \label{tab:spectrum:fields}
+\end{table}
+
+\subsubsection{\code{SpectrumSeries}}
+
+An ordered list of \code{Spectrum} objects for overlay plots. It supports
+iteration, indexing and the standard sequence protocol. Construction from
+multiple files returns a \code{SpectrumSeries} directly.
+
+\subsection{Loading and the loader registry}
+
+The module exposes a loader registry analogous to the 1-D and 2-D registries.
+The default \code{"csv"} reader handles comma- and tab-delimited files with
+automatic delimiter detection. Custom readers are registered with the
+\code{@pm.register\_spectrum\_loader} decorator:\
+
+\begin{lstlisting}
+import pymorgan as pm
+
+# List available loaders
+print(pm.available_spectrum_loaders())
+
+# Load a single spectrum
+sp = pm.load_spectrum("sample.csv", kind="absorption")
+
+# Specify units explicitly (overrides the reader's guess)
+sp = pm.load_spectrum("sample.csv", kind="emission", x_units="nm", label="Sample A")
+
+# Load directly via Dataset1D convenience method
+sp2 = pm.Spectrum.from_file("sample.opus", kind="absorption", data_type="opus")
+\end{lstlisting}
+
+The currently registered loaders are \code{csv} (generic delimiter-detected
+text), \code{opus} (Bruker OPUS binary, via \code{load.py}), \code{uv\_vis}
+(Perkin-Elmer / Shimadzu UV-Vis text export) and \code{fluorimeter} (Horiba
+FluorEssence \code{.fes} files).
+
+A custom loader returns a three-element tuple:
+\begin{lstlisting}
+@pm.register_spectrum_loader("MySpectrometer")
+def read_my_spectrometer(path):
+    ...
+    return x, y, x_units    # x_units may be None (falls back to "nm")
+\end{lstlisting}
+
+\subsection{Transformations}
+
+Two per-\code{Spectrum} transformations return a new \code{Spectrum}
+(the original is unchanged):
+
+\begin{description}
+  \item[\code{normalised()}] Scales the signal so that
+    $\max(|y|) = 1$.
+  \item[\code{to\_stimulated\_emission()}] Computes the stimulated-emission
+    cross-section $F_\text{stim} \propto \bar{\nu}^4 \, F_\text{spont}$ (valid
+    for emission spectra on a wavelength axis). Useful when overlaying on
+    transient-absorption spectra.
+\end{description}
+
+\code{SpectrumSeries.normalised()} applies the same operation to every member
+and returns a new series.
+
+\subsection{Integration with the 1-D pipeline}
+
+A \code{Spectrum} can be passed directly to \code{Dataset1D.plot\_spectra} as a
+steady-state overlay:\
+
+\begin{lstlisting}
+ftir = pm.load_spectrum("background_FTIR.csv", kind="absorption")
+data.plot_spectra([0.5, 1, 5], ss_overlay=ftir)
+\end{lstlisting}
+
+\code{as\_overlay\_dict()} converts a \code{Spectrum} to the
+\code{\{"X": x, "Y": y\}} mapping that \code{plot\_spectra} also accepts,
+for cases where you want to pass raw arrays.
+
+\subsection{Plotting}
+
+Both \code{Spectrum} and \code{SpectrumSeries} have a \code{plot()} method.
+The axis-label convention and delimiter follow the active settings
+(\S\ref{sec:settings}), and optional keyword arguments are forwarded to
+\code{matplotlib.Axes.plot}.
+
+\begin{lstlisting}
+import pymorgan as pm
+
+pm.load_settings("settings.toml")
+pm.apply_style()
+
+# --- Single spectrum ---
+sp = pm.load_spectrum("sample.csv", kind="absorption", label="Sample")
+sp.plot()
+
+# --- Normalised emission ---
+em = pm.load_spectrum("emission.csv", kind="emission", label="Emission")
+em.normalised().plot()
+
+# --- Series: multiple spectra coloured along a rainbow colourmap ---
+series = pm.SpectrumSeries.from_files(
+    ["a.csv", "b.csv", "c.csv"],
+    kind="absorption",
+    labels=["10 uM", "50 uM", "100 uM"],
+)
+series.plot(cmap="viridis", normalise=True)
+
+pm.show_plots()
+\end{lstlisting}
+
+The per-call keyword arguments are identical to those of the 1-D plotters:
+\code{ax=} to draw into an existing axis, \code{label\_style=} to override the
+delimiter, and \code{normalise=} to scale the signal to unit peak.
+

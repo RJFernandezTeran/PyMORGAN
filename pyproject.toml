@@ -1,0 +1,83 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pymorgan"
+dynamic = ["version"]
+description = "Plotting and analysis of ultrafast time-resolved spectroscopy data (1D and 2D)."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { file = "LICENSE" }
+authors = [{ name = "Dr. Ricardo J. Fernández-Terán" }]
+urls = { Homepage = "https://github.com/RJFernandezTeran/PyMORGAN", Documentation = "https://github.com/RJFernandezTeran/PyMORGAN#readme", Repository = "https://github.com/RJFernandezTeran/PyMORGAN.git", "Bug Tracker" = "https://github.com/RJFernandezTeran/PyMORGAN/issues" }
+
+dependencies = [
+    "matplotlib>=3.11.1",
+    "numpy>=2.5.2",
+    "pandas>=3.0.5",
+    "scipy>=1.18.0",
+    "mpl-axes-aligner>=1.3",
+    "tomlkit>=0.15.1",
+    "h5py>=3.16.0",
+    "PyQt6>=6.11.0",
+    "PyQt6-sip>=13.12.0",
+    "rinoh-typeface-texgyreheros",
+]
+
+[project.optional-dependencies]
+gui = []
+dev = ["ruff>=0.16.2", "pytest>=9.1.1"]
+# Optional: GUI test helpers (qtbot); needs Qt runtime libs present.
+gui-dev = ["pytest-qt>=4"]
+
+[project.scripts]
+pymorgan-gui = "pymorgan.gui.app:main"
+pymorgan-install-fonts = "pymorgan.fonts:main"
+pymorgan-edit-gui = "pymorgan.gui.designer:main"
+pymorgan-settings = "pymorgan.gui.settings_app:main"
+
+[tool.hatch.version]
+path = "src/pymorgan/__about__.py"
+
+[tool.hatch.build.targets.wheel]
+# The 1-D and 2-D subroutines now live in pymorgan/oneD and pymorgan/twoD.
+# PumpProbe/, td2DIR/ and Analysis/ have all been archived to old_code/, so
+# pymorgan is the only shipped package.
+packages = ["src/pymorgan"]
+dev-mode-dirs = ["src"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/pymorgan/gui/main_window.ui" = "src/pymorgan/gui/main_window.ui"
+"src/pymorgan/gui/icons" = "src/pymorgan/gui/icons"
+
+# --------------------------------------------------------------------------- #
+#                                   Ruff                                       #
+# --------------------------------------------------------------------------- #
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["GUI/icons", "old_code", "local", "*.m"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "W"]
+ignore = [
+    "E501", # line length handled by the formatter
+    "E741", # ambiguous names (l, I, O) are common in scientific code
+    "UP031", # percent-formatting is pervasive in the migrated plotting code
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]              # re-exports
+"tests/conftest.py" = ["E402"]        # matplotlib.use() before imports
+"scripts/run_checks.py" = ["E402"]    # matplotlib.use() before imports
+"tests/test_gui.py" = ["E402"]          # Qt skip-guard before imports
+"pymorgan/gui/canvas.py" = ["E402"]     # QT_API set before matplotlib import
+"pymorgan/gui/main_window.py" = ["E402"]  # QT_API set before imports
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

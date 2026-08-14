@@ -1,0 +1,64 @@
+# Line-ending policy for PyMORGAN.
+#
+# Text files are stored with LF in the repository and checked out with the
+# platform's native endings (CRLF on Windows). Without this, editors and tools
+# that rewrite a whole file with the other convention make it look entirely
+# modified in `git status`.
+#
+# After adding this file once, run:
+#     git add --renormalize .
+# and commit the result; from then on line endings stay out of the diffs.
+
+* text=auto
+
+# Source and configuration (explicit, so they are never guessed as binary)
+*.py      text diff=python
+*.pyi     text diff=python
+*.md      text diff=markdown
+*.txt     text
+*.toml    text
+*.json    text
+*.cfg     text
+*.ini     text
+*.yml     text
+*.yaml    text
+*.m       text
+*.tex     text diff=tex
+*.bib     text diff=bibtex
+*.mplstyle text
+*.ui      text
+*.csv     text
+*.CSV     text
+*.dat     text
+*.pdat    text
+*.p2dat   text
+.gitattributes text
+.gitignore     text
+LICENSE        text
+
+# Shell / PowerShell scripts keep the endings their interpreter expects
+*.sh      text eol=lf
+*.ps1     text eol=crlf
+*.bat     text eol=crlf
+*.cmd     text eol=crlf
+
+# Binary assets: never touched, never diffed as text
+*.png     binary
+*.jpg     binary
+*.jpeg    binary
+*.gif     binary
+*.ico     binary
+*.pdf     binary
+*.ttf     binary
+*.otf     binary
+*.woff    binary
+*.woff2   binary
+*.xlsx    binary
+*.h5      binary
+*.hdf5    binary
+*.npy     binary
+*.npz     binary
+*.mat     binary
+
+# uv resolves this itself; keep it LF so it is stable across platforms
+uv.lock   text eol=lf linguist-generated=true

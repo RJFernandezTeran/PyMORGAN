@@ -1,0 +1,307 @@
+\section{Two-dimensional data}\label{sec:twoD}
+
+The two-dimensional branch follows the same \emph{load $\to$ process $\to$
+plot $\to$ analyse} pipeline as the one-dimensional one (chapter~\ref{sec:oneD}),
+built around a single \code{Dataset2D} object. Table~\ref{tab:stages2d}
+maps each stage to its module.
+
+\begin{table}[h]
+  \centering
+  \begin{tabular}{lll}
+    \toprule
+    Stage & Module & Entry point(s) \\
+    \midrule
+    load    & \code{pymorgan.twoD.load}    & \code{pm.load\_2D}, \code{Dataset2D.from\_file} \\
+    process & \code{pymorgan.twoD.process} & \code{Dataset2D.background\_correct} \\
+    plot    & \code{pymorgan.twoD.plot}    & \code{Dataset2D.plot\_map} \\
+    analyse & \code{pymorgan.twoD.analyse} & \code{Dataset2D.slice\_at}, \code{diagonal} \\
+    \bottomrule
+  \end{tabular}
+  \caption{The 2-D pipeline stages and where they live.}
+  \label{tab:stages2d}
+\end{table}
+
+\subsection{Data model}
+A two-dimensional measurement is a stack of 2-D frequency--frequency maps, one
+per population time $t_2$. The signal is stored as a cube
+\begin{equation}
+  Z \in \mathbb{R}^{N_{\text{pump}} \times N_{\text{probe}} \times N_{t_2}},
+\end{equation}
+indexed by the pump frequency $\omega_1$, the probe frequency $\omega_3$ and the
+population time $t_2$. The fields held by \code{Dataset2D} are listed in
+Table~\ref{tab:fields2d}.
+
+\begin{table}[h]
+  \centering
+  \begin{tabular}{lll}
+    \toprule
+    Field & Shape & Meaning \\
+    \midrule
+    \code{Z}      & $N_{\text{pump}} \times N_{\text{probe}} \times N_{t_2}$ & signal cube \\
+    \code{pump}   & $N_{\text{pump}}$  & pump axis $\omega_1$ \\
+    \code{probe}  & $N_{\text{probe}}$ & probe axis $\omega_3$ \\
+    \code{delays} & $N_{t_2}$ & population times $t_2$ \\
+    \code{units}  & dict & unit labels \\
+    \bottomrule
+  \end{tabular}
+  \caption{Fields stored on \code{Dataset2D}.}
+  \label{tab:fields2d}
+\end{table}
+
+\subsection{Loading and the loader registry}
+As in 1-D, formats are resolved through a registry
+(\code{pymorgan.twoD.load}). The registered readers are \code{P2DAT} (processed
+maps), \code{MESS\_2DIR}, \code{UoS\_2DIR}, \code{RAL\_RAW} (raw
+interferograms, phased and transformed on load) and \code{RAL\_Proc};
+\code{pm.available\_map\_loaders()} lists what the running installation
+recognises.
+
+\begin{lstlisting}
+import pymorgan as pm
+
+data = pm.load_2D("scan.p2dat", data_type="P2DAT")
+print(pm.available_map_loaders())
+\end{lstlisting}
+
+A new format is registered with \code{@pm.register\_map\_loader("Name")}; the
+reader must return \code{(Z, pump, probe, delays, units, freq\_units)}.
+
+\paragraph{The P2DAT format.}
+The first row is \code{0, 0, $t_2^{(1)}$, $t_2^{(2)}$, \dots} (the population
+times); each subsequent row is \code{pump, probe, S($t_2^{(1)}$), \dots}. The
+flat pump/probe ordering is reshaped (Fortran order) into the
+\code{Z[pump, probe, $t_2$]} cube. Data is in m\,OD.
+
+\subsection{Background correction}
+The 2-D background is a chosen $t_2$ map subtracted from the others,
+\begin{equation}
+  Z_C(\omega_1,\omega_3,t_2) = Z(\omega_1,\omega_3,t_2) - Z(\omega_1,\omega_3,t_2^{\text{ref}}),
+\end{equation}
+with the reference map itself left unchanged so it can still be inspected:
+
+\begin{lstlisting}
+data.background_correct(reference=-1)   # by t2 index
+data.background_correct(t2=50)          # by nearest t2 value
+data.background_correct(do_correct=False)  # passthrough
+\end{lstlisting}
+
+\subsection{Plotting}
+\code{plot\_map} renders the map nearest a requested $t_2$ as a pump-vs-probe
+contour and returns a \code{Map2DAxes(ax, top, cbar)} named tuple. It is built
+\emph{from} the supplied (or freshly created) axis: the colorbar and an optional
+top panel are appended with a divider, so the whole composite drops into a
+parent layout.
+
+\begin{lstlisting}
+out = data.plot_map(0.5)                 # one t2 map; new figure by default
+out = data.plot_map(0.5, ax=my_ax, show_colorbar=False)   # into a layout
+\end{lstlisting}
+
+Two behaviours are specific to 2-D:
+\begin{itemize}
+  \item \textbf{Diagonal.} The $\omega_1 = \omega_3$ line is drawn only where the
+        pump and probe axes overlap (pump and probe can be set independently);
+        when their ranges are disjoint no diagonal is shown.
+  \item \textbf{Top spectrum.} A steady-state or pump--probe spectrum can be drawn
+        in a panel above the map (sharing the pump axis) via \code{top\_spectrum},
+        which accepts a \code{Spectrum}, an \code{\{"X","Y"\}} mapping, or an
+        \code{(x, y)} pair:
+\end{itemize}
+
+\begin{lstlisting}
+ftir = pm.load_spectrum("sample_FTIR.csv", kind="absorption")
+data.plot_map(0.5, top_spectrum=ftir, top_label="FTIR")
+\end{lstlisting}
+
+The same \code{show\_xlabel} / \code{show\_ylabel} / \code{show\_colorbar} /
+\code{show\_colorbar\_label} toggles as in 1-D apply. The frequency-axis
+labelling convention is the \code{freq\_label} setting
+(\S\ref{sec:settings}): \code{Omega\_n} ($\omega_1/\omega_3$), \code{Omega\_PP}
+($\omega_{\text{pump}}/\omega_{\text{probe}}$), \code{Pump-Probe}, or
+\code{Omega\_n/2pic}; it can be overridden per call.
+
+\subsubsection{Axis units and the $10^3$ rule}\label{sec:twoD:units}
+The maps are stored in wavenumbers, but the axes can be displayed in any of the
+units of Table~\ref{tab:2dunits}, selected with the \code{twoD\_freq\_unit}
+setting or the \code{freq\_unit} argument of \code{plot\_map} and
+\code{plot\_surface}. Conversions pivot through the wavelength,
+\begin{equation}
+  \lambda\,[\mathrm{nm}] = \frac{P_{\text{in}}}{x_{\text{in}}},
+  \qquad
+  x_{\text{out}} = \frac{P_{\text{out}}}{\lambda\,[\mathrm{nm}]},
+\end{equation}
+with the constants $P$ listed in the table; wavenumbers in reciprocal inches
+follow $\tilde\nu\,[\mathrm{in}^{-1}] = 2.54\,\tilde\nu\,[\mathrm{cm}^{-1}]$.
+
+\begin{table}[h]
+  \centering
+  \begin{tabular}{llll}
+    \toprule
+    Token & Quantity & $P$ (unit\,$\cdot$\,nm) & Typical mid-IR value \\
+    \midrule
+    \code{cm-1} & wavenumber & $10^{7}$              & 2000 \\
+    \code{in-1} & wavenumber & $2.54\times10^{7}$    & 5080 \\
+    \code{nm}   & wavelength & ---                   & 5000 \\
+    \code{THz}  & frequency  & $2.99792458\times10^{5}$ & 60 \\
+    \code{eV}   & energy     & $1239.841984$         & 0.25 \\
+    \bottomrule
+  \end{tabular}
+  \caption{Display units of the 2-D spectral axes.}
+  \label{tab:2dunits}
+\end{table}
+
+An axis whose values exceed $5\times10^{3}$ in the display unit is additionally
+divided by $1000$, and the label gains a $10^{3}$ prefix: a visible-range map
+reads $\omega_1$ ($10^{3}$ cm$^{-1}$) with ticks at $18\ldots22$ rather than
+five-digit numbers. Axis limits and the CLS/IvCLS/NLS overlays are converted
+together with the axes, so a region selected in wavenumbers stays on the same
+features after a unit change.
+
+\subsection{Analysis}
+The analyse stage (\code{pymorgan.twoD.analyse}) offers map and diagonal
+extraction --- the pump\,=\,probe diagonal is defined over the overlap of the two
+axes --- together with the spectral-diffusion metrics of
+\S\ref{sec:twoD:sd} and the Kubo lineshape fitting of
+\code{pymorgan.twoD.kubo\_fit}.
+
+\begin{lstlisting}
+pump, probe, m = data.slice_at(0.5)   # the 2-D map at this t2
+freq, sig      = data.diagonal(0.5)   # signal along omega_1 = omega_3
+
+cls  = data.center_line_slope()              # [t2, slope]
+both = data.center_line_slope(both=True)     # [t2, CLS, IvCLS]
+nls  = data.nodal_line_slope()               # [t2, slope]
+\end{lstlisting}
+
+\subsection{Spectral diffusion}\label{sec:twoD:sd}
+The centre-line slope (CLS) is obtained by taking, for every pump frequency
+$\omega_1$, the extremum of the slice along the probe axis and fitting a line
+through those points; the inverse CLS (IvCLS) swaps the roles of the two axes,
+and the nodal-line slope (NLS) tracks the zero crossing between the bleach and
+the excited-state absorption. The line is fitted robustly (Huber loss), so a few
+outlying slices do not tilt the result.
+
+\subsubsection{Sub-pixel refinement}
+The extremum of a slice is \emph{not} taken at the sampled maximum: with probe
+pixels of a few cm$^{-1}$ that would quantise the centre line and bias the
+slope. Instead the position is obtained in two stages:
+\begin{enumerate}
+  \item the slice is interpolated onto a grid \code{sd\_interpolation\_factor}
+        times finer with a cubic spline, and the extremum is located there,
+        already resolving positions below the spectral resolution;
+  \item a local model --- \code{sd\_interpolation}: a quadratic, cubic or
+        quartic polynomial, or a Gaussian or Lorentzian peak --- is fitted by
+        least squares to the \emph{measured} points around that location, and
+        its stationary point is the reported centre.
+\end{enumerate}
+Fitting the measured samples (rather than applying a three-point formula to the
+interpolated curve) keeps the estimate continuous and averages the noise over
+several points. On a synthetic tilted trough sampled at 2.5\,cm$^{-1}$ the
+residual error is $\approx0.01$ pixel for the quadratic model and
+$\approx0.003$ pixel for the quartic one; with \code{sd\_interpolation = "none"}
+the fine-grid position is returned unrefined, and its resolution is set by the
+interpolation factor alone.
+
+Two further settings restrict what enters the fit:
+\code{sd\_peak\_range} (cm$^{-1}$) is the half-width of the search window around
+the coarse extremum, \code{sd\_intensity\_threshold} the minimum amplitude
+(relative to the strongest signal of the map) a slice must reach to contribute,
+and \code{sd\_peak\_type} selects the bleach minimum or the excited-state
+absorption maximum.
+
+The decay of the extracted slopes against $t_2$ is plotted from the GUI with
+single- or bi-exponential fits. That figure always uses a \emph{linear} $t_2$
+axis: population times are a short, linearly sampled series, unlike the wide
+delay range of a 1-D experiment.
+
+\subsection{Worked example}
+A complete script is provided in \code{examples/two\_d\_2DIR.py}:
+
+\begin{lstlisting}
+import pymorgan as pm
+
+pm.load_settings("settings.toml")
+pm.apply_style()
+
+data = pm.load_2D("testData/test2DIR.p2dat", data_type="P2DAT")  # load
+data.background_correct(reference=-1)                             # process
+data.plot_map(0.5, ShowLines=True)                               # plot
+\end{lstlisting}
+
+\subsection{Graphical interface}\label{sec:twoD:gui}
+
+The GUI (\code{pymorgan-gui}) exposes the full 2-D pipeline through the
+\textbf{2D} tab.  The left column contains a hierarchical file browser,
+format selector, and a series of sub-tabs that drive processing and
+analysis.  Directories shown in grey (60\,\% grey) are navigation
+placeholders (\code{[..]} / \code{[...]}) that contain no loadable data.
+
+\subsubsection{Phasing/FT sub-tab}
+
+Raw (interferometer) 2-D data are Fourier-transformed and phased through
+the \emph{Phasing/FT} sub-tab before any spectral map is rendered.
+Table~\ref{tab:phasing} summarises the available controls.
+
+\begin{table}[h]
+  \centering
+  \begin{tabular}{lll}
+    \toprule
+    Control & Options & Default \\
+    \midrule
+    Apodisation & Box, \textbf{Cos}, Cos$^2$, Cos$^3$, Hanning, Hamming, None & Cos \\
+    Phase fit   & Constant, \textbf{Linear}, Quadratic, Cubic & Linear \\
+    Phase range & $\pm N$ frequency units around peak centre & 10 \\
+    Zero-pad    & enabled / disabled, factor, next-2$^k$ & disabled \\
+    Pump correction & on / off & off \\
+    \bottomrule
+  \end{tabular}
+  \caption{Phasing/FT controls and their defaults.}
+  \label{tab:phasing}
+\end{table}
+
+The \textbf{Phase coeffs.}\ field (read-only) displays the polynomial
+coefficients of the fitted phase for the currently selected delay,
+formatted as \texttt{\%.3g}.  It updates automatically when the delay
+changes or after a new load.
+
+\subsubsection{Other plt. sub-tab}
+
+The \emph{Other plt.} sub-tab contains three diagnostic views selected
+by the \textsc{td} / \textsc{ph} / \textsc{cal} toggle buttons:
+
+\begin{description}
+  \item[TD] Time-domain interferogram and signal for the selected
+    probe pixel.
+  \item[PH] Fourier transform amplitude (black), a Gaussian fit
+    (green dashed), and — for interferometer data — the unwrapped
+    phase (red dots) and the polynomial fit (blue line) on a twin
+    $y$-axis.  The $x$-axis is locked to $\pm 2\times\mathrm{FWHM}$
+    of the Gaussian fit.  The phase axis is re-centred so the fitted
+    phase is zero at the spectral peak, wrapped to $[-\pi,\pi]$, and
+    plotted with fixed limits $[-\pi,\pi]$.
+  \item[CAL] Calibrated probe axis (pixel vs.\ wavenumber / THz).
+\end{description}
+
+Clicking the \textbf{Pop} button opens an independent, resizable window
+that mirrors the same axes.  The window is linked to the main GUI: it
+updates whenever the delay or plot mode changes.  Closing the pop-out
+does not affect the embedded plot.
+
+\subsubsection{Movie / GIF export dialog}
+
+The \textbf{Make Movie\ldots} button opens \code{movie\_dialog.py}, which
+exports an animated GIF or MP4 video of the 2-D contour map stepping
+through all population times~$t_2$. Controls include:
+
+\begin{description}
+  \item[Delay range] Lower and upper $t_2$ limits to include in the animation.
+  \item[Frame rate / duration] Frames per second or per-frame hold time in ms.
+  \item[Figure size] Figure width and height in inches.
+  \item[Colour scale ($Z$-scale)] Fixed or per-frame normalised colour range.
+  \item[Output format] GIF (via Pillow) or MP4 (via the matplotlib
+        \code{FFMpegWriter}; requires \code{ffmpeg} on \code{PATH}).
+\end{description}
+
+A progress bar reports frame rendering. The dialog uses the plot-controls
+panel settings (CLS/IvCLS overlays, quick-plot mode, etc.) that are active
+in the main window when the dialog is opened.

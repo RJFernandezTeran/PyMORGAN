@@ -1,0 +1,248 @@
+# =============================================================================
+# PyMORGAN Settings Configuration
+# =============================================================================
+#
+# This file configures the default plotting, data loading, chirp correction,
+# and spectral diffusion parameters for PyMORGAN.
+# Grouped logically by function to be user-friendly for newcomers.
+#
+
+# Sections group the settings by function; the keys themselves are unchanged,
+# so an older flat file still loads.
+
+# -----------------------------------------------------------------------------
+# 1. Plot & Aesthetics Settings
+# -----------------------------------------------------------------------------
+[plot]
+# Matplotlib style profile -> Settings/*.mplstyle
+#   "regular" -> HLV_plt.mplstyle
+#   "poster"  -> HLV_plt_poster.mplstyle
+#   "inset"   -> HLV_plt_in.mplstyle
+profile = "regular"
+
+# Multiplicative overlay on the profile's font sizes (1.0 = unchanged).
+font_scale = 1.0
+
+# Axis-label delimiter convention:
+#   "()" -> Wavelength (nm)   "[]" -> Wavelength [nm]
+#   "/"  -> Wavelength / nm    ""   -> Wavelength nm
+label_style = "()"
+
+# Delta-absorbance label convention (label only; data stays in mOD):
+#   "mOD"  -> $\Delta$A / mOD
+#   "x1E3" -> $\Delta$A $\times 10^{3}$
+delta_a_units = "x1E3"
+
+# Default colourmap for contour plots (see helpers.CalcCMAP).
+cmap = "DkRd/Wh/DkBu"
+
+# Colourmap for kinetic and spectral trace plots ("rainbow", "rainbow reversed", "red-purple-blue").
+traces_cmap = "rainbow"
+
+# Default number of zero levels or white levels forced to midpoint/zero colour.
+white_levels = 2.0
+
+# Default number of contour levels for 1D and 2D plots.
+n_contours = 40
+
+# Show 1-sigma uncertainties in plot legends and summaries.
+show_uncertainties = true
+
+# Round lifetime values together with their uncertainties.
+round_uncertainties = true
+
+# When true, spectra/contour plots add a secondary X axis (top) in the
+# complementary unit (cm-1<->nm; nm is used for eV/THz).
+secondary_axis = false
+
+# Kinetic-trace marker size and line width (matplotlib points).
+kinetics_marker_size = 4.0
+kinetics_line_width = 1.5
+
+# Significant digits kept in a legend label (delays, lifetimes). `round_labels`
+# (in [axes]) first rounds the value to two significant figures; this caps what
+# is left, so an unrounded fit result does not print all its decimals.
+label_digits = 3
+
+# Vertical spacing between entries of the (draggable) kinetics / transient-
+# spectra legends, in font-size units (matplotlib `labelspacing`).
+legend_label_spacing = 0.25
+
+# Where that legend sits. "outside right" parks it beside the axis (the
+# stand-alone-figure default); "best", "upper right", "upper left",
+# "lower left", "lower right", "centre right" and "centre left" place it inside.
+# Embedded panels (PyRATE-TA's) always place it inside regardless: there is no room
+# beside the axis there.
+legend_location = "outside right"
+
+# Prune the draggable kinetics/spectra legends to fit in the figure height.
+prune_legend = true
+max_legend_entries = 15.0
+
+# Whether to include shaded fills to +/- one standard deviation in 1-D plots.
+error_shading = false
+
+# Opacity (alpha, 0.0 - 1.0) of the standard deviation shaded fills.
+error_shading_alpha = 0.2
+
+# -----------------------------------------------------------------------------
+# 2. Time & Frequency Axis Settings
+# -----------------------------------------------------------------------------
+[axes]
+# Default time-axis scale: "symlog", "log" or "lin".
+time_axis_scale = "symlog"
+
+# Tick-label format for the (log/symlog) time axis of 1-D contour plots:
+#   "power"   -> 10^0, 10^1, 10^2 ...
+#   "decimal" -> 0.1, 1, 10, 100 ...
+#   "mixed"   -> 1, 10^1, 10^2 ...  (10^0 shown as a plain "1")
+time_axis_label = "power"
+
+# 2-D frequency-axis labelling convention:
+#   "Omega_n"      -> omega_1 / omega_3
+#   "Omega_PP"     -> omega_pump / omega_probe
+#   "Pump-Probe"   -> Pump / Probe wavenumber
+#   "Omega_n/2pic" -> omega_n / 2 pi c0
+freq_label = "Omega_n"
+
+# Orientation of the pump frequency axis: "Horizontal" (default) or "Vertical".
+pump_axis = "Horizontal"
+
+# Display unit for the pump/probe axes of 2-D spectra ("cm-1" default, "in-1",
+# "nm", "THz" or "eV"). The data stays in wavenumbers; axes above 5000 are shown
+# divided by 1000 with a 10^3 prefix in the label (e.g. visible-range maps).
+twoD_freq_unit = "cm-1"
+
+# Format of the t2 delay indicator text box in 2-D contour plots:
+#   "t2="   -> "t_2 = 1.0 ps" (default)
+#   "plain" -> "1.0 ps"
+t2_label_style = "t2="
+
+# Display unit for the spectral (probe) X axis of spectra/contour plots:
+#   "native" -> keep each dataset's stored unit (no conversion)
+#   "nm" | "cm-1" | "eV" | "THz" -> convert the axis to that unit
+x_axis_unit = "native"
+
+# Quick plots: draw contour plots as a single image (pcolormesh) and skip the
+# contour lines. Much faster to redraw interactively; turn off for final figures.
+quick_plots = false
+
+# Round numeric trace labels (kinetic-cut probe positions and spectral-cut delays).
+round_labels = true
+
+# When true, kinetic/spectral cut figures opened from the GUI inherit the
+# embedded contour's axis limits.
+inherit_cut_limits = true
+
+# -----------------------------------------------------------------------------
+# 3. Figure Sizes (Independent Plots)
+# -----------------------------------------------------------------------------
+[figures]
+contour_figsize = [7.5, 5.5]
+kinetics_figsize = [7.5, 4.375]
+spectra_figsize = [7.5, 4.375]
+
+# -----------------------------------------------------------------------------
+# 4. GUI & Window Preferences
+# -----------------------------------------------------------------------------
+[gui]
+# Qt style for the GUI window (e.g., "Fusion", "windows11").
+gui_theme = "Fusion"
+
+# GUI splash-screen duration in seconds. Set to 0 to disable.
+splash_duration = 0.0
+
+# Default data directory for the GUI: pre-fills the root folder on startup and is
+# the base for the "Today" button, which appends /YYYYMMDD to it. Leave empty to
+# disable. (Replaces the former, now-deprecated "data_dir" key, which is still
+# read as a fallback.)
+# NOTE: For Windows paths, always use single quotes (literal strings, e.g. 'C:\path') or forward slashes (e.g. "C:/path") to prevent escape character issues.
+default_datadir = ""
+
+# Default file type/loader selected automatically for 1D datasets (e.g., "PDAT").
+default_oneD_datatype = "MESS_TRIR"
+
+# Default file type/loader selected automatically for 2D datasets (e.g., "P2DAT").
+default_twoD_datatype = "MESS_2DIR"
+
+# Default calibration setup type selected automatically in the calibration tab.
+default_calibration_datatype = "UniGE TRIR (Intensity)"
+
+# Load single scans for transient exploration.
+load_single_scans = true
+
+# -----------------------------------------------------------------------------
+# 5. Chirp Correction & Solvent Fitting
+# -----------------------------------------------------------------------------
+[chirp]
+# How to handle boundary NaNs introduced by the time-shifting during chirp correction:
+#   "crop"        -> crops the delays axis to keep only fully finite regions.
+#   "extrapolate" -> extrapolates using nearest-neighbor boundary values.
+chirp_boundary_handling = "crop"
+
+# Execution mode for pixel-by-pixel chirp fitting:
+#   "threadpool"  -> runs fits concurrently using multiple threads
+#   "processpool" -> runs fits concurrently using multiple processes (true parallelism)
+#   "disabled"    -> runs fits sequentially on the main thread
+parallel_fitting = "processpool"
+
+# Whether to use a per-pixel time-zero offset (dt) for solvent subtraction.
+solvent_per_pixel_dt = false
+
+# Whether to use a per-pixel amplitude scaling factor for solvent subtraction.
+solvent_per_pixel_scale = true
+
+# -----------------------------------------------------------------------------
+# 6. Spectral Diffusion Settings (CLS / IvCLS / NLS)
+# -----------------------------------------------------------------------------
+[spectral_diffusion]
+# Line/scatter colour for Centre-Line Slope overlays (e.g. "b" for blue, "r" for red).
+cls_color = "w"
+
+# Line/scatter colour for Inverse Centre-Line Slope overlays.
+ivcls_color = "y"
+
+# Line/scatter colour for Nodal Line Slope overlays.
+nls_color = "r"
+
+# Draw style for spectral diffusion overlays:
+#   "Points" -> only scatter markers
+#   "Lines"  -> only the robust best-fit lines
+#   "Both"   -> overlays lines and points together
+overlay_draw_style = "Both"
+
+# Line width or point marker size for spectral diffusion overlays.
+overlay_linewidth = 1.5
+
+# Minimum relative amplitude threshold for peak-fitting (fraction of maximum 2D intensity).
+sd_intensity_threshold = 0.5
+
+# Wavenumber search range limit around the diagonal for peak detection (cm-1).
+sd_peak_range = 30.0
+
+# Target peak type to fit ("min" for bleach/SE minimum, "max" for ESA maximum).
+sd_peak_type = "min"
+
+# Sub-pixel peak interpolation method:
+#   "quadratic"  -> local parabolic fitting
+#   "gaussian"   -> local 1D Gaussian fit
+#   "lorentzian" -> local 1D Lorentzian fit
+#   "none"       -> no sub-pixel interpolation
+sd_interpolation = "quadratic"
+
+# Upsampling factor for 1D slices to resolve peak positions with sub-pixel precision.
+sd_interpolation_factor = 2
+
+# Relative weight of the FTIR 1D lineshape spectrum vs the 2D-IR spectrum in the joint Kubo fit.
+kubo_ftir_weight = 1.0
+
+# -----------------------------------------------------------------------------
+# 7. Steady-State (0D) Overlay Settings
+# -----------------------------------------------------------------------------
+[steady_state]
+ss_abs_color = "b"  # Steady-state absorption overlay colour
+ss_em_color = "r"   # Steady-state emission overlay colour
+ss_line_width = 1.5 # Steady-state overlay line width
+ss_line_alpha = 0.15 # Steady-state overlay line transparency (0.0 - 1.0)
+ss_fill_alpha = 0.05 # Steady-state overlay fill transparency (0.0 - 1.0)
+ss_line_dashes = [4.0, 3.0] # Steady-state overlay line dash pattern (on/off lengths in points)

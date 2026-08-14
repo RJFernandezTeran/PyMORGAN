@@ -1,0 +1,3853 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<ui version="4.0">
+ <author>Ricardo J. Fernández-Terán</author>
+ <class>MainWindow</class>
+ <widget class="QMainWindow" name="MainWindow">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>1100</width>
+    <height>880</height>
+   </rect>
+  </property>
+  <property name="sizePolicy">
+   <sizepolicy hsizetype="Fixed" vsizetype="Fixed">
+    <horstretch>0</horstretch>
+    <verstretch>0</verstretch>
+   </sizepolicy>
+  </property>
+  <property name="windowTitle">
+   <string>PyMORGAN v1.0</string>
+  </property>
+  <property name="iconSize">
+   <size>
+    <width>16</width>
+    <height>16</height>
+   </size>
+  </property>
+  <property name="toolButtonStyle">
+   <enum>Qt::ToolButtonStyle::ToolButtonIconOnly</enum>
+  </property>
+  <property name="unifiedTitleAndToolBarOnMac">
+   <bool>false</bool>
+  </property>
+  <widget class="QWidget" name="centralwidget">
+   <layout class="QVBoxLayout" name="centralLayout">
+    <property name="leftMargin">
+     <number>4</number>
+    </property>
+    <property name="topMargin">
+     <number>4</number>
+    </property>
+    <property name="rightMargin">
+     <number>4</number>
+    </property>
+    <property name="bottomMargin">
+     <number>4</number>
+    </property>
+    <item>
+     <widget class="QGroupBox" name="RootDir_grp">
+      <property name="sizePolicy">
+       <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
+        <horstretch>0</horstretch>
+        <verstretch>0</verstretch>
+       </sizepolicy>
+      </property>
+      <property name="styleSheet">
+       <string notr="true" />
+      </property>
+      <property name="title">
+       <string>  Root Directory</string>
+      </property>
+      <property name="flat">
+       <bool>false</bool>
+      </property>
+      <property name="checkable">
+       <bool>false</bool>
+      </property>
+      <layout class="QHBoxLayout" name="horizontalLayout">
+       <property name="spacing">
+        <number>5</number>
+       </property>
+       <property name="leftMargin">
+        <number>5</number>
+       </property>
+       <property name="topMargin">
+        <number>4</number>
+       </property>
+       <property name="rightMargin">
+        <number>5</number>
+       </property>
+       <property name="bottomMargin">
+        <number>4</number>
+       </property>
+       <item>
+        <widget class="QPushButton" name="RefreshDir_btn">
+         <property name="sizePolicy">
+          <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+           <horstretch>4</horstretch>
+           <verstretch>0</verstretch>
+          </sizepolicy>
+         </property>
+         <property name="toolTip">
+          <string>Refresh the file list in the current directory</string>
+         </property>
+         <property name="text">
+          <string>Refresh</string>
+         </property>
+         <property name="iconSize">
+          <size>
+           <width>16</width>
+           <height>16</height>
+          </size>
+         </property>
+         <property name="autoDefault">
+          <bool>false</bool>
+         </property>
+         <property name="default">
+          <bool>false</bool>
+         </property>
+         <property name="flat">
+          <bool>false</bool>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QPushButton" name="GoToToday_btn">
+         <property name="sizePolicy">
+          <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+           <horstretch>4</horstretch>
+           <verstretch>0</verstretch>
+          </sizepolicy>
+         </property>
+         <property name="toolTip">
+          <string>Go to today's folder in the user's data directory</string>
+         </property>
+         <property name="text">
+          <string>Go to Today</string>
+         </property>
+         <property name="iconSize">
+          <size>
+           <width>16</width>
+           <height>16</height>
+          </size>
+         </property>
+         <property name="autoDefault">
+          <bool>false</bool>
+         </property>
+         <property name="default">
+          <bool>false</bool>
+         </property>
+         <property name="flat">
+          <bool>false</bool>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QPushButton" name="UpDir_btn">
+         <property name="sizePolicy">
+          <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+           <horstretch>2</horstretch>
+           <verstretch>0</verstretch>
+          </sizepolicy>
+         </property>
+         <property name="toolTip">
+          <string>Go up one directory level</string>
+         </property>
+         <property name="text">
+          <string>Up</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QPushButton" name="BrowseRootdir_btn">
+         <property name="sizePolicy">
+          <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+           <horstretch>4</horstretch>
+           <verstretch>0</verstretch>
+          </sizepolicy>
+         </property>
+         <property name="toolTip">
+          <string>Open folder browser to select a root directory</string>
+         </property>
+         <property name="text">
+          <string>Browse...</string>
+         </property>
+         <property name="autoDefault">
+          <bool>false</bool>
+         </property>
+         <property name="default">
+          <bool>false</bool>
+         </property>
+         <property name="flat">
+          <bool>false</bool>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QLineEdit" name="RootDir_field">
+         <property name="sizePolicy">
+          <sizepolicy hsizetype="Expanding" vsizetype="Preferred">
+           <horstretch>34</horstretch>
+           <verstretch>0</verstretch>
+          </sizepolicy>
+         </property>
+         <property name="autoFillBackground">
+          <bool>true</bool>
+         </property>
+         <property name="placeholderText">
+          <string>Select a root folder before continuing. The selected root folder will appear here...</string>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+    </item>
+    <item>
+     <widget class="QTabWidget" name="MainTabs">
+      <property name="styleSheet">
+       <string notr="true">QTabWidget#MainTabs::pane { /* The tab widget frame */
+    border-top: 1px solid #C2C7CB;
+}
+
+QTabWidget#MainTabs::tab-bar {
+    left: 5px; /* move to the right by 5px */
+}
+
+/* Style the tab using the tab sub-control. Note that
+    it reads QTabBar _not_ QTabWidget */
+QTabWidget#MainTabs &gt; QTabBar::tab {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+                                stop: 0 #E1E1E1, stop: 0.4 #EEEEEE,
+                                stop: 0.5 #EFEFEF, stop: 1.0 #D3D3D3);
+    border: 1px solid #C4C4C3;
+    border-bottom-color: #C2C7CB; /* same as the pane color */
+    border-top-left-radius: 5px;
+    border-top-right-radius: 5px;
+    min-width: 30ex;
+    padding:4px;
+}
+
+QTabWidget#MainTabs &gt; QTabBar::tab:selected, QTabWidget#MainTabs &gt; QTabBar::tab:hover {
+    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+                                stop: 0 #fafafa, stop: 0.4 #f4f4f4,
+                                stop: 0.5 #e7e7e7, stop: 1.0 #fafafa);
+}
+
+QTabWidget#MainTabs &gt; QTabBar::tab:selected {
+    border-color: #9B9B9B;
+    border-bottom-color: #C2C7CB; /* same as pane color */
+}
+
+QTabWidget#MainTabs &gt; QTabBar::tab:!selected {
+    margin-top: 2px; /* make non-selected tabs look smaller */
+}</string>
+      </property>
+      <property name="currentIndex">
+       <number>0</number>
+      </property>
+      <widget class="QWidget" name="PP_tab">
+       <attribute name="title">
+        <string>Pump-Probe</string>
+       </attribute>
+       <layout class="QHBoxLayout" name="ppTabLayout">
+        <property name="spacing">
+         <number>6</number>
+        </property>
+        <property name="leftMargin">
+         <number>6</number>
+        </property>
+        <property name="topMargin">
+         <number>6</number>
+        </property>
+        <property name="rightMargin">
+         <number>6</number>
+        </property>
+        <property name="bottomMargin">
+         <number>6</number>
+        </property>
+        <item>
+         <layout class="QVBoxLayout" name="ppLeftColumn">
+          <property name="leftMargin">
+           <number>0</number>
+          </property>
+          <property name="topMargin">
+           <number>0</number>
+          </property>
+          <property name="rightMargin">
+           <number>0</number>
+          </property>
+          <property name="bottomMargin">
+           <number>0</number>
+          </property>
+          <item>
+           <widget class="QGroupBox" name="PP_datagrp">
+            <property name="styleSheet">
+             <string notr="true">font: bold</string>
+            </property>
+            <property name="title">
+             <string>  Select Data Type and Dataset</string>
+            </property>
+            <layout class="QGridLayout" name="gridLayout">
+             <property name="leftMargin">
+              <number>2</number>
+             </property>
+             <property name="topMargin">
+              <number>2</number>
+             </property>
+             <property name="rightMargin">
+              <number>2</number>
+             </property>
+             <property name="bottomMargin">
+              <number>6</number>
+             </property>
+             <property name="verticalSpacing">
+              <number>4</number>
+             </property>
+             <item row="0" column="0">
+              <widget class="QComboBox" name="PP_datatype_cbx">
+               <property name="sizePolicy">
+                <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+                 <horstretch>3</horstretch>
+                 <verstretch>1</verstretch>
+                </sizepolicy>
+               </property>
+               <property name="styleSheet">
+                <string notr="true">font: normal</string>
+               </property>
+               <item>
+                <property name="text">
+                 <string extracomment="PDAT">Processed 1D Spectrum (.pdat)</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string extracomment="UniGE_fsTA">UniGE fsTA</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string extracomment="UniGE_nsTA">UniGE nsTA</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string extracomment="MESS_TRIR">UniGE Transient IR (MESS)</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string extracomment="MESS_TRUVIS">UniGE Transient UV-Vis (MESS)</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string extracomment="UniGE_FLUPSold">UniGE FLUPS (Legacy)</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string extracomment="UniGE_FLUPSnew">UniGE FLUPS (Modern)</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string extracomment="Helios_TA">Helios TA (Ultrafast Systems)</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string extracomment="UoS_IRpp">U. of Sheffield IR Pump-Probe</string>
+                </property>
+               </item>
+              </widget>
+             </item>
+             <item row="0" column="1">
+              <widget class="QPushButton" name="PP_reloadData_btn">
+               <property name="sizePolicy">
+                <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+                 <horstretch>1</horstretch>
+                 <verstretch>1</verstretch>
+                </sizepolicy>
+               </property>
+               <property name="toolTip">
+                <string>Reload the current dataset from disk</string>
+               </property>
+               <property name="text">
+                <string>Reload</string>
+               </property>
+              </widget>
+             </item>
+             <item row="1" column="0" colspan="2">
+              <widget class="QListView" name="PP_datafolderlist_lst">
+               <property name="sizePolicy">
+                <sizepolicy hsizetype="Preferred" vsizetype="Expanding">
+                 <horstretch>0</horstretch>
+                 <verstretch>10</verstretch>
+                </sizepolicy>
+               </property>
+               <property name="styleSheet">
+                <string notr="true">font: normal</string>
+               </property>
+               <property name="verticalScrollBarPolicy">
+                <enum>Qt::ScrollBarPolicy::ScrollBarAsNeeded</enum>
+               </property>
+               <property name="autoScroll">
+                <bool>true</bool>
+               </property>
+               <property name="movement">
+                <enum>QListView::Movement::Free</enum>
+               </property>
+               <property name="selectionRectVisible">
+                <bool>true</bool>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </widget>
+          </item>
+          <item>
+           <widget class="QGroupBox" name="oneD_PreProcessing_box">
+            <property name="title">
+             <string>Pre-processing</string>
+            </property>
+            <property name="alignment">
+             <set>Qt::AlignmentFlag::AlignLeading|Qt::AlignmentFlag::AlignLeft|Qt::AlignmentFlag::AlignVCenter</set>
+            </property>
+            <layout class="QVBoxLayout" name="verticalLayout_3">
+             <property name="spacing">
+              <number>4</number>
+             </property>
+             <property name="leftMargin">
+              <number>2</number>
+             </property>
+             <property name="topMargin">
+              <number>2</number>
+             </property>
+             <property name="rightMargin">
+              <number>2</number>
+             </property>
+             <property name="bottomMargin">
+              <number>2</number>
+             </property>
+             <item>
+              <layout class="QHBoxLayout" name="horizontalLayout_3">
+               <item>
+                <widget class="QPushButton" name="PP_fitChirp_btn">
+                 <property name="sizePolicy">
+                  <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+                   <horstretch>3</horstretch>
+                   <verstretch>0</verstretch>
+                  </sizepolicy>
+                 </property>
+                 <property name="toolTip">
+                  <string>Fit a chirp/dispersion correction curve to the coherent artifact</string>
+                 </property>
+                 <property name="styleSheet">
+                  <string notr="true">font: bold;
+color: white;
+background-color: Black
+</string>
+                 </property>
+                 <property name="text">
+                  <string>Fit Chirp</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QPushButton" name="PP_loadChirpCorr_btn">
+                 <property name="sizePolicy">
+                  <sizepolicy hsizetype="Minimum" vsizetype="Fixed">
+                   <horstretch>3</horstretch>
+                   <verstretch>0</verstretch>
+                  </sizepolicy>
+                 </property>
+                 <property name="toolTip">
+                  <string>Load a saved chirp correction curve from file</string>
+                 </property>
+                 <property name="styleSheet">
+                  <string notr="true">font: bold;
+color: white;
+background-color: Purple
+</string>
+                 </property>
+                 <property name="text">
+                  <string>Load Chirp. Corr.</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QPushButton" name="PP_subtractSolvent_btn">
+                 <property name="sizePolicy">
+                  <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+                   <horstretch>1</horstretch>
+                   <verstretch>0</verstretch>
+                  </sizepolicy>
+                 </property>
+                 <property name="toolTip">
+                  <string>Subtract scaled, time-shifted solvent background from the current dataset</string>
+                 </property>
+                 <property name="styleSheet">
+                  <string notr="true">font: bold;
+color: white;
+background-color: Gray
+</string>
+                 </property>
+                 <property name="text">
+                  <string>Solvent Bkg.</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QPushButton" name="PP_subtractShockwave_btn">
+                 <property name="sizePolicy">
+                  <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+                   <horstretch>1</horstretch>
+                   <verstretch>0</verstretch>
+                  </sizepolicy>
+                 </property>
+                 <property name="toolTip">
+                  <string>Subtract an average kinetic trace (shock wave) from all dataset pixels</string>
+                 </property>
+                 <property name="styleSheet">
+                  <string notr="true">font: bold;
+color: white;
+background-color: DarkSlateGray
+</string>
+                 </property>
+                 <property name="text">
+                  <string>Shock Wave</string>
+                 </property>
+                </widget>
+               </item>
+              </layout>
+             </item>
+             <item>
+              <layout class="QHBoxLayout" name="horizontalLayout_2">
+               <item>
+                <widget class="QCheckBox" name="PP_SubtactBkg_chk">
+                 <property name="sizePolicy">
+                  <sizepolicy hsizetype="MinimumExpanding" vsizetype="Fixed">
+                   <horstretch>3</horstretch>
+                   <verstretch>0</verstretch>
+                  </sizepolicy>
+                 </property>
+                 <property name="text">
+                  <string>Subtract bkg.</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="SciDoubleSpinBox" name="PP_bkg_tmin">
+                 <property name="sizePolicy">
+                  <sizepolicy hsizetype="Preferred" vsizetype="Maximum">
+                   <horstretch>2</horstretch>
+                   <verstretch>0</verstretch>
+                  </sizepolicy>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QLabel" name="label">
+                 <property name="sizePolicy">
+                  <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
+                   <horstretch>0</horstretch>
+                   <verstretch>0</verstretch>
+                  </sizepolicy>
+                 </property>
+                 <property name="text">
+                  <string> to</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="SciDoubleSpinBox" name="PP_bkg_tmax">
+                 <property name="sizePolicy">
+                  <sizepolicy hsizetype="Preferred" vsizetype="Maximum">
+                   <horstretch>1</horstretch>
+                   <verstretch>0</verstretch>
+                  </sizepolicy>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QLabel" name="PP_bkg_tLabel">
+                 <property name="sizePolicy">
+                  <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
+                   <horstretch>1</horstretch>
+                   <verstretch>0</verstretch>
+                  </sizepolicy>
+                 </property>
+                 <property name="text">
+                  <string>ps</string>
+                 </property>
+                </widget>
+               </item>
+              </layout>
+             </item>
+             <item>
+              <layout class="QHBoxLayout" name="horizontalLayout_4">
+               <item>
+                <widget class="QPushButton" name="PP_plotBkg_btn">
+                 <property name="sizePolicy">
+                  <sizepolicy hsizetype="MinimumExpanding" vsizetype="Fixed">
+                   <horstretch>2</horstretch>
+                   <verstretch>0</verstretch>
+                  </sizepolicy>
+                 </property>
+                 <property name="toolTip">
+                  <string>Plot the computed pre-zero background spectrum</string>
+                 </property>
+                 <property name="text">
+                  <string>Plot Bkg.</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QPushButton" name="PP_maskProbe_btn">
+                 <property name="sizePolicy">
+                  <sizepolicy hsizetype="MinimumExpanding" vsizetype="Fixed">
+                   <horstretch>3</horstretch>
+                   <verstretch>0</verstretch>
+                  </sizepolicy>
+                 </property>
+                 <property name="toolTip">
+                  <string>Select a probe range to mask out from calculations and plotting</string>
+                 </property>
+                 <property name="text">
+                  <string>Mask Probe Region</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QPushButton" name="PP_shiftT0_btn">
+                 <property name="sizePolicy">
+                  <sizepolicy hsizetype="MinimumExpanding" vsizetype="Fixed">
+                   <horstretch>2</horstretch>
+                   <verstretch>0</verstretch>
+                  </sizepolicy>
+                 </property>
+                 <property name="toolTip">
+                  <string>Shift the delay time axis so a chosen point becomes the new t0</string>
+                 </property>
+                 <property name="text">
+                  <string>Shift t0</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QPushButton" name="PP_plotNoise_btn">
+                 <property name="sizePolicy">
+                  <sizepolicy hsizetype="MinimumExpanding" vsizetype="Fixed">
+                   <horstretch>1</horstretch>
+                   <verstretch>0</verstretch>
+                  </sizepolicy>
+                 </property>
+                 <property name="toolTip">
+                  <string>Plot the per-pixel/per-scan noise profile of the dataset</string>
+                 </property>
+                 <property name="text">
+                  <string>Plot Noise</string>
+                 </property>
+                </widget>
+               </item>
+              </layout>
+             </item>
+            </layout>
+           </widget>
+          </item>
+          <item>
+           <layout class="QHBoxLayout" name="ppCutsCluster">
+            <property name="leftMargin">
+             <number>0</number>
+            </property>
+            <property name="topMargin">
+             <number>0</number>
+            </property>
+            <property name="rightMargin">
+             <number>0</number>
+            </property>
+            <property name="bottomMargin">
+             <number>0</number>
+            </property>
+            <item>
+             <layout class="QVBoxLayout" name="ppCutsColumn">
+              <property name="leftMargin">
+               <number>0</number>
+              </property>
+              <property name="topMargin">
+               <number>0</number>
+              </property>
+              <property name="rightMargin">
+               <number>0</number>
+              </property>
+              <property name="bottomMargin">
+               <number>0</number>
+              </property>
+              <item>
+               <widget class="QGroupBox" name="oneD_PlotsCuts_box">
+                <property name="styleSheet">
+                 <string notr="true" />
+                </property>
+                <property name="title">
+                 <string>Plots and Cuts</string>
+                </property>
+                <layout class="QGridLayout" name="gridLayout_2">
+                 <property name="topMargin">
+                  <number>4</number>
+                 </property>
+                 <property name="bottomMargin">
+                  <number>2</number>
+                 </property>
+                 <property name="verticalSpacing">
+                  <number>2</number>
+                 </property>
+                 <item row="0" column="0">
+                  <widget class="QPushButton" name="PP_CtrPlot_btn">
+                   <property name="toolTip">
+                    <string>Create a new window with a 2D contour plot of the transient data</string>
+                   </property>
+                   <property name="styleSheet">
+                    <string notr="true">font: bold;
+font-size: 12px;
+color: white;
+background-color: DarkBlue
+</string>
+                   </property>
+                   <property name="text">
+                    <string>Contour Plot</string>
+                   </property>
+                  </widget>
+                 </item>
+                 <item row="0" column="1">
+                  <widget class="QPushButton" name="PP_kineticsPlot_btn">
+                   <property name="toolTip">
+                    <string>Plot kinetics at selected probe wavelengths</string>
+                   </property>
+                   <property name="styleSheet">
+                    <string notr="true">font: bold;
+font-size: 12px;
+color: white;
+background-color: ForestGreen;
+</string>
+                   </property>
+                   <property name="text">
+                    <string>Plot Kinetics</string>
+                   </property>
+                  </widget>
+                 </item>
+                 <item row="1" column="0">
+                  <widget class="QPushButton" name="PP_SurfPlot_btn">
+                   <property name="toolTip">
+                    <string>Create a new window with a 3D surface plot of the dataset</string>
+                   </property>
+                   <property name="styleSheet">
+                    <string notr="true">font: bold;
+font-size: 12px;
+color: white;
+background-color: DarkRed
+</string>
+                   </property>
+                   <property name="text">
+                    <string>Surface Plot</string>
+                   </property>
+                  </widget>
+                 </item>
+                 <item row="1" column="1">
+                  <widget class="QPushButton" name="PP_trSpecPlot_btn">
+                   <property name="toolTip">
+                    <string>Plot transient spectra at selected delay times</string>
+                   </property>
+                   <property name="styleSheet">
+                    <string notr="true">font: bold;
+font-size: 12px;
+color: white;
+background-color: RoyalBlue
+</string>
+                   </property>
+                   <property name="text">
+                    <string>Plot Spectra</string>
+                   </property>
+                  </widget>
+                 </item>
+                 <item row="2" column="1">
+                  <widget class="QCheckBox" name="PP_Normalise_chk">
+                   <property name="styleSheet">
+                    <string notr="true">
+font: bold</string>
+                   </property>
+                   <property name="text">
+                    <string>Normalise</string>
+                   </property>
+                  </widget>
+                 </item>
+                 <item row="2" column="0">
+                  <widget class="QCheckBox" name="PP_IncludeSSSP_chk">
+                   <property name="styleSheet">
+                    <string notr="true" />
+                   </property>
+                   <property name="text">
+                    <string>Incl. SS-Sp</string>
+                   </property>
+                  </widget>
+                 </item>
+                </layout>
+               </widget>
+              </item>
+              <item>
+               <widget class="QPushButton" name="PP_plotCounts_btn">
+                 <property name="toolTip">
+                  <string>Plot total accumulation counts as a function of probe delay</string>
+                 </property>
+                 <property name="styleSheet">
+                  <string notr="true">font: bold;
+font-size: 12px;
+color: white;
+background-color: #0284c7;
+</string>
+                 </property>
+                 <property name="text">
+                  <string>Plot Counts</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QGroupBox" name="oneD_singleScan_box">
+                <property name="styleSheet">
+                 <string notr="true" />
+                </property>
+                <property name="title">
+                 <string>Explore Individual Scans</string>
+                </property>
+                <layout class="QGridLayout" name="_2">
+                 <property name="topMargin">
+                  <number>4</number>
+                 </property>
+                 <property name="bottomMargin">
+                  <number>4</number>
+                 </property>
+                 <property name="verticalSpacing">
+                  <number>4</number>
+                 </property>
+                 <item row="0" column="0">
+                  <widget class="QPushButton" name="PP_ScanKinetics_btn">
+                   <property name="sizePolicy">
+                    <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+                     <horstretch>2</horstretch>
+                     <verstretch>0</verstretch>
+                    </sizepolicy>
+                   </property>
+                   <property name="toolTip">
+                    <string>Plot kinetics for individual scans (or binned groups of scans)</string>
+                   </property>
+                   <property name="styleSheet">
+                    <string notr="true">font-size: 12px;
+color: black;
+background-color: PaleGreen;
+</string>
+                   </property>
+                   <property name="text">
+                    <string>Plot Kinetics</string>
+                   </property>
+                  </widget>
+                 </item>
+                 <item row="0" column="1">
+                  <widget class="QLabel" name="BinScans_lbl">
+                   <property name="sizePolicy">
+                    <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
+                     <horstretch>2</horstretch>
+                     <verstretch>0</verstretch>
+                    </sizepolicy>
+                   </property>
+                   <property name="styleSheet">
+                    <string notr="true" />
+                   </property>
+                   <property name="text">
+                    <string>Bin?</string>
+                   </property>
+                  </widget>
+                 </item>
+                 <item row="0" column="2">
+                  <widget class="QSpinBox" name="PP_BinScans">
+                   <property name="sizePolicy">
+                    <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+                     <horstretch>1</horstretch>
+                     <verstretch>0</verstretch>
+                    </sizepolicy>
+                   </property>
+                   <property name="styleSheet">
+                    <string notr="true" />
+                   </property>
+                   <property name="minimum">
+                    <number>1</number>
+                   </property>
+                  </widget>
+                 </item>
+                 <item row="1" column="0">
+                  <widget class="QPushButton" name="PP_ScanSpectra_btn">
+                   <property name="sizePolicy">
+                    <sizepolicy hsizetype="Minimum" vsizetype="Fixed">
+                     <horstretch>2</horstretch>
+                     <verstretch>0</verstretch>
+                    </sizepolicy>
+                   </property>
+                   <property name="toolTip">
+                    <string>Plot spectra for individual scans (or binned groups of scans)</string>
+                   </property>
+                   <property name="styleSheet">
+                    <string notr="true">font-size: 12px;
+color: black;
+background-color: PaleTurquoise
+</string>
+                   </property>
+                   <property name="text">
+                    <string>Plot Spectra</string>
+                   </property>
+                  </widget>
+                 </item>
+                 <item row="1" column="1" colspan="2">
+                  <widget class="QPushButton" name="PP_RecalcAvg_btn">
+                   <property name="sizePolicy">
+                    <sizepolicy hsizetype="Minimum" vsizetype="Fixed">
+                     <horstretch>3</horstretch>
+                     <verstretch>0</verstretch>
+                    </sizepolicy>
+                   </property>
+                   <property name="toolTip">
+                    <string>Recalculate noise-weighted average excluding specific scans</string>
+                   </property>
+                   <property name="styleSheet">
+                    <string notr="true">
+font: bold</string>
+                   </property>
+                   <property name="text">
+                    <string>Recalc. Average</string>
+                   </property>
+                  </widget>
+                 </item>
+                </layout>
+               </widget>
+              </item>
+             </layout>
+            </item>
+            <item>
+             <widget class="QGroupBox" name="PP_tracesOverlay_grp">
+              <property name="title">
+               <string>Traces &amp;&amp; Overlay</string>
+              </property>
+              <layout class="QVBoxLayout" name="verticalLayout_2">
+               <property name="spacing">
+                <number>2</number>
+               </property>
+               <property name="leftMargin">
+                <number>2</number>
+               </property>
+               <property name="topMargin">
+                <number>5</number>
+               </property>
+               <property name="rightMargin">
+                <number>2</number>
+               </property>
+               <property name="bottomMargin">
+                <number>5</number>
+               </property>
+               <item>
+                <widget class="QCheckBox" name="PP_Interactive_TickBox">
+                 <property name="styleSheet">
+                  <string notr="true">font: bold</string>
+                 </property>
+                 <property name="text">
+                  <string>Interactive</string>
+                 </property>
+                 <property name="checkable">
+                  <bool>true</bool>
+                 </property>
+                 <property name="checked">
+                  <bool>false</bool>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QCheckBox" name="PP_QuickPlots_chk">
+                 <property name="toolTip">
+                  <string>Use fast raster plots (imshow) instead of contour lines for faster redraws</string>
+                 </property>
+                 <property name="styleSheet">
+                  <string notr="true">font: bold</string>
+                 </property>
+                 <property name="text">
+                  <string>Quick plots</string>
+                 </property>
+                 <property name="checkable">
+                  <bool>true</bool>
+                 </property>
+                 <property name="checked">
+                  <bool>false</bool>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <spacer name="verticalSpacer_2">
+                 <property name="orientation">
+                  <enum>Qt::Orientation::Vertical</enum>
+                 </property>
+                 <property name="sizeHint" stdset="0">
+                  <size>
+                   <width>20</width>
+                   <height>40</height>
+                  </size>
+                 </property>
+                </spacer>
+               </item>
+               <item>
+                <widget class="QCheckBox" name="PP_SaveTraces_TickBox">
+                 <property name="text">
+                  <string>Save traces?</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QCheckBox" name="PP_OverlayPlots_TickBox">
+                 <property name="text">
+                  <string>Overlay Plt.</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <spacer name="verticalSpacer">
+                 <property name="orientation">
+                  <enum>Qt::Orientation::Vertical</enum>
+                 </property>
+                 <property name="sizeHint" stdset="0">
+                  <size>
+                   <width>20</width>
+                   <height>40</height>
+                  </size>
+                 </property>
+                </spacer>
+               </item>
+               <item>
+                <widget class="QPushButton" name="PP_LoadSSbutton">
+                 <property name="toolTip">
+                  <string>Load a steady-state absorption or emission spectrum file</string>
+                 </property>
+                 <property name="text">
+                  <string>Load SS data</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QPushButton" name="PP_ShowSSbutton">
+                 <property name="toolTip">
+                  <string>Open a new window plotting the loaded steady-state data</string>
+                 </property>
+                 <property name="text">
+                  <string>Show SS data</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QPushButton" name="PP_ClearSSbutton">
+                 <property name="toolTip">
+                  <string>Clear all loaded steady-state overlays</string>
+                 </property>
+                 <property name="text">
+                  <string>Clear SS data</string>
+                 </property>
+                </widget>
+               </item>
+              </layout>
+             </widget>
+            </item>
+           </layout>
+          </item>
+          <item>
+           <widget class="QTextEdit" name="PP_SampleInfo_text">
+            <property name="styleSheet">
+             <string notr="true" />
+            </property>
+            <property name="undoRedoEnabled">
+             <bool>false</bool>
+            </property>
+            <property name="readOnly">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </item>
+        <item>
+         <layout class="QVBoxLayout" name="ppRightColumn">
+          <property name="leftMargin">
+           <number>0</number>
+          </property>
+          <property name="topMargin">
+           <number>0</number>
+          </property>
+          <property name="rightMargin">
+           <number>0</number>
+          </property>
+          <property name="bottomMargin">
+           <number>0</number>
+          </property>
+          <item>
+           <widget class="WidgetPlot" name="PPaxes" native="true">
+            <property name="sizePolicy">
+             <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
+              <horstretch>0</horstretch>
+              <verstretch>0</verstretch>
+             </sizepolicy>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QGroupBox" name="PC_box">
+            <property name="title">
+             <string>Plot Controls</string>
+            </property>
+            <layout class="QGridLayout" name="plotControlsGrid">
+             <property name="leftMargin">
+              <number>8</number>
+             </property>
+             <property name="topMargin">
+              <number>6</number>
+             </property>
+             <property name="rightMargin">
+              <number>8</number>
+             </property>
+             <property name="bottomMargin">
+              <number>6</number>
+             </property>
+             <property name="horizontalSpacing">
+              <number>6</number>
+             </property>
+             <property name="verticalSpacing">
+              <number>5</number>
+             </property>
+             <item row="3" column="3">
+              <widget class="QLabel" name="PC_lblTimeLabels">
+               <property name="text">
+                <string>Time labels</string>
+               </property>
+               <property name="alignment">
+                <set>Qt::AlignmentFlag::AlignRight|Qt::AlignmentFlag::AlignTrailing|Qt::AlignmentFlag::AlignVCenter</set>
+               </property>
+              </widget>
+             </item>
+             <item row="4" column="0">
+              <widget class="QLabel" name="PC_lblTimeAxis">
+               <property name="text">
+                <string>Time axis</string>
+               </property>
+               <property name="alignment">
+                <set>Qt::AlignmentFlag::AlignRight|Qt::AlignmentFlag::AlignTrailing|Qt::AlignmentFlag::AlignVCenter</set>
+               </property>
+              </widget>
+             </item>
+             <item row="4" column="1">
+              <widget class="QComboBox" name="PC_timeScale">
+               <property name="minimumSize">
+                <size>
+                 <width>96</width>
+                 <height>0</height>
+                </size>
+               </property>
+               <property name="maximumSize">
+                <size>
+                 <width>96</width>
+                 <height>16777215</height>
+                </size>
+               </property>
+               <item>
+                <property name="text">
+                 <string>symlog</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string>log</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string>lin</string>
+                </property>
+               </item>
+              </widget>
+             </item>
+             <item row="1" column="4">
+              <widget class="QLabel" name="PC_lblCmap">
+               <property name="text">
+                <string>Colour scheme</string>
+               </property>
+               <property name="alignment">
+                <set>Qt::AlignmentFlag::AlignRight|Qt::AlignmentFlag::AlignTrailing|Qt::AlignmentFlag::AlignVCenter</set>
+               </property>
+              </widget>
+             </item>
+             <item row="3" column="5">
+              <widget class="QPushButton" name="PC_restore">
+               <property name="text">
+                <string>Restore Limits</string>
+               </property>
+              </widget>
+             </item>
+             <item row="1" column="3">
+              <widget class="QDoubleSpinBox" name="PC_yMax">
+               <property name="minimumSize">
+                <size>
+                 <width>88</width>
+                 <height>0</height>
+                </size>
+               </property>
+               <property name="maximumSize">
+                <size>
+                 <width>88</width>
+                 <height>16777215</height>
+                </size>
+               </property>
+               <property name="keyboardTracking">
+                <bool>false</bool>
+               </property>
+               <property name="decimals">
+                <number>3</number>
+               </property>
+               <property name="minimum">
+                <double>-1000000000.000000000000000</double>
+               </property>
+               <property name="maximum">
+                <double>1000000000.000000000000000</double>
+               </property>
+              </widget>
+             </item>
+             <item row="4" column="2">
+              <widget class="QLabel" name="PC_lblNContours">
+               <property name="text">
+                <string>Nº contours</string>
+               </property>
+               <property name="alignment">
+                <set>Qt::AlignmentFlag::AlignRight|Qt::AlignmentFlag::AlignTrailing|Qt::AlignmentFlag::AlignVCenter</set>
+               </property>
+              </widget>
+             </item>
+             <item row="0" column="2">
+              <widget class="QLabel" name="PC_lblMinTime">
+               <property name="text">
+                <string>Min time</string>
+               </property>
+               <property name="alignment">
+                <set>Qt::AlignmentFlag::AlignRight|Qt::AlignmentFlag::AlignTrailing|Qt::AlignmentFlag::AlignVCenter</set>
+               </property>
+              </widget>
+             </item>
+             <item row="4" column="4">
+              <widget class="QCheckBox" name="PC_showLines">
+               <property name="text">
+                <string>Show lines, every</string>
+               </property>
+               <property name="checked">
+                <bool>false</bool>
+               </property>
+              </widget>
+             </item>
+             <item row="1" column="5">
+              <widget class="QComboBox" name="PC_cmap">
+               <property name="minimumSize">
+                <size>
+                 <width>120</width>
+                 <height>0</height>
+                </size>
+               </property>
+               <property name="maximumSize">
+                <size>
+                 <width>120</width>
+                 <height>16777215</height>
+                </size>
+               </property>
+               <item>
+                <property name="text">
+                 <string>DkRd/Wh/DkBu</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string>Rd/Wh/Bu v2</string>
+                </property>
+               </item>
+              </widget>
+             </item>
+             <item row="4" column="6">
+              <widget class="QLabel" name="PC_lblLevels">
+               <property name="text">
+                <string>levels</string>
+               </property>
+              </widget>
+             </item>
+             <item row="2" column="0">
+              <widget class="QLabel" name="PC_lblDAbs">
+               <property name="text">
+                <string>ΔAbs range</string>
+               </property>
+               <property name="alignment">
+                <set>Qt::AlignmentFlag::AlignRight|Qt::AlignmentFlag::AlignTrailing|Qt::AlignmentFlag::AlignVCenter</set>
+               </property>
+              </widget>
+             </item>
+             <item row="5" column="2" colspan="3">
+              <widget class="QSlider" name="PC_zSlider">
+               <property name="minimum">
+                <number>1</number>
+               </property>
+               <property name="maximum">
+                <number>100</number>
+               </property>
+               <property name="value">
+                <number>100</number>
+               </property>
+               <property name="orientation">
+                <enum>Qt::Orientation::Horizontal</enum>
+               </property>
+              </widget>
+             </item>
+             <item row="1" column="1">
+              <widget class="QDoubleSpinBox" name="PC_xMax">
+               <property name="minimumSize">
+                <size>
+                 <width>88</width>
+                 <height>0</height>
+                </size>
+               </property>
+               <property name="maximumSize">
+                <size>
+                 <width>88</width>
+                 <height>16777215</height>
+                </size>
+               </property>
+               <property name="keyboardTracking">
+                <bool>false</bool>
+               </property>
+               <property name="decimals">
+                <number>3</number>
+               </property>
+               <property name="minimum">
+                <double>-1000000000.000000000000000</double>
+               </property>
+               <property name="maximum">
+                <double>1000000000.000000000000000</double>
+               </property>
+              </widget>
+             </item>
+             <item row="0" column="6">
+              <widget class="QCheckBox" name="PC_restrictZ">
+               <property name="toolTip">
+                <string>Auto Z-max from data inside the current X/Y limits, not the whole dataset.</string>
+               </property>
+               <property name="text">
+                <string>Z: current range</string>
+               </property>
+               <property name="checked">
+                <bool>false</bool>
+               </property>
+              </widget>
+             </item>
+             <item row="6" column="0">
+              <widget class="QLabel" name="PC_lblXUnit">
+               <property name="text">
+                <string>X axis unit</string>
+               </property>
+               <property name="alignment">
+                <set>Qt::AlignmentFlag::AlignRight|Qt::AlignmentFlag::AlignTrailing|Qt::AlignmentFlag::AlignVCenter</set>
+               </property>
+              </widget>
+             </item>
+             <item row="5" column="1">
+              <widget class="SciDoubleSpinBox" name="PC_zPct">
+               <property name="minimumSize">
+                <size>
+                 <width>64</width>
+                 <height>0</height>
+                </size>
+               </property>
+               <property name="maximumSize">
+                <size>
+                 <width>64</width>
+                 <height>16777215</height>
+                </size>
+               </property>
+               <property name="keyboardTracking">
+                <bool>false</bool>
+               </property>
+               <property name="minimum">
+                <double>0.000001000000000</double>
+               </property>
+               <property name="maximum">
+                <double>100.000000000000000</double>
+               </property>
+               <property name="value">
+                <double>100.000000000000000</double>
+               </property>
+              </widget>
+             </item>
+             <item row="0" column="0">
+              <widget class="QLabel" name="PC_xMinLabel">
+               <property name="text">
+                <string>Min probe</string>
+               </property>
+               <property name="alignment">
+                <set>Qt::AlignmentFlag::AlignRight|Qt::AlignmentFlag::AlignTrailing|Qt::AlignmentFlag::AlignVCenter</set>
+               </property>
+              </widget>
+             </item>
+             <item row="4" column="3">
+              <widget class="QSpinBox" name="PC_nContours">
+               <property name="minimumSize">
+                <size>
+                 <width>56</width>
+                 <height>0</height>
+                </size>
+               </property>
+               <property name="maximumSize">
+                <size>
+                 <width>56</width>
+                 <height>16777215</height>
+                </size>
+               </property>
+               <property name="keyboardTracking">
+                <bool>false</bool>
+               </property>
+               <property name="minimum">
+                <number>2</number>
+               </property>
+               <property name="maximum">
+                <number>400</number>
+               </property>
+               <property name="value">
+                <number>30</number>
+               </property>
+              </widget>
+             </item>
+             <item row="1" column="6">
+              <widget class="QCheckBox" name="PC_autoYcuts">
+               <property name="toolTip">
+                <string>Autoscale the signal (Y) axis of kinetic/spectral cuts instead of inheriting the contour Z limits.</string>
+               </property>
+               <property name="text">
+                <string>Auto-Y in cuts</string>
+               </property>
+               <property name="checked">
+                <bool>true</bool>
+               </property>
+              </widget>
+             </item>
+             <item row="1" column="0">
+              <widget class="QLabel" name="PC_xMaxLabel">
+               <property name="text">
+                <string>Max probe</string>
+               </property>
+               <property name="alignment">
+                <set>Qt::AlignmentFlag::AlignRight|Qt::AlignmentFlag::AlignTrailing|Qt::AlignmentFlag::AlignVCenter</set>
+               </property>
+              </widget>
+             </item>
+             <item row="0" column="7" rowspan="7">
+              <spacer name="PC_hspacer">
+               <property name="orientation">
+                <enum>Qt::Orientation::Horizontal</enum>
+               </property>
+               <property name="sizeHint" stdset="0">
+                <size>
+                 <width>10</width>
+                 <height>20</height>
+                </size>
+               </property>
+              </spacer>
+             </item>
+             <item row="2" column="2">
+              <widget class="QDoubleSpinBox" name="PC_zMax">
+               <property name="minimumSize">
+                <size>
+                 <width>88</width>
+                 <height>0</height>
+                </size>
+               </property>
+               <property name="maximumSize">
+                <size>
+                 <width>88</width>
+                 <height>16777215</height>
+                </size>
+               </property>
+               <property name="keyboardTracking">
+                <bool>false</bool>
+               </property>
+               <property name="decimals">
+                <number>3</number>
+               </property>
+               <property name="minimum">
+                <double>-1000000000.000000000000000</double>
+               </property>
+               <property name="maximum">
+                <double>1000000000.000000000000000</double>
+               </property>
+              </widget>
+             </item>
+             <item row="2" column="1">
+              <widget class="QDoubleSpinBox" name="PC_zMin">
+               <property name="minimumSize">
+                <size>
+                 <width>88</width>
+                 <height>0</height>
+                </size>
+               </property>
+               <property name="maximumSize">
+                <size>
+                 <width>88</width>
+                 <height>16777215</height>
+                </size>
+               </property>
+               <property name="keyboardTracking">
+                <bool>false</bool>
+               </property>
+               <property name="decimals">
+                <number>3</number>
+               </property>
+               <property name="minimum">
+                <double>-1000000000.000000000000000</double>
+               </property>
+               <property name="maximum">
+                <double>1000000000.000000000000000</double>
+               </property>
+              </widget>
+             </item>
+             <item row="2" column="6">
+              <widget class="QCheckBox" name="PC_arcsinh">
+               <property name="text">
+                <string>arcsinh</string>
+               </property>
+               <property name="checked">
+                <bool>false</bool>
+               </property>
+              </widget>
+             </item>
+             <item row="5" column="5">
+              <widget class="QLabel" name="PC_lblSmooth">
+               <property name="text">
+                <string>Smooth</string>
+               </property>
+               <property name="alignment">
+                <set>Qt::AlignmentFlag::AlignRight|Qt::AlignmentFlag::AlignTrailing|Qt::AlignmentFlag::AlignVCenter</set>
+               </property>
+              </widget>
+             </item>
+             <item row="1" column="2">
+              <widget class="QLabel" name="PC_lblMaxTime">
+               <property name="text">
+                <string>Max time</string>
+               </property>
+               <property name="alignment">
+                <set>Qt::AlignmentFlag::AlignRight|Qt::AlignmentFlag::AlignTrailing|Qt::AlignmentFlag::AlignVCenter</set>
+               </property>
+              </widget>
+             </item>
+             <item row="0" column="4">
+              <widget class="QLabel" name="PC_lblWhite">
+               <property name="text">
+                <string>White levels</string>
+               </property>
+               <property name="alignment">
+                <set>Qt::AlignmentFlag::AlignRight|Qt::AlignmentFlag::AlignTrailing|Qt::AlignmentFlag::AlignVCenter</set>
+               </property>
+              </widget>
+             </item>
+             <item row="6" column="2" colspan="3">
+              <widget class="QCheckBox" name="PC_secondaryAxis">
+               <property name="toolTip">
+                <string>Add a secondary X axis (top) in the complementary unit (cm-1&lt;-&gt;nm; nm for eV/THz).</string>
+               </property>
+               <property name="text">
+                <string>2nd axis (top)</string>
+               </property>
+               <property name="checked">
+                <bool>false</bool>
+               </property>
+              </widget>
+             </item>
+             <item row="3" column="4">
+              <widget class="QComboBox" name="PC_timeLabel">
+               <property name="minimumSize">
+                <size>
+                 <width>96</width>
+                 <height>0</height>
+                </size>
+               </property>
+               <property name="maximumSize">
+                <size>
+                 <width>96</width>
+                 <height>16777215</height>
+                </size>
+               </property>
+               <item>
+                <property name="text">
+                 <string>power</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string>decimal</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string>mixed</string>
+                </property>
+               </item>
+              </widget>
+             </item>
+             <item row="4" column="5">
+              <widget class="QSpinBox" name="PC_nSkip">
+               <property name="minimumSize">
+                <size>
+                 <width>56</width>
+                 <height>0</height>
+                </size>
+               </property>
+               <property name="maximumSize">
+                <size>
+                 <width>56</width>
+                 <height>16777215</height>
+                </size>
+               </property>
+               <property name="keyboardTracking">
+                <bool>false</bool>
+               </property>
+               <property name="minimum">
+                <number>1</number>
+               </property>
+               <property name="maximum">
+                <number>50</number>
+               </property>
+               <property name="value">
+                <number>2</number>
+               </property>
+              </widget>
+             </item>
+             <item row="0" column="1">
+              <widget class="QDoubleSpinBox" name="PC_xMin">
+               <property name="minimumSize">
+                <size>
+                 <width>88</width>
+                 <height>0</height>
+                </size>
+               </property>
+               <property name="maximumSize">
+                <size>
+                 <width>88</width>
+                 <height>16777215</height>
+                </size>
+               </property>
+               <property name="keyboardTracking">
+                <bool>false</bool>
+               </property>
+               <property name="decimals">
+                <number>3</number>
+               </property>
+               <property name="minimum">
+                <double>-1000000000.000000000000000</double>
+               </property>
+               <property name="maximum">
+                <double>1000000000.000000000000000</double>
+               </property>
+              </widget>
+             </item>
+             <item row="0" column="3">
+              <widget class="QDoubleSpinBox" name="PC_yMin">
+               <property name="minimumSize">
+                <size>
+                 <width>88</width>
+                 <height>0</height>
+                </size>
+               </property>
+               <property name="maximumSize">
+                <size>
+                 <width>88</width>
+                 <height>16777215</height>
+                </size>
+               </property>
+               <property name="keyboardTracking">
+                <bool>false</bool>
+               </property>
+               <property name="decimals">
+                <number>3</number>
+               </property>
+               <property name="minimum">
+                <double>-1000000000.000000000000000</double>
+               </property>
+               <property name="maximum">
+                <double>1000000000.000000000000000</double>
+               </property>
+              </widget>
+             </item>
+             <item row="3" column="0" colspan="3">
+              <widget class="QLabel" name="PC_zReadout">
+               <property name="styleSheet">
+                <string notr="true">color: #555;</string>
+               </property>
+               <property name="text">
+                <string>Max ΔAbs (mOD): —</string>
+               </property>
+              </widget>
+             </item>
+             <item row="6" column="1">
+              <widget class="QComboBox" name="PC_xUnit">
+               <property name="minimumSize">
+                <size>
+                 <width>96</width>
+                 <height>0</height>
+                </size>
+               </property>
+               <property name="maximumSize">
+                <size>
+                 <width>96</width>
+                 <height>16777215</height>
+                </size>
+               </property>
+               <property name="toolTip">
+                <string>Convert the spectral (probe) X axis between nm / cm-1 / eV / THz. "native" keeps the dataset's stored unit.</string>
+               </property>
+               <item>
+                <property name="text">
+                 <string>native</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string>nm</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string>cm-1</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string>eV</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string>THz</string>
+                </property>
+               </item>
+              </widget>
+             </item>
+             <item row="5" column="0">
+              <widget class="QLabel" name="PC_lblScalePct">
+               <property name="text">
+                <string>Scale %</string>
+               </property>
+               <property name="alignment">
+                <set>Qt::AlignmentFlag::AlignRight|Qt::AlignmentFlag::AlignTrailing|Qt::AlignmentFlag::AlignVCenter</set>
+               </property>
+              </widget>
+             </item>
+             <item row="5" column="6">
+              <widget class="QSpinBox" name="PC_smooth">
+               <property name="minimumSize">
+                <size>
+                 <width>56</width>
+                 <height>0</height>
+                </size>
+               </property>
+               <property name="maximumSize">
+                <size>
+                 <width>56</width>
+                 <height>16777215</height>
+                </size>
+               </property>
+               <property name="toolTip">
+                <string>Smoothing for transient-spectra / kinetic cuts (opened in a new figure):
+0 = no smoothing;
+&gt;0 = smoothed data only;
+&lt;0 = smoothed data plus the original semitransparent.
+The magnitude sets the smoothing window width.</string>
+               </property>
+               <property name="keyboardTracking">
+                <bool>false</bool>
+               </property>
+               <property name="minimum">
+                <number>-99</number>
+               </property>
+               <property name="maximum">
+                <number>99</number>
+               </property>
+               <property name="value">
+                <number>0</number>
+               </property>
+              </widget>
+             </item>
+             <item row="2" column="5">
+              <widget class="QCheckBox" name="PC_filled">
+               <property name="text">
+                <string>Filled contours</string>
+               </property>
+               <property name="checked">
+                <bool>true</bool>
+               </property>
+              </widget>
+             </item>
+             <item row="2" column="3" colspan="2">
+              <widget class="QCheckBox" name="PC_symmetric">
+               <property name="text">
+                <string>Symmetric colour scale</string>
+               </property>
+               <property name="checked">
+                <bool>true</bool>
+               </property>
+              </widget>
+             </item>
+             <item row="0" column="5">
+              <widget class="QSpinBox" name="PC_whiteLevels">
+               <property name="minimumSize">
+                <size>
+                 <width>56</width>
+                 <height>0</height>
+                </size>
+               </property>
+               <property name="maximumSize">
+                <size>
+                 <width>56</width>
+                 <height>16777215</height>
+                </size>
+               </property>
+               <property name="keyboardTracking">
+                <bool>false</bool>
+               </property>
+               <property name="minimum">
+                <number>0</number>
+               </property>
+               <property name="maximum">
+                <number>20</number>
+               </property>
+               <property name="value">
+                <number>2</number>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </widget>
+          </item>
+         </layout>
+        </item>
+       </layout>
+      </widget>
+      <widget class="QWidget" name="twoD_tab">
+       <attribute name="title">
+        <string>Time-Domain 2D Spectroscopy</string>
+       </attribute>
+       <layout class="QHBoxLayout" name="twoDTabLayout">
+        <property name="spacing">
+         <number>6</number>
+        </property>
+        <property name="leftMargin">
+         <number>6</number>
+        </property>
+        <property name="topMargin">
+         <number>6</number>
+        </property>
+        <property name="rightMargin">
+         <number>6</number>
+        </property>
+        <property name="bottomMargin">
+         <number>6</number>
+        </property>
+        <item>
+         <layout class="QVBoxLayout" name="twoDLeftColumn">
+          <property name="spacing">
+           <number>6</number>
+          </property>
+          <property name="leftMargin">
+           <number>0</number>
+          </property>
+          <property name="topMargin">
+           <number>0</number>
+          </property>
+          <property name="rightMargin">
+           <number>0</number>
+          </property>
+          <property name="bottomMargin">
+           <number>0</number>
+          </property>
+          <item stretch="3">
+           <widget class="QGroupBox" name="twoD_datagrp">
+            <property name="styleSheet">
+             <string notr="true">font: bold</string>
+            </property>
+            <property name="title">
+             <string>  Select Data Type and Dataset</string>
+            </property>
+            <layout class="QGridLayout" name="twoD_datagrp_layout">
+             <property name="leftMargin">
+              <number>2</number>
+             </property>
+             <property name="topMargin">
+              <number>2</number>
+             </property>
+             <property name="rightMargin">
+              <number>2</number>
+             </property>
+             <property name="bottomMargin">
+              <number>6</number>
+             </property>
+             <property name="verticalSpacing">
+              <number>4</number>
+             </property>
+             <item row="0" column="0">
+              <widget class="QComboBox" name="twoD_datatype_cbx">
+               <property name="sizePolicy">
+                <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+                 <horstretch>3</horstretch>
+                 <verstretch>1</verstretch>
+                </sizepolicy>
+               </property>
+               <property name="styleSheet">
+                <string notr="true">font: normal</string>
+               </property>
+               <item>
+                <property name="text">
+                 <string extracomment="P2DAT">Processed 2D Spectrum (.p2dat)</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string extracomment="MESS_2DIR">UniGE 2D-IR (MESS Raw)</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string extracomment="UoS_2DIR">U. of Sheffield 2D-IR</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string extracomment="RAL_RAW">RAL 2D-IR (Raw)</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string extracomment="RAL_Proc">RAL 2D-IR (Processed)</string>
+                </property>
+               </item>
+              </widget>
+             </item>
+             <item row="0" column="1">
+              <widget class="QPushButton" name="twoD_reloadData_btn">
+               <property name="sizePolicy">
+                <sizepolicy hsizetype="Preferred" vsizetype="Fixed">
+                 <horstretch>1</horstretch>
+                 <verstretch>1</verstretch>
+                </sizepolicy>
+               </property>
+               <property name="toolTip">
+                <string>Reload the current dataset from disk</string>
+               </property>
+               <property name="text">
+                <string>Reload</string>
+               </property>
+              </widget>
+             </item>
+             <item row="1" column="0" colspan="2">
+              <layout class="QHBoxLayout" name="twoD_selectors_layout">
+               <item>
+                <widget class="QListView" name="twoD_datafolderlist_lst">
+                 <property name="sizePolicy">
+                  <sizepolicy hsizetype="Preferred" vsizetype="Expanding">
+                   <horstretch>2</horstretch>
+                   <verstretch>10</verstretch>
+                  </sizepolicy>
+                 </property>
+                 <property name="styleSheet">
+                  <string notr="true">font: normal</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <layout class="QVBoxLayout" name="twoD_t2delay_layout">
+                 <property name="spacing">
+                  <number>2</number>
+                 </property>
+                 <item>
+                  <widget class="QLabel" name="twoD_t2delay_lbl">
+                   <property name="styleSheet">
+                    <string notr="true">font: bold</string>
+                   </property>
+                   <property name="text">
+                    <string>t2: delay (ps)</string>
+                   </property>
+                  </widget>
+                 </item>
+                 <item>
+                  <widget class="QListView" name="twoD_t2delay_lst">
+                   <property name="sizePolicy">
+                    <sizepolicy hsizetype="Preferred" vsizetype="Expanding">
+                     <horstretch>1</horstretch>
+                     <verstretch>10</verstretch>
+                    </sizepolicy>
+                   </property>
+                   <property name="styleSheet">
+                    <string notr="true">font: normal</string>
+                   </property>
+                  <property name="maximumSize"><size><width>80</width><height>16777215</height></size></property></widget>
+                 </item>
+                </layout>
+               </item>
+              </layout>
+             </item>
+            </layout>
+           <property name="maximumSize"><size><width>290</width><height>16777215</height></size></property></widget>
+          </item>
+          <item stretch="1">
+           <widget class="QTabWidget" name="twoD_subtabs">
+            <property name="sizePolicy">
+             <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
+              <horstretch>0</horstretch>
+              <verstretch>1</verstretch>
+             </sizepolicy>
+            </property>
+            <property name="maximumSize"><size><width>16777215</width><height>400</height></size></property>
+            <property name="currentIndex">
+             <number>0</number>
+            </property>
+            <widget class="QWidget" name="twoD_processplot_tab">
+             <attribute name="title">
+              <string>Process</string>
+             </attribute>
+             <layout class="QVBoxLayout" name="twoD_processplot_layout">
+              <property name="spacing">
+               <number>4</number>
+              </property>
+              <property name="leftMargin">
+               <number>4</number>
+              </property>
+              <property name="topMargin">
+               <number>4</number>
+              </property>
+              <property name="rightMargin">
+               <number>4</number>
+              </property>
+              <property name="bottomMargin">
+               <number>4</number>
+              </property>
+              <item>
+               <layout class="QGridLayout" name="twoD_preprocess_grid">
+                <property name="verticalSpacing">
+                 <number>4</number>
+                </property>
+                <item row="0" column="0">
+                 <widget class="QCheckBox" name="twoD_sub_scat_chk">
+                  <property name="text">
+                   <string>Subtract scattering, delay:</string>
+                  </property>
+                  <property name="checked">
+                   <bool>true</bool>
+                  </property>
+                 </widget>
+                </item>
+                <item row="0" column="1">
+                 <widget class="QSpinBox" name="twoD_sub_scat_delay">
+                  <property name="minimum">
+                   <number>1</number>
+                  </property>
+                  <property name="maximum">
+                   <number>1000</number>
+                  </property>
+                  <property name="value">
+                   <number>1</number>
+                  </property>
+                 </widget>
+                </item>
+                <item row="1" column="0" colspan="2">
+                 <widget class="QCheckBox" name="twoD_pump_corr_chk">
+                  <property name="text">
+                   <string>Pump correction</string>
+                  </property>
+                 </widget>
+                </item>
+                <item row="2" column="0" colspan="2">
+                 <widget class="QCheckBox" name="twoD_auto_cal_chk">
+                  <property name="text">
+                   <string>Auto cal. probe axis</string>
+                  </property>
+                 </widget>
+                </item>
+                <item row="4" column="0" colspan="2">
+                 <widget class="QPushButton" name="twoD_apply_changes_btn">
+                  <property name="text">
+                   <string>Apply and reprocess</string>
+                  </property>
+                 </widget>
+                </item>
+                <item row="3" column="0" colspan="2">
+                 <widget class="QPushButton" name="twoD_save_probe_cal_btn">
+                  <property name="styleSheet">
+                   <string notr="true">font: bold</string>
+                  </property>
+                  <property name="text">
+                   <string>Save cal.</string>
+                  </property>
+                 </widget>
+                </item>
+               </layout>
+              </item>
+              <item>
+               <widget class="QGroupBox" name="twoD_PlotsCuts_box">
+                <property name="title">
+                 <string>Plots and Cuts</string>
+                </property>
+                <layout class="QGridLayout" name="twoD_plots_cuts_grid">
+                 <property name="verticalSpacing">
+                  <number>4</number>
+                 </property>
+                 <item row="0" column="0">
+                  <widget class="QPushButton" name="twoD_contour_btn">
+                   <property name="styleSheet">
+                    <string notr="true">font: bold; font-size: 12px; color: white; background-color: DarkBlue</string>
+                   </property>
+                   <property name="text">
+                    <string>Contour plot</string>
+                   </property>
+                  </widget>
+                 </item>
+                 <item row="0" column="1">
+                  <widget class="QPushButton" name="twoD_kinetics_btn">
+                   <property name="styleSheet">
+                    <string notr="true">font: bold; font-size: 12px; color: white; background-color: ForestGreen;</string>
+                   </property>
+                   <property name="text">
+                    <string>Plot Kinetics</string>
+                   </property>
+                  </widget>
+                 </item>
+                 <item row="1" column="0">
+                  <widget class="QPushButton" name="twoD_surf_btn">
+                   <property name="styleSheet">
+                    <string notr="true">font: bold; font-size: 12px; color: white; background-color: DarkRed</string>
+                   </property>
+                   <property name="text">
+                    <string>3D surface plot</string>
+                   </property>
+                  </widget>
+                 </item>
+                 <item row="1" column="1">
+                  <widget class="QPushButton" name="twoD_slices_btn">
+                   <property name="styleSheet">
+                    <string notr="true">font: bold; font-size: 12px; color: white; background-color: RoyalBlue</string>
+                   </property>
+                   <property name="text">
+                    <string>Plot Slices</string>
+                   </property>
+                  </widget>
+                 </item>
+                 <item row="2" column="0">
+                  <widget class="QCheckBox" name="twoD_include_ftir_chk">
+                   <property name="text">
+                    <string>Include FTIR</string>
+                   </property>
+                  </widget>
+                 </item>
+                 <item row="2" column="1">
+                  <widget class="QCheckBox" name="twoD_normalise_chk">
+                   <property name="text">
+                    <string>Normalise</string>
+                   </property>
+                  </widget>
+                 </item>
+                </layout>
+               </widget>
+              </item>
+              <item>
+               <layout class="QHBoxLayout" name="twoD_interactive_layout">
+                <item>
+                 <widget class="QCheckBox" name="twoD_interactive_chk">
+                  <property name="styleSheet">
+                   <string notr="true">font: bold</string>
+                  </property>
+                  <property name="text">
+                   <string>Interactive mode</string>
+                  </property>
+                 </widget>
+                </item>
+                <item>
+                 <widget class="QCheckBox" name="twoD_save_traces_chk">
+                  <property name="styleSheet">
+                   <string notr="true">font: bold</string>
+                  </property>
+                  <property name="text">
+                   <string>Save traces</string>
+                  </property>
+                 </widget>
+                </item>
+               </layout>
+              </item>
+             </layout>
+            </widget>
+            <widget class="QWidget" name="twoD_phasingft_tab">
+             <attribute name="title">
+              <string>Phasing/FT</string>
+             </attribute>
+             <layout class="QVBoxLayout" name="twoD_phasingft_layout">
+              <property name="spacing">
+               <number>4</number>
+              </property>
+              <property name="leftMargin">
+               <number>4</number>
+              </property>
+              <property name="topMargin">
+               <number>4</number>
+              </property>
+              <property name="rightMargin">
+               <number>4</number>
+              </property>
+              <property name="bottomMargin">
+               <number>4</number>
+              </property>
+              <item>
+               <widget class="QLabel" name="twoD_phasing_header">
+                <property name="styleSheet">
+                 <string notr="true">color: #ff7043; font-weight: bold;</string>
+                </property>
+                <property name="text">
+                 <string>Phasing, zeropadding and apodisation</string>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <layout class="QGridLayout" name="twoD_phasing_grid">
+                <property name="verticalSpacing">
+                 <number>4</number>
+                </property>
+                <item row="0" column="0">
+                 <widget class="QLabel" name="twoD_phase_fit_lbl">
+                  <property name="text">
+                   <string>Phase fit</string>
+                  </property>
+                 </widget>
+                </item>
+                <item row="0" column="1">
+                 <widget class="QComboBox" name="twoD_phase_fit_cbx">
+                  <item>
+                   <property name="text">
+                    <string>Linear</string>
+                   </property>
+                  </item>
+                  <item>
+                   <property name="text">
+                    <string>Constant</string>
+                   </property>
+                  </item>
+                  <item>
+                   <property name="text">
+                    <string>Quadratic</string>
+                   </property>
+                  </item>
+                 </widget>
+                </item>
+                <item row="1" column="0">
+                 <widget class="QLabel" name="twoD_phase_fit_range_lbl">
+                  <property name="text">
+                   <string>+/-</string>
+                  </property>
+                 </widget>
+                </item>
+                <item row="1" column="1">
+                 <widget class="QSpinBox" name="twoD_phase_fit_range">
+                  <property name="suffix">
+                   <string> cm-1</string>
+                  </property>
+                  <property name="maximum">
+                   <number>10000</number>
+                  </property>
+                  <property name="value">
+                   <number>100</number>
+                  </property>
+                 </widget>
+                </item>
+                <item row="2" column="0">
+                 <widget class="QLabel" name="twoD_phase_coeffs_lbl">
+                  <property name="text">
+                   <string>Phase coeffs.</string>
+                  </property>
+                 </widget>
+                </item>
+                <item row="2" column="1">
+                 <widget class="QLineEdit" name="twoD_phase_coeffs">
+                  <property name="text">
+                   <string>—</string>
+                  </property>
+                  <property name="readOnly">
+                   <bool>true</bool>
+                  </property>
+                  <property name="enabled">
+                   <bool>false</bool>
+                  </property>
+                 </widget>
+                </item>
+                <item row="3" column="0">
+                 <widget class="QLabel" name="twoD_apodisation_lbl">
+                  <property name="text">
+                   <string>Apodisation</string>
+                  </property>
+                 </widget>
+                </item>
+                <item row="3" column="1">
+                 <widget class="QComboBox" name="twoD_apodisation_cbx">
+                  <item>
+                   <property name="text">
+                    <string>Cos</string>
+                   </property>
+                  </item>
+                  <item>
+                   <property name="text">
+                    <string>Box</string>
+                   </property>
+                  </item>
+                  <item>
+                   <property name="text">
+                    <string>Cos^2</string>
+                   </property>
+                  </item>
+                  <item>
+                   <property name="text">
+                    <string>Cos^3</string>
+                   </property>
+                  </item>
+                  <item>
+                   <property name="text">
+                    <string>Hanning</string>
+                   </property>
+                  </item>
+                  <item>
+                   <property name="text">
+                    <string>Hamming</string>
+                   </property>
+                  </item>
+                  <item>
+                   <property name="text">
+                    <string>None</string>
+                   </property>
+                  </item>
+                 </widget>
+                </item>
+                <item row="4" column="0">
+                 <widget class="QCheckBox" name="twoD_zeropad_chk">
+                  <property name="text">
+                   <string>Zeropad, factor</string>
+                  </property>
+                  <property name="checked">
+                   <bool>true</bool>
+                  </property>
+                 </widget>
+                </item>
+                <item row="4" column="1">
+                 <widget class="QSpinBox" name="twoD_zeropad_factor">
+                  <property name="minimum">
+                   <number>1</number>
+                  </property>
+                  <property name="value">
+                   <number>2</number>
+                  </property>
+                 </widget>
+                </item>
+                <item row="5" column="1">
+                 <widget class="QCheckBox" name="twoD_zeropad_next2k_chk">
+                  <property name="text">
+                   <string>to next 2^k</string>
+                  </property>
+                  <property name="checked">
+                   <bool>true</bool>
+                  </property>
+                 </widget>
+                </item>
+               </layout>
+              </item>
+              <item>
+               <spacer name="twoD_phasingft_verticalSpacer">
+                <property name="orientation">
+                 <enum>Qt::Orientation::Vertical</enum>
+                </property>
+                <property name="sizeHint" stdset="0">
+                 <size>
+                  <width>20</width>
+                  <height>40</height>
+                 </size>
+                </property>
+               </spacer>
+              </item>
+              <item>
+               <widget class="QPushButton" name="twoD_apply_reprocess_btn">
+                <property name="text">
+                 <string>Apply and reprocess</string>
+                </property>
+               </widget>
+              </item>
+             </layout>
+            </widget>
+            <widget class="QWidget" name="twoD_otherplots_tab">
+             <attribute name="title">
+              <string>Other Plots</string>
+             </attribute>
+             <layout class="QVBoxLayout" name="twoD_otherplots_layout">
+              <item>
+               <widget class="QLabel" name="twoD_otherplots_lbl">
+                <property name="text">
+                 <string>Other 2D plot subroutines</string>
+                </property>
+               </widget>
+              </item>
+             </layout>
+            </widget>
+            <widget class="QWidget" name="twoD_resultstr2d_tab">
+              <attribute name="title">
+               <string>Results &amp;&amp; Transient 2D</string>
+              </attribute>
+              <layout class="QVBoxLayout" name="twoD_resultstr2d_layout">
+               <item>
+                <widget class="QGroupBox" name="twoD_sd_grp">
+                 <property name="title">
+                  <string>Spectral Diffusion Overlays</string>
+                 </property>
+                 <layout class="QVBoxLayout" name="twoD_sd_layout">
+                  <item>
+                   <widget class="QCheckBox" name="twoD_show_cls_chk">
+                    <property name="text">
+                     <string>Show CLS (Center-Line Slope)</string>
+                    </property>
+                   </widget>
+                  </item>
+                  <item>
+                   <widget class="QCheckBox" name="twoD_show_ivcls_chk">
+                    <property name="text">
+                     <string>Show IvCLS (Inverse CLS)</string>
+                    </property>
+                   </widget>
+                  </item>
+                  <item>
+                   <widget class="QCheckBox" name="twoD_show_nls_chk">
+                    <property name="text">
+                     <string>Show NLS (Nodal Line Slope)</string>
+                    </property>
+                   </widget>
+                  </item>
+                 </layout>
+                </widget>
+               </item>
+               <item>
+                <widget class="QPushButton" name="twoD_plot_sd_kinetics_btn">
+                 <property name="text">
+                  <string>Plot SD Kinetics</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <spacer name="twoD_sd_spacer">
+                 <property name="orientation">
+                  <enum>Qt::Vertical</enum>
+                 </property>
+                 <property name="sizeHint" stdset="0">
+                  <size>
+                   <width>20</width>
+                   <height>40</height>
+                  </size>
+                 </property>
+                </spacer>
+               </item>
+              </layout>
+             </widget>
+           <property name="maximumSize"><size><width>290</width><height>16777215</height></size></property></widget>
+          </item>
+          <item>
+           <widget class="QGroupBox" name="twoD_analysis_grp">
+            <property name="styleSheet">
+             <string notr="true">font: bold; color: #4a148c;</string>
+            </property>
+            <property name="title">
+             <string>  Analysis subroutines</string>
+            </property>
+            <layout class="QGridLayout" name="twoD_analysis_layout">
+             <property name="leftMargin">
+              <number>2</number>
+             </property>
+             <property name="topMargin">
+              <number>2</number>
+             </property>
+             <property name="rightMargin">
+              <number>2</number>
+             </property>
+             <property name="bottomMargin">
+              <number>4</number>
+             </property>
+             <property name="verticalSpacing">
+              <number>4</number>
+             </property>
+             <item row="0" column="0">
+              <widget class="QPushButton" name="twoD_integral_dynamics_btn">
+               <property name="styleSheet">
+                <string notr="true">QPushButton { font-weight: bold; color: #196f3d; background-color: #d5f5e3; border: 1px solid #abebc6; border-radius: 4px; padding: 4px; } QPushButton:hover { background-color: #abebc6; border-color: #58d68d; } QPushButton:pressed { background-color: #58d68d; }</string>
+               </property>
+               <property name="text">
+                <string>Integral dynamics</string>
+               </property>
+              </widget>
+             </item>
+             <item row="0" column="1">
+              <widget class="QPushButton" name="twoD_gaussian_fit_btn">
+               <property name="styleSheet">
+                <string notr="true">QPushButton { font-weight: bold; color: #1b4f72; background-color: #d6eaf8; border: 1px solid #aed6f1; border-radius: 4px; padding: 4px; } QPushButton:hover { background-color: #aed6f1; border-color: #5dade2; } QPushButton:pressed { background-color: #5dade2; }</string>
+               </property>
+               <property name="text">
+                <string>2D Gaussian fit</string>
+               </property>
+              </widget>
+             </item>
+             <item row="1" column="0">
+              <widget class="QPushButton" name="twoD_timedomain_fit_btn">
+               <property name="styleSheet">
+                <string notr="true">QPushButton { font-weight: bold; color: #5b2c6f; background-color: #ebdef0; border: 1px solid #d7bde2; border-radius: 4px; padding: 4px; } QPushButton:hover { background-color: #d7bde2; border-color: #af7ac5; } QPushButton:pressed { background-color: #af7ac5; }</string>
+               </property>
+               <property name="text">
+                <string>Time-domain fit</string>
+               </property>
+              </widget>
+             </item>
+             <item row="1" column="1">
+              <widget class="QPushButton" name="twoD_subtract_spectra_btn">
+               <property name="styleSheet">
+                <string notr="true">QPushButton { font-weight: bold; color: #78281f; background-color: #fadbd8; border: 1px solid #f5b7b1; border-radius: 4px; padding: 4px; } QPushButton:hover { background-color: #f5b7b1; border-color: #ec7063; } QPushButton:pressed { background-color: #ec7063; }</string>
+               </property>
+               <property name="text">
+                <string>Subtract spectra</string>
+               </property>
+              </widget>
+             </item>
+             <item row="2" column="0">
+              <widget class="QPushButton" name="twoD_spectral_diffusion_btn">
+               <property name="styleSheet">
+                <string notr="true">QPushButton { font-weight: bold; color: #7e5109; background-color: #fdebd0; border: 1px solid #f9e79f; border-radius: 4px; padding: 4px; } QPushButton:hover { background-color: #f9e79f; border-color: #f4d03f; } QPushButton:pressed { background-color: #f4d03f; }</string>
+               </property>
+               <property name="text">
+                <string>Spectral diffusion</string>
+               </property>
+              </widget>
+             </item>
+             <item row="2" column="1">
+              <widget class="QPushButton" name="twoD_make_gif_btn">
+               <property name="styleSheet">
+                <string notr="true">QPushButton { font-weight: bold; color: #2c3e50; background-color: #e5e8e8; border: 1px solid #d5dbdb; border-radius: 4px; padding: 4px; } QPushButton:hover { background-color: #d5dbdb; border-color: #bdc3c7; } QPushButton:pressed { background-color: #bdc3c7; }</string>
+               </property>
+               <property name="text">
+                <string>Make GIF movie</string>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           <property name="maximumSize"><size><width>290</width><height>16777215</height></size></property></widget>
+          </item>
+          <item>
+           <widget class="QTextEdit" name="twoD_SampleInfo_text">
+            <property name="styleSheet">
+             <string notr="true" />
+            </property>
+            <property name="undoRedoEnabled">
+             <bool>false</bool>
+            </property>
+            <property name="readOnly">
+             <bool>true</bool>
+            </property>
+            <property name="html">
+             <string>&lt;!DOCTYPE HTML PUBLIC &quot;-//W3C//DTD HTML 4.0//EN&quot; &quot;http://www.w3.org/TR/REC-html40/strict.dtd&quot;&gt;
+&lt;html&gt;&lt;head&gt;&lt;meta name=&quot;qrichtext&quot; content=&quot;1&quot; /&gt;&lt;/head&gt;&lt;body&gt;
+&lt;p&gt;No additional sample info available.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+            </property>
+           <property name="maximumSize"><size><width>290</width><height>16777215</height></size></property></widget>
+          </item>
+         </layout>
+        </item>
+        <item>
+         <layout class="QVBoxLayout" name="twoDRightColumn">
+          <property name="spacing">
+           <number>6</number>
+          </property>
+          <property name="leftMargin">
+           <number>0</number>
+          </property>
+          <property name="topMargin">
+           <number>0</number>
+          </property>
+          <property name="rightMargin">
+           <number>0</number>
+          </property>
+          <property name="bottomMargin">
+           <number>0</number>
+          </property>
+          <item>
+           <widget class="WidgetPlot" name="twoDaxes" native="true">
+            <property name="sizePolicy">
+             <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
+              <horstretch>0</horstretch>
+              <verstretch>0</verstretch>
+             </sizepolicy>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QGroupBox" name="twoD_PC_box">
+            <property name="title">
+             <string>Plot Controls</string>
+            </property>
+            <layout class="QGridLayout" name="twoD_PC_grid">
+             <property name="leftMargin">
+              <number>8</number>
+             </property>
+             <property name="topMargin">
+              <number>6</number>
+             </property>
+             <property name="rightMargin">
+              <number>8</number>
+             </property>
+             <property name="bottomMargin">
+              <number>6</number>
+             </property>
+             <property name="horizontalSpacing">
+              <number>6</number>
+             </property>
+             <property name="verticalSpacing">
+              <number>5</number>
+             </property>
+             <item row="0" column="2">
+              <widget class="QLabel" name="twoD_PC_lblPumpWl">
+               <property name="alignment">
+                <set>Qt::AlignmentFlag::AlignCenter</set>
+               </property>
+              <property name="text"><string>Min probe</string></property></widget>
+             </item>
+             <item row="1" column="2">
+              <widget class="QLabel" name="twoD_PC_lblProbeWl">
+               <property name="alignment">
+                <set>Qt::AlignmentFlag::AlignCenter</set>
+               </property>
+              <property name="text"><string>Max probe</string></property></widget>
+             </item>
+             <item row="0" column="4">
+              <widget class="QLabel" name="twoD_PC_lblCmap">
+               <property name="text">
+                <string>Colour scheme</string>
+               </property>
+               <property name="alignment">
+                <set>Qt::AlignmentFlag::AlignRight|Qt::AlignmentFlag::AlignTrailing|Qt::AlignmentFlag::AlignVCenter</set>
+               </property>
+              </widget>
+             </item>
+             <item row="0" column="5">
+              <widget class="QComboBox" name="twoD_PC_cmap">
+               <item>
+                <property name="text">
+                 <string>DkRd/Wh/DkB</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string>Rd/Wh/Bu v2</string>
+                </property>
+               </item>
+              <property name="maximumSize"><size><width>120</width><height>16777215</height></size></property></widget>
+             </item>
+             <item row="0" column="0">
+              <widget class="QLabel" name="twoD_PC_lblMin">
+               <property name="text"><string>Min pump</string></property></widget>
+             </item>
+             <item row="0" column="1">
+              <widget class="SciDoubleSpinBox" name="twoD_PC_pumpMin">
+               <property name="suffix">
+                <string> cm-1</string>
+               </property>
+               <property name="minimumSize">
+                <size>
+                 <width>88</width>
+                 <height>0</height>
+                </size>
+               </property>
+               <property name="maximumSize">
+                <size>
+                 <width>88</width>
+                 <height>16777215</height>
+                </size>
+               </property>
+               <property name="keyboardTracking">
+                <bool>false</bool>
+               </property>
+               <property name="decimals">
+                <number>3</number>
+               </property>
+               <property name="minimum">
+                <double>-1000000000.000000000000000</double>
+               </property>
+               <property name="maximum">
+                <double>1000000000.000000000000000</double>
+               </property>
+              </widget>
+             </item>
+             <item row="0" column="3">
+              <widget class="SciDoubleSpinBox" name="twoD_PC_probeMin">
+               <property name="suffix">
+                <string> cm-1</string>
+               </property>
+               <property name="minimumSize">
+                <size>
+                 <width>88</width>
+                 <height>0</height>
+                </size>
+               </property>
+               <property name="maximumSize">
+                <size>
+                 <width>88</width>
+                 <height>16777215</height>
+                </size>
+               </property>
+               <property name="keyboardTracking">
+                <bool>false</bool>
+               </property>
+               <property name="decimals">
+                <number>3</number>
+               </property>
+               <property name="minimum">
+                <double>-1000000000.000000000000000</double>
+               </property>
+               <property name="maximum">
+                <double>1000000000.000000000000000</double>
+               </property>
+              </widget>
+             </item>
+             <item row="1" column="4">
+              <widget class="QLabel" name="twoD_PC_lblNContours">
+               <property name="text">
+                <string>N° of contours</string>
+               </property>
+               <property name="alignment">
+                <set>Qt::AlignmentFlag::AlignRight|Qt::AlignmentFlag::AlignTrailing|Qt::AlignmentFlag::AlignVCenter</set>
+               </property>
+              </widget>
+             </item>
+             <item row="1" column="5">
+              <widget class="QSpinBox" name="twoD_PC_nContours">
+               <property name="minimum">
+                <number>1</number>
+               </property>
+               <property name="maximum">
+                <number>200</number>
+               </property>
+               <property name="value">
+                <number>40</number>
+               </property>
+              <property name="maximumSize"><size><width>50</width><height>16777215</height></size></property></widget>
+             </item>
+             <item row="0" column="6">
+              <widget class="QCheckBox" name="twoD_PC_cutPlot">
+               <property name="text">
+                <string>Cut plot</string>
+               </property>
+               <property name="checked">
+                <bool>true</bool>
+               </property>
+              </widget>
+             </item>
+             <item row="1" column="6">
+              <widget class="QCheckBox" name="twoD_PC_symmetric">
+               <property name="text">
+                <string>Symmetric colour scale</string>
+               </property>
+               <property name="checked">
+                <bool>true</bool>
+               </property>
+              </widget>
+             </item>
+             <item row="1" column="0">
+              <widget class="QLabel" name="twoD_PC_lblMax">
+               <property name="text"><string>Max pump</string></property></widget>
+             </item>
+             <item row="1" column="1">
+              <widget class="SciDoubleSpinBox" name="twoD_PC_pumpMax">
+               <property name="suffix">
+                <string> cm-1</string>
+               </property>
+               <property name="minimumSize">
+                <size>
+                 <width>88</width>
+                 <height>0</height>
+                </size>
+               </property>
+               <property name="maximumSize">
+                <size>
+                 <width>88</width>
+                 <height>16777215</height>
+                </size>
+               </property>
+               <property name="keyboardTracking">
+                <bool>false</bool>
+               </property>
+               <property name="decimals">
+                <number>3</number>
+               </property>
+               <property name="minimum">
+                <double>-1000000000.000000000000000</double>
+               </property>
+               <property name="maximum">
+                <double>1000000000.000000000000000</double>
+               </property>
+              </widget>
+             </item>
+             <item row="1" column="3">
+              <widget class="SciDoubleSpinBox" name="twoD_PC_probeMax">
+               <property name="suffix">
+                <string> cm-1</string>
+               </property>
+               <property name="minimumSize">
+                <size>
+                 <width>88</width>
+                 <height>0</height>
+                </size>
+               </property>
+               <property name="maximumSize">
+                <size>
+                 <width>88</width>
+                 <height>16777215</height>
+                </size>
+               </property>
+               <property name="keyboardTracking">
+                <bool>false</bool>
+               </property>
+               <property name="decimals">
+                <number>3</number>
+               </property>
+               <property name="minimum">
+                <double>-1000000000.000000000000000</double>
+               </property>
+               <property name="maximum">
+                <double>1000000000.000000000000000</double>
+               </property>
+              </widget>
+             </item>
+             <item row="2" column="4">
+              <widget class="QLabel" name="twoD_PC_lblWhiteLevels">
+               <property name="text">
+                <string>N° of white lvls.</string>
+               </property>
+               <property name="alignment">
+                <set>Qt::AlignmentFlag::AlignRight|Qt::AlignmentFlag::AlignTrailing|Qt::AlignmentFlag::AlignVCenter</set>
+               </property>
+              </widget>
+             </item>
+             <item row="2" column="5">
+              <widget class="QSpinBox" name="twoD_PC_whiteLevels">
+               <property name="minimum">
+                <number>0</number>
+               </property>
+               <property name="maximum">
+                <number>20</number>
+               </property>
+               <property name="value">
+                <number>2</number>
+               </property>
+              <property name="maximumSize"><size><width>50</width><height>16777215</height></size></property></widget>
+             </item>
+             <item row="3" column="6">
+              <widget class="QCheckBox" name="twoD_PC_textWhiteBg">
+               <property name="text">
+                <string>Text white background</string>
+               </property>
+              </widget>
+             </item>
+             <item row="2" column="6">
+              <widget class="QCheckBox" name="twoD_PC_filled">
+               <property name="text">
+                <string>Filled contours</string>
+               </property>
+               <property name="checked">
+                <bool>true</bool>
+               </property>
+              </widget>
+             </item>
+             <item row="3" column="0">
+              <widget class="QPushButton" name="twoD_PC_restore">
+               <property name="styleSheet">
+                <string notr="true">background-color: #ffa000; font-weight: bold; color: black;</string>
+               </property>
+               <property name="text">
+                <string>Restore</string>
+               </property>
+              </widget>
+             </item>
+             <item row="3" column="1">
+              <widget class="QPushButton" name="twoD_PC_sync">
+               <property name="styleSheet">
+                <string notr="true">background-color: #e0e0e0; font-weight: bold; color: black;</string>
+               </property>
+               <property name="text">
+                <string>Sync Limits</string>
+               </property>
+              </widget>
+             </item>
+             <item row="4" column="0" colspan="3">
+              <widget class="QCheckBox" name="twoD_PC_showLines">
+               <property name="text">
+                <string>Show contour lines, every</string>
+               </property>
+              </widget>
+             </item>
+             <item row="4" column="3">
+              <widget class="QSpinBox" name="twoD_PC_contourLinesEvery">
+               <property name="minimum">
+                <number>1</number>
+               </property>
+               <property name="value">
+                <number>2</number>
+               </property>
+              <property name="maximumSize"><size><width>50</width><height>16777215</height></size></property></widget>
+             </item>
+             <item row="4" column="4">
+              <widget class="QLabel" name="twoD_PC_lblLevelsFormat">
+               <property name="text">
+                <string>levels. Format:</string>
+               </property>
+              </widget>
+             </item>
+             <item row="4" column="5" colspan="2">
+              <widget class="QLineEdit" name="twoD_PC_contourLinesFormat">
+               <property name="text">
+                <string>-</string>
+               </property>
+              <property name="maximumSize"><size><width>80</width><height>16777215</height></size></property></widget>
+             </item>
+             <item row="5" column="0">
+              <widget class="QLabel" name="twoD_PC_lblScalePct">
+               <property name="text">
+                <string>Scale %</string>
+               </property>
+              </widget>
+             </item>
+             <item row="5" column="2" colspan="5">
+              <widget class="QSlider" name="twoD_PC_zSlider">
+               <property name="maximum">
+                <number>100</number>
+               </property>
+               <property name="value">
+                <number>99</number>
+               </property>
+               <property name="orientation">
+                <enum>Qt::Orientation::Horizontal</enum>
+               </property>
+              </widget>
+             </item>
+             <item row="5" column="1">
+              <widget class="SciDoubleSpinBox" name="twoD_PC_zPct">
+               <property name="minimumSize">
+                <size>
+                 <width>64</width>
+                 <height>0</height>
+                </size>
+               </property>
+               <property name="maximumSize">
+                <size>
+                 <width>64</width>
+                 <height>16777215</height>
+                </size>
+               </property>
+               <property name="keyboardTracking">
+                <bool>false</bool>
+               </property>
+               <property name="minimum">
+                <double>0.000001000000000</double>
+               </property>
+               <property name="maximum">
+                <double>100.000000000000000</double>
+               </property>
+               <property name="value">
+                <double>100.000000000000000</double>
+               </property>
+              </widget>
+             </item>
+             <item row="2" column="0">
+              <widget class="QLabel" name="twoD_PC_lblDaRange">
+               <property name="text">
+                <string>ΔA range</string>
+               </property>
+               <property name="alignment">
+                <set>Qt::AlignmentFlag::AlignRight|Qt::AlignmentFlag::AlignTrailing|Qt::AlignmentFlag::AlignVCenter</set>
+               </property>
+              </widget>
+             </item>
+             <item row="2" column="1">
+              <widget class="QLineEdit" name="twoD_PC_daRange">
+               <property name="readOnly">
+                <bool>true</bool>
+               </property>
+              <property name="maximumSize"><size><width>80</width><height>16777215</height></size></property></widget>
+             </item>
+             <item row="2" column="2">
+              <widget class="QLabel" name="twoD_PC_lblMaxDa">
+               <property name="text">
+                <string>Max ΔA (a.u.)</string>
+               </property>
+               <property name="alignment">
+                <set>Qt::AlignmentFlag::AlignRight|Qt::AlignmentFlag::AlignTrailing|Qt::AlignmentFlag::AlignVCenter</set>
+               </property>
+              </widget>
+             </item>
+             <item row="2" column="3">
+              <widget class="QLineEdit" name="twoD_PC_maxDa">
+               <property name="readOnly">
+                <bool>true</bool>
+               </property>
+              <property name="maximumSize"><size><width>80</width><height>16777215</height></size></property></widget>
+             </item>
+             <item row="3" column="3">
+              <widget class="QCheckBox" name="twoD_PC_square">
+               <property name="text">
+                <string>Square Plot Box</string>
+               </property>
+               <property name="checked">
+                <bool>true</bool>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </widget>
+          </item>
+         </layout>
+        </item>
+       </layout>
+      </widget>
+             <widget class="QWidget" name="Cal_tab">
+        <attribute name="title">
+         <string>Spectrometer and Shaper Calibration</string>
+        </attribute>
+        <layout class="QHBoxLayout" name="cal_main_layout">
+         <item>
+          <widget class="QScrollArea" name="cal_scroll_area">
+           <property name="maximumSize">
+            <size>
+             <width>320</width>
+             <height>16777215</height>
+            </size>
+           </property>
+           <property name="widgetResizable">
+            <bool>true</bool>
+           </property>
+           <widget class="QWidget" name="cal_scroll_widget">
+            <layout class="QVBoxLayout" name="cal_controls_layout">
+             <item>
+              <widget class="QGroupBox" name="cal_spec_group">
+               <property name="title">
+                <string>Spectrometer Calibration</string>
+               </property>
+               <layout class="QVBoxLayout" name="cal_spec_layout">
+                <item>
+                 <layout class="QHBoxLayout" name="cal_spec_load_probe_layout">
+                  <item>
+                   <widget class="QPushButton" name="cal_spec_btn_load_probe">
+                    <property name="text">
+                     <string>Load Probe Spectrum</string>
+                    </property>
+                   </widget>
+                  </item>
+                  <item>
+                   <widget class="LEDIndicator" name="cal_spec_led_probe" native="true"/>
+                  </item>
+                 </layout>
+                </item>
+                <item>
+                 <layout class="QHBoxLayout" name="cal_spec_load_solvent_layout">
+                  <item>
+                   <widget class="QPushButton" name="cal_spec_btn_load_solvent">
+                    <property name="text">
+                     <string>Load Svt./Filt. Spectrum</string>
+                    </property>
+                   </widget>
+                  </item>
+                  <item>
+                   <widget class="LEDIndicator" name="cal_spec_led_solvent" native="true"/>
+                  </item>
+                 </layout>
+                </item>
+                <item>
+                 <layout class="QHBoxLayout" name="cal_spec_load_cal_layout">
+                  <item>
+                   <widget class="QPushButton" name="cal_spec_btn_load_cal">
+                    <property name="text">
+                     <string>Load Calibration Spectrum</string>
+                    </property>
+                   </widget>
+                  </item>
+                  <item>
+                   <widget class="LEDIndicator" name="cal_spec_led_cal" native="true"/>
+                  </item>
+                 </layout>
+                </item>
+                <item>
+                 <widget class="QPushButton" name="cal_spec_btn_do_fit">
+                  <property name="styleSheet">
+                   <string notr="true">font-weight: bold; background-color: #707070; color: white;</string>
+                  </property>
+                  <property name="text">
+                   <string>Do Automatic Calibration</string>
+                  </property>
+                 </widget>
+                </item>
+                <item>
+                 <widget class="QPushButton" name="cal_spec_btn_save">
+                  <property name="styleSheet">
+                   <string notr="true">background-color: #d0e8f8;</string>
+                  </property>
+                  <property name="text">
+                   <string>Save</string>
+                  </property>
+                 </widget>
+                </item>
+                <item>
+                 <widget class="QPushButton" name="cal_spec_btn_reset">
+                  <property name="styleSheet">
+                   <string notr="true">background-color: #fce4d6;</string>
+                  </property>
+                  <property name="text">
+                   <string>Reset</string>
+                  </property>
+                 </widget>
+                </item>
+               </layout>
+              </widget>
+             </item>
+             <item>
+              <layout class="QVBoxLayout" name="cal_type_layout">
+               <item>
+                <widget class="QLabel" name="cal_type_label">
+                 <property name="text">
+                  <string>Calibration Type</string>
+                 </property>
+                 <property name="alignment">
+                  <set>Qt::AlignCenter</set>
+                 </property>
+                 <property name="styleSheet">
+                  <string notr="true">font-weight: bold;</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QComboBox" name="cal_type_combo">
+                 <item><property name="text"><string>UoS TRIR</string></property></item>
+                 <item><property name="text"><string>UniGE fsTA</string></property></item>
+                 <item><property name="text"><string>UniGE nsTA</string></property></item>
+                 <item><property name="text"><string>UZH Lab 2</string></property></item>
+                 <item><property name="text"><string>UniGE NIR-TA</string></property></item>
+                 <item><property name="text"><string>RAL LIFEtime (Absorbance)</string></property></item>
+                 <item><property name="text"><string>RAL LIFEtime (Intensity)</string></property></item>
+                 <item><property name="text"><string>UniGE TRIR (Intensity)</string></property></item>
+                 <item><property name="text"><string>UniGE TRIR (Absorbance)</string></property></item>
+                 <item><property name="text"><string>UniGE TRUVIS-II (Intensity)</string></property></item>
+                </widget>
+               </item>
+               <item>
+                <layout class="QHBoxLayout" name="cal_merge_split_layout">
+                 <item>
+                  <widget class="QPushButton" name="cal_btn_merge">
+                   <property name="styleSheet">
+                    <string notr="true">font-weight: bold; background-color: black; color: white;</string>
+                   </property>
+                   <property name="text">
+                    <string>Merge Calib.</string>
+                   </property>
+                  </widget>
+                 </item>
+                 <item>
+                  <widget class="QPushButton" name="cal_btn_split">
+                   <property name="text">
+                    <string>Split Calib.</string>
+                   </property>
+                  </widget>
+                 </item>
+                </layout>
+               </item>
+              </layout>
+             </item>
+             <item>
+              <widget class="QGroupBox" name="cal_shaper_group">
+               <property name="title">
+                <string>Pulse Shaper Calibration</string>
+               </property>
+               <property name="styleSheet">
+                <string notr="true">QGroupBox::title { color: brown; font-weight: bold; }</string>
+               </property>
+               <layout class="QVBoxLayout" name="cal_shaper_layout">
+                <item>
+                 <layout class="QHBoxLayout" name="cal_shaper_load_pump_layout">
+                  <item>
+                   <widget class="QPushButton" name="cal_shaper_btn_load_pump">
+                    <property name="text">
+                     <string>Load Pump Spectrum</string>
+                    </property>
+                   </widget>
+                  </item>
+                  <item>
+                   <widget class="LEDIndicator" name="cal_shaper_led_pump" native="true"/>
+                  </item>
+                 </layout>
+                </item>
+                <item>
+                 <layout class="QHBoxLayout" name="cal_shaper_load_solvent_layout">
+                  <item>
+                   <widget class="QPushButton" name="cal_shaper_btn_load_solvent">
+                    <property name="text">
+                     <string>Load Svt./Filt. Spectrum</string>
+                    </property>
+                   </widget>
+                  </item>
+                  <item>
+                   <widget class="LEDIndicator" name="cal_shaper_led_solvent" native="true"/>
+                  </item>
+                 </layout>
+                </item>
+                <item>
+                 <layout class="QHBoxLayout" name="cal_shaper_load_cal_layout">
+                  <item>
+                   <widget class="QPushButton" name="cal_shaper_btn_load_cal">
+                    <property name="text">
+                     <string>Load Calibration Spectrum</string>
+                    </property>
+                   </widget>
+                  </item>
+                  <item>
+                   <widget class="LEDIndicator" name="cal_shaper_led_cal" native="true"/>
+                  </item>
+                 </layout>
+                </item>
+                <item>
+                 <layout class="QHBoxLayout" name="cal_shaper_load_mask_layout">
+                  <item>
+                   <widget class="QPushButton" name="cal_shaper_btn_load_mask">
+                    <property name="text">
+                     <string>Load Mask Scans</string>
+                    </property>
+                   </widget>
+                  </item>
+                  <item>
+                   <widget class="LEDIndicator" name="cal_shaper_led_mask" native="true"/>
+                  </item>
+                 </layout>
+                </item>
+                <item>
+                 <widget class="QPushButton" name="cal_shaper_btn_do_fit">
+                  <property name="styleSheet">
+                   <string notr="true">font-weight: bold; background-color: #707070; color: white;</string>
+                  </property>
+                  <property name="text">
+                   <string>Do Automatic Calibration</string>
+                  </property>
+                 </widget>
+                </item>
+                <item>
+                 <widget class="QPushButton" name="cal_shaper_btn_save">
+                  <property name="styleSheet">
+                   <string notr="true">background-color: #d0e8f8;</string>
+                  </property>
+                  <property name="text">
+                   <string>Save</string>
+                  </property>
+                 </widget>
+                </item>
+                <item>
+                 <widget class="QPushButton" name="cal_shaper_btn_reset">
+                  <property name="styleSheet">
+                   <string notr="true">background-color: #fce4d6;</string>
+                  </property>
+                  <property name="text">
+                   <string>Reset</string>
+                  </property>
+                 </widget>
+                </item>
+               </layout>
+              </widget>
+             </item>
+             <item>
+              <widget class="QGroupBox" name="cal_fit_group">
+               <property name="styleSheet">
+                <string notr="true">QGroupBox { color: magenta; font-weight: bold; }</string>
+               </property>
+               <property name="title">
+                <string>Fit control</string>
+               </property>
+               <layout class="QVBoxLayout" name="cal_fit_layout">
+                <item>
+                 <widget class="QCheckBox" name="cal_chk_do_fit">
+                  <property name="text">
+                   <string>Do Fit</string>
+                  </property>
+                  <property name="checked">
+                   <bool>true</bool>
+                  </property>
+                 </widget>
+                </item>
+                <item>
+                 <widget class="QCheckBox" name="cal_chk_do_baseline">
+                  <property name="text">
+                   <string>Do baseline correction</string>
+                  </property>
+                  <property name="checked">
+                   <bool>true</bool>
+                  </property>
+                 </widget>
+                </item>
+               </layout>
+              </widget>
+             </item>
+             <item>
+              <spacer name="cal_vspacer">
+               <property name="orientation">
+                <enum>Qt::Vertical</enum>
+               </property>
+               <property name="sizeHint">
+                <size>
+                 <width>20</width>
+                 <height>40</height>
+                </size>
+               </property>
+              </spacer>
+             </item>
+            </layout>
+           </widget>
+          </widget>
+         </item>
+         <item>
+          <widget class="QWidget" name="cal_right_panel" native="true">
+           <layout class="QVBoxLayout" name="cal_right_layout">
+            <item>
+             <layout class="QHBoxLayout" name="cal_toolbar_layout">
+              <item>
+               <spacer name="cal_toolbar_spacer">
+                <property name="orientation">
+                 <enum>Qt::Horizontal</enum>
+                </property>
+                <property name="sizeHint">
+                 <size>
+                  <width>40</width>
+                  <height>20</height>
+                 </size>
+                </property>
+               </spacer>
+              </item>
+              <item>
+               <widget class="QLabel" name="cal_lbl_unit_mode">
+                <property name="text">
+                 <string>Fit Axis Unit:</string>
+                </property>
+                <property name="styleSheet">
+                 <string notr="true">font-weight: bold;</string>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QComboBox" name="cal_combo_unit_mode">
+                <item><property name="text"><string>Wavelength (nm)</string></property></item>
+                 <item><property name="text"><string>Wavenumber (cm⁻¹)</string></property></item>
+               </widget>
+              </item>
+             </layout>
+            </item>
+            <item>
+             <widget class="QTabWidget" name="cal_detector_tabWidget">
+              <widget class="QWidget" name="cal_det1_tab">
+               <attribute name="title">
+                <string>Detector 1</string>
+               </attribute>
+               <layout class="QVBoxLayout" name="cal_det1_layout">
+                <item>
+                 <layout class="QHBoxLayout" name="cal_det1_pop_layout">
+                  <item>
+                   <widget class="QPushButton" name="cal_det1_btn_pop_raw">
+                    <property name="text"><string>🔍 Raw Intensities</string></property>
+                    <property name="styleSheet"><string notr="true">font-size: 10px; font-weight: bold; padding: 2px 6px;</string></property>
+                   </widget>
+                  </item>
+                  <item>
+                   <widget class="QPushButton" name="cal_det1_btn_pop_abs">
+                    <property name="text"><string>🔍 Absorbance</string></property>
+                    <property name="styleSheet"><string notr="true">font-size: 10px; font-weight: bold; padding: 2px 6px;</string></property>
+                   </widget>
+                  </item>
+                  <item>
+                   <widget class="QPushButton" name="cal_det1_btn_pop_ref">
+                    <property name="text"><string>🔍 Reference Fit</string></property>
+                    <property name="styleSheet"><string notr="true">font-size: 10px; font-weight: bold; padding: 2px 6px;</string></property>
+                   </widget>
+                  </item>
+                  <item>
+                   <widget class="QPushButton" name="cal_det1_btn_pop_fit">
+                    <property name="text"><string>🔍 Calibration Fit</string></property>
+                    <property name="styleSheet"><string notr="true">font-size: 10px; font-weight: bold; padding: 2px 6px;</string></property>
+                   </widget>
+                  </item>
+                 </layout>
+                </item>
+               </layout>
+              </widget>
+              <widget class="QWidget" name="cal_det2_tab">
+               <attribute name="title">
+                <string>Detector 2</string>
+               </attribute>
+               <layout class="QVBoxLayout" name="cal_det2_layout">
+                <item>
+                 <layout class="QHBoxLayout" name="cal_det2_pop_layout">
+                  <item>
+                   <widget class="QPushButton" name="cal_det2_btn_pop_raw">
+                    <property name="text"><string>🔍 Raw Intensities</string></property>
+                    <property name="styleSheet"><string notr="true">font-size: 10px; font-weight: bold; padding: 2px 6px;</string></property>
+                   </widget>
+                  </item>
+                  <item>
+                   <widget class="QPushButton" name="cal_det2_btn_pop_abs">
+                    <property name="text"><string>🔍 Absorbance</string></property>
+                    <property name="styleSheet"><string notr="true">font-size: 10px; font-weight: bold; padding: 2px 6px;</string></property>
+                   </widget>
+                  </item>
+                  <item>
+                   <widget class="QPushButton" name="cal_det2_btn_pop_ref">
+                    <property name="text"><string>🔍 Reference Fit</string></property>
+                    <property name="styleSheet"><string notr="true">font-size: 10px; font-weight: bold; padding: 2px 6px;</string></property>
+                   </widget>
+                  </item>
+                  <item>
+                   <widget class="QPushButton" name="cal_det2_btn_pop_fit">
+                    <property name="text"><string>🔍 Calibration Fit</string></property>
+                    <property name="styleSheet"><string notr="true">font-size: 10px; font-weight: bold; padding: 2px 6px;</string></property>
+                   </widget>
+                  </item>
+                 </layout>
+                </item>
+               </layout>
+              </widget>
+              <widget class="QWidget" name="cal_pump_tab">
+               <attribute name="title">
+                <string>Pump Spectrum (Shaper)</string>
+               </attribute>
+               <layout class="QVBoxLayout" name="cal_pump_layout">
+                <item>
+                 <layout class="QHBoxLayout" name="cal_pump_pop_layout">
+                  <item>
+                   <widget class="QPushButton" name="cal_pump_btn_pop_raw">
+                    <property name="text"><string>🔍 Raw Intensities</string></property>
+                    <property name="styleSheet"><string notr="true">font-size: 10px; font-weight: bold; padding: 2px 6px;</string></property>
+                   </widget>
+                  </item>
+                  <item>
+                   <widget class="QPushButton" name="cal_pump_btn_pop_abs">
+                    <property name="text"><string>🔍 Absorbance</string></property>
+                    <property name="styleSheet"><string notr="true">font-size: 10px; font-weight: bold; padding: 2px 6px;</string></property>
+                   </widget>
+                  </item>
+                  <item>
+                   <widget class="QPushButton" name="cal_pump_btn_pop_ref">
+                    <property name="text"><string>🔍 Reference Fit</string></property>
+                    <property name="styleSheet"><string notr="true">font-size: 10px; font-weight: bold; padding: 2px 6px;</string></property>
+                   </widget>
+                  </item>
+                  <item>
+                   <widget class="QPushButton" name="cal_pump_btn_pop_fit">
+                    <property name="text"><string>🔍 Calibration Fit</string></property>
+                    <property name="styleSheet"><string notr="true">font-size: 10px; font-weight: bold; padding: 2px 6px;</string></property>
+                   </widget>
+                  </item>
+                 </layout>
+                </item>
+               </layout>
+              </widget>
+               <widget class="QWidget" name="cal_settings_tab">
+                <attribute name="title">
+                 <string>Fit Settings</string>
+                </attribute>
+                <layout class="QVBoxLayout" name="cal_settings_main_layout">
+                 <property name="leftMargin"><number>8</number></property>
+                 <property name="topMargin"><number>8</number></property>
+                 <property name="rightMargin"><number>8</number></property>
+                 <property name="bottomMargin"><number>8</number></property>
+                 <property name="spacing"><number>8</number></property>
+                 <item>
+                  <widget class="QGroupBox" name="cal_set_geom_group">
+                   <property name="title">
+                    <string>Spectrometer Setup &amp;&amp; Wavelength Bounds</string>
+                   </property>
+                   <layout class="QGridLayout" name="cal_set_geom_layout">
+                    <item row="0" column="0">
+                     <widget class="QLabel" name="cal_set_lbl_cwl">
+                      <property name="text"><string>Central Wavelength/Wavenumber:</string></property>
+                      <property name="styleSheet"><string notr="true">font-weight: bold;</string></property>
+                     </widget>
+                    </item>
+                    <item row="0" column="1">
+                     <widget class="QDoubleSpinBox" name="cal_set_cwl">
+                      <property name="decimals"><number>2</number></property>
+                      <property name="minimum"><double>0.0</double></property>
+                      <property name="maximum"><double>100000.0</double></property>
+                      <property name="value"><double>2000.0</double></property>
+                     </widget>
+                    </item>
+                    <item row="1" column="0">
+                     <widget class="QLabel" name="cal_set_lbl_ppnm">
+                      <property name="text"><string>Initial Dispersion Guess (px/unit):</string></property>
+                      <property name="styleSheet"><string notr="true">font-weight: bold;</string></property>
+                     </widget>
+                    </item>
+                    <item row="1" column="1">
+                     <widget class="QDoubleSpinBox" name="cal_set_ppnm">
+                      <property name="decimals"><number>4</number></property>
+                      <property name="minimum"><double>0.0001</double></property>
+                      <property name="maximum"><double>100.0</double></property>
+                      <property name="singleStep"><double>0.05</double></property>
+                      <property name="value"><double>0.30</double></property>
+                     </widget>
+                    </item>
+                    <item row="2" column="0">
+                     <widget class="QLabel" name="cal_set_lbl_rel_min_nm">
+                      <property name="text"><string>Lower Wavelength Bound (rel. nm):</string></property>
+                      <property name="styleSheet"><string notr="true">font-weight: bold;</string></property>
+                     </widget>
+                    </item>
+                    <item row="2" column="1">
+                     <widget class="QDoubleSpinBox" name="cal_set_rel_min_nm">
+                      <property name="decimals"><number>1</number></property>
+                      <property name="minimum"><double>-5000.0</double></property>
+                      <property name="maximum"><double>0.0</double></property>
+                      <property name="singleStep"><double>10.0</double></property>
+                      <property name="value"><double>-1000.0</double></property>
+                     </widget>
+                    </item>
+                    <item row="3" column="0">
+                     <widget class="QLabel" name="cal_set_lbl_rel_max_nm">
+                      <property name="text"><string>Upper Wavelength Bound (rel. nm):</string></property>
+                      <property name="styleSheet"><string notr="true">font-weight: bold;</string></property>
+                     </widget>
+                    </item>
+                    <item row="3" column="1">
+                     <widget class="QDoubleSpinBox" name="cal_set_rel_max_nm">
+                      <property name="decimals"><number>1</number></property>
+                      <property name="minimum"><double>0.0</double></property>
+                      <property name="maximum"><double>5000.0</double></property>
+                      <property name="singleStep"><double>10.0</double></property>
+                      <property name="value"><double>1666.0</double></property>
+                     </widget>
+                    </item>
+                   </layout>
+                  </widget>
+                 </item>
+                 <item>
+                  <widget class="QGroupBox" name="cal_set_model_group">
+                   <property name="title">
+                    <string>Dispersion Model &amp;&amp; Fitting Options</string>
+                   </property>
+                   <layout class="QGridLayout" name="cal_set_model_layout">
+                    <item row="0" column="0">
+                     <widget class="QLabel" name="cal_set_lbl_model">
+                      <property name="text"><string>Grating Dispersion Model:</string></property>
+                      <property name="styleSheet"><string notr="true">font-weight: bold;</string></property>
+                     </widget>
+                    </item>
+                    <item row="0" column="1">
+                     <widget class="QComboBox" name="cal_set_grating_model">
+                      <item><property name="text"><string>1st Order (Linear)</string></property></item>
+                      <item><property name="text"><string>2nd Order (Quadratic)</string></property></item>
+                      <item><property name="text"><string>3rd Order (Cubic)</string></property></item>
+                     </widget>
+                    </item>
+                    <item row="1" column="0">
+                     <widget class="QLabel" name="cal_set_lbl_deriv">
+                      <property name="text"><string>Derivative Fitting Mode:</string></property>
+                      <property name="styleSheet"><string notr="true">font-weight: bold;</string></property>
+                     </widget>
+                    </item>
+                    <item row="1" column="1">
+                     <widget class="QComboBox" name="cal_set_deriv_mode">
+                      <item><property name="text"><string>Standard Absorbance</string></property></item>
+                      <item><property name="text"><string>1st Derivative (dY/dx)</string></property></item>
+                      <item><property name="text"><string>2nd Derivative (d²Y/dx²)</string></property></item>
+                     </widget>
+                    </item>
+                    <item row="2" column="0">
+                     <widget class="QLabel" name="cal_set_lbl_savgol">
+                      <property name="text"><string>Savitzky-Golay Window:</string></property>
+                      <property name="styleSheet"><string notr="true">font-weight: bold;</string></property>
+                     </widget>
+                    </item>
+                    <item row="2" column="1">
+                     <widget class="QSpinBox" name="cal_set_savgol_win">
+                      <property name="minimum"><number>5</number></property>
+                      <property name="maximum"><number>51</number></property>
+                      <property name="singleStep"><number>2</number></property>
+                      <property name="value"><number>9</number></property>
+                     </widget>
+                    </item>
+                    <item row="3" column="0" colspan="2">
+                     <widget class="QCheckBox" name="cal_set_cross_corr">
+                      <property name="text"><string>Enable Peak Pre-alignment (Cross-Correlation)</string></property>
+                     </widget>
+                    </item>
+                    <item row="4" column="0" colspan="2">
+                     <widget class="QCheckBox" name="cal_set_subtract_ref_baseline">
+                      <property name="text"><string>Apply Baseline Correction to Reference Spectrum</string></property>
+                      <property name="checked"><bool>false</bool></property>
+                     </widget>
+                    </item>
+                    <item row="5" column="0" colspan="2">
+                     <widget class="QCheckBox" name="cal_set_convolve_ref">
+                      <property name="text"><string>Convolve Reference Spectrum (Gaussian FWHM kernel)</string></property>
+                     </widget>
+                    </item>
+                   </layout>
+                  </widget>
+                 </item>
+                 <item>
+                  <spacer name="cal_settings_vspacer">
+                   <property name="orientation"><enum>Qt::Vertical</enum></property>
+                   <property name="sizeHint">
+                    <size><width>20</width><height>40</height></size>
+                   </property>
+                  </spacer>
+                 </item>
+                </layout>
+               </widget>
+             </widget>
+            </item>
+           </layout>
+          </widget>
+         </item>
+        </layout>
+       </widget>
+     </widget>
+    </item>
+   </layout>
+  </widget>
+  <widget class="QMenuBar" name="menubar">
+   <property name="geometry">
+    <rect>
+     <x>0</x>
+     <y>0</y>
+     <width>1491</width>
+     <height>33</height>
+    </rect>
+   </property>
+   <widget class="QMenu" name="menuFile">
+    <property name="title">
+     <string>&amp;File</string>
+    </property>
+    <widget class="QMenu" name="menuExport">
+     <property name="title">
+      <string>&amp;Export</string>
+     </property>
+     <addaction name="actionExportFigure" />
+     <addaction name="actionExportData" />
+     <addaction name="actionExportPDAT" />
+     <addaction name="actionExportP2DAT" />
+    </widget>
+    <addaction name="actionOpen" />
+    <addaction name="actionReload" />
+    <addaction name="separator" />
+    <addaction name="actionSetRoot" />
+    <addaction name="actionToday" />
+    <addaction name="separator" />
+    <addaction name="menuExport" />
+    <addaction name="separator" />
+    <addaction name="actionQuit" />
+   </widget>
+   <widget class="QMenu" name="menuView">
+    <property name="title">
+     <string>&amp;View</string>
+    </property>
+    <addaction name="actionSettings" />
+    <addaction name="separator" />
+    <addaction name="actionRestoreWindowSize" />
+   </widget>
+   <widget class="QMenu" name="menuSpectra">
+    <property name="title">
+     <string>&amp;Spectra</string>
+    </property>
+    <addaction name="actionLoadSpectrum" />
+    <addaction name="actionSubtractShockwave" />
+    <addaction name="separator" />
+    <addaction name="actionLoadAbsorption" />
+    <addaction name="actionLoadEmission" />
+    <addaction name="actionClearSteadyState" />
+   </widget>
+   <widget class="QMenu" name="menuHelp">
+    <property name="title">
+     <string>&amp;Help</string>
+    </property>
+    <addaction name="actionManual" />
+    <addaction name="separator" />
+    <addaction name="actionAbout" />
+   </widget>
+   <addaction name="menuFile" />
+   <addaction name="menuView" />
+   <addaction name="menuSpectra" />
+   <addaction name="menuHelp" />
+  </widget>
+  <widget class="QStatusBar" name="statusbar">
+   <property name="acceptDrops">
+    <bool>false</bool>
+   </property>
+   <property name="autoFillBackground">
+    <bool>false</bool>
+   </property>
+  </widget>
+  <action name="actionOpen">
+   <property name="text">
+    <string>&amp;Open Data File…</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+O</string>
+   </property>
+  </action>
+  <action name="actionReload">
+   <property name="text">
+    <string>&amp;Reload Dataset</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+R</string>
+   </property>
+  </action>
+  <action name="actionSetRoot">
+   <property name="text">
+    <string>Set &amp;Root Folder…</string>
+   </property>
+  </action>
+  <action name="actionToday">
+   <property name="text">
+    <string>Go to &amp;Today's Folder</string>
+   </property>
+  </action>
+  <action name="actionSettings">
+   <property name="text">
+    <string>&amp;Aesthetics / Settings…</string>
+   </property>
+  </action>
+  <action name="actionRestoreWindowSize">
+   <property name="text">
+    <string>Restore &amp;Default Window Size</string>
+   </property>
+   <property name="toolTip">
+    <string>Reset the main window to its default size and centre it on the current screen</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+Shift+R</string>
+   </property>
+  </action>
+  <action name="actionQuit">
+   <property name="text">
+    <string>&amp;Quit</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+Q</string>
+   </property>
+  </action>
+  <action name="actionLoadSpectrum">
+   <property name="text">
+    <string>&amp;Load &amp;&amp; Plot Spectrum…</string>
+   </property>
+  </action>
+  <action name="actionSubtractShockwave">
+  <property name="text">
+   <string>Subtract &amp;shock wave...</string>
+  </property>
+  <property name="toolTip">
+   <string>Subtract an average kinetic trace calculated over selected pixels from all dataset pixels</string>
+  </property>
+ </action>
+  <action name="actionLoadAbsorption">
+   <property name="text">
+    <string>Load steady-state &amp;absorption…</string>
+   </property>
+   <property name="toolTip">
+    <string>Load a steady-state absorption spectrum, overlaid as a shaded area on transient spectra.</string>
+   </property>
+  </action>
+  <action name="actionLoadEmission">
+   <property name="text">
+    <string>Load steady-state &amp;emission…</string>
+   </property>
+   <property name="toolTip">
+    <string>Load a steady-state emission spectrum, overlaid as a shaded area on transient spectra.</string>
+   </property>
+  </action>
+  <action name="actionClearSteadyState">
+   <property name="text">
+    <string>Clear steady-state overlays</string>
+   </property>
+   <property name="toolTip">
+    <string>Remove the loaded absorption / emission overlays.</string>
+   </property>
+  </action>
+  <action name="actionExportFigure">
+   <property name="text">
+    <string>Save Current &amp;Figure…</string>
+   </property>
+  </action>
+  <action name="actionExportData">
+   <property name="text">
+    <string>Export Processed &amp;Data (CSV)…</string>
+   </property>
+  </action>
+  <action name="actionExportPDAT">
+   <property name="text">
+    <string>Export 1D Dataset as &amp;PDAT…</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+1</string>
+   </property>
+  </action>
+  <action name="actionExportP2DAT">
+   <property name="text">
+    <string>Export 2D Dataset as &amp;P2DAT…</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+2</string>
+   </property>
+  </action>
+  <action name="actionManual">
+   <property name="text">
+    <string>Open &amp;Manual (PDF)</string>
+   </property>
+   <property name="shortcut">
+    <string>F1</string>
+   </property>
+  </action>
+  <action name="actionAbout">
+   <property name="text">
+    <string>&amp;About PyMORGAN</string>
+   </property>
+  </action>
+ </widget>
+ <customwidgets>
+  <customwidget>
+   <class>WidgetPlot</class>
+   <extends>QWidget</extends>
+   <header>pymorgan.gui.widgetplot</header>
+   <container>1</container>
+  </customwidget>
+  <customwidget>
+   <class>SciDoubleSpinBox</class>
+   <extends>QDoubleSpinBox</extends>
+   <header>pymorgan.gui.widgets</header>
+  </customwidget>
+  <customwidget>
+   <class>LEDIndicator</class>
+   <extends>QWidget</extends>
+   <header>pymorgan.gui.widgets</header>
+  </customwidget>
+ </customwidgets>
+ <resources/>
+ <connections/>
+</ui>

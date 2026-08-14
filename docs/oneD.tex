@@ -1,0 +1,420 @@
+\section{One-dimensional data}\label{sec:oneD}
+
+\subsection{Pipeline overview}
+The one-dimensional branch is organised as a \emph{load $\to$ process $\to$
+plot $\to$ analyse} pipeline. Each stage is a module under
+\code{pymorgan.oneD}, and the \code{Dataset1D} object ties them together:
+it holds the raw arrays and exposes one set of methods per stage. The stage
+functions take the dataset as their first argument, so they remain reusable on
+their own and new routines integrate with the whole pipeline. Table~\ref{tab:stages}
+maps each stage to its module and entry points.
+
+\begin{table}[h]
+  \centering
+  \begin{tabular}{lll}
+    \toprule
+    Stage & Module & Entry point(s) \\
+    \midrule
+    load    & \code{pymorgan.oneD.load}    & \code{pm.load\_1D}, \code{Dataset1D.from\_file} \\
+    process & \code{pymorgan.oneD.process} / \code{chirp} & \code{Dataset1D.background\_correct}, \code{apply\_chirp\_correction} \\
+    plot    & \code{pymorgan.oneD.plot}    & \code{Dataset1D.plot\_*} \\
+    analyse & \textit{(PyRATE-TA)} & \textit{separate project} \\
+    \bottomrule
+  \end{tabular}
+  \caption{The 1-D pipeline stages and where they live.}
+  \label{tab:stages}
+\end{table}
+
+\subsection{Data model}
+A one-dimensional measurement is represented by a \code{Dataset1D} object,
+which bundles the arrays produced by a loader. The signal is stored as a
+three-dimensional array to generalise over multiple detectors,
+\begin{equation}
+  Z \in \mathbb{R}^{N_\tau \times N_\lambda \times N_d},
+\end{equation}
+indexed by delay $\tau$, probe coordinate $\lambda$ (wavelength, wavenumber or
+energy) and detector $d$. The accompanying axes are the delay vector
+$\tau \in \mathbb{R}^{N_\tau}$ and the probe vector
+$\lambda \in \mathbb{R}^{N_\lambda}$. Table~\ref{tab:fields} lists the seven
+fields every loader returns.
+
+\begin{table}[h]
+  \centering
+  \begin{tabular}{lll}
+    \toprule
+    Field & Symbol / shape & Meaning \\
+    \midrule
+    \code{Zavg\_R} & $N_\tau \times N_\lambda \times N_d$ & averaged signal \\
+    \code{delays}  & $N_\tau$ & delay axis \\
+    \code{probe}   & $N_\lambda$ & probe (spectral) axis \\
+    \code{Units}   & dict & unit labels (see \S\ref{sec:settings}) \\
+    \code{Nscans}  & scalar & number of scans (\code{nan} if unknown) \\
+    \code{Zss\_R}  & $N_\tau \times N_\lambda \times N_d \times N_s$ & single-scan signal \\
+    \code{Zstdv}   & $N_\tau \times N_\lambda$ & standard deviation \\
+    \bottomrule
+  \end{tabular}
+  \caption{Fields returned by a 1-D loader and stored on \code{Dataset1D}.}
+  \label{tab:fields}
+\end{table}
+
+The most-processed signal is exposed through the \code{Z} property, which
+returns the background-corrected array once a correction has been applied and
+falls back to the raw array otherwise.
+
+\subsection{Loading and the loader registry}
+Data formats are decoupled from the dataset through a \emph{loader registry}
+(\code{pymorgan.oneD.load}). A loader is any callable that maps a file path to
+the seven fields of Table~\ref{tab:fields}. Loaders are registered under one or
+more data-type names and resolved at load time:
+
+\begin{lstlisting}
+import pymorgan as pm
+
+data = pm.load_1D("scan.pdat", data_type="PDAT")
+print(pm.available_loaders())
+\end{lstlisting}
+
+The currently registered names are \code{PDAT} (implemented) together with the
+instrument-specific formats \code{UniGE\_fsTA}, \code{UniGE\_nsTA},
+\code{MESS\_TRIR}, \code{MESS\_TRUVIS}, \code{UniGE\_FLUPSold},
+\code{UniGE\_FLUPSnew}, \code{Helios\_TA} and \code{UoS\_IRpp}, which are
+recognised but raise \code{NotImplementedError} until their on-disk formats are
+defined. A new format is added by decorating a reader:
+
+\begin{lstlisting}
+@pm.register_loader("MyInstrument")
+def read_my_instrument(path):
+    ...
+    return Zavg_R, delays, probe, Units, Nscans, Zss_R, Zstdv
+\end{lstlisting}
+
+\paragraph{The PDAT format.}
+A \code{.pdat} file is comma-separated. The first line carries the time and
+probe units separated by an asterisk (e.g.\ \code{ps*cm\textasciicircum\{-1\}}).
+The first data row holds the probe axis (with a leading $0$), and each
+subsequent row begins with a delay value followed by the signal at every probe
+coordinate. PDAT files store averaged data already in m\,OD, so no rescaling is
+applied on read.
+
+\subsection{Background correction}
+The pre-time-zero background is estimated by averaging the signal over a delay
+window $[\tau_\mathrm{min},\tau_\mathrm{max}]$ and subtracting it from every
+delay,
+\begin{equation}
+  Z_C(\tau,\lambda,d) = Z(\tau,\lambda,d)
+    - \big\langle Z(\tau',\lambda,d) \big\rangle_{\tau' \in [\tau_\mathrm{min},\tau_\mathrm{max}]},
+\end{equation}
+where the average is taken with \code{nan}-aware statistics
+(\code{pymorgan.oneD.process}). The operation is applied through
+
+\begin{lstlisting}
+data.background_correct(tmin=-20, tmax=-5)          # apply
+data.background_correct(tmin=-20, tmax=-5, do_correct=False)  # passthrough
+\end{lstlisting}
+
+With \code{do\_correct=False} the raw signal is copied unchanged into the
+corrected fields, so downstream code can always read \code{Z} uniformly. The
+method returns \code{self}, allowing calls to be chained.
+
+\subsection{Solvent subtraction}\label{sec:solvent}
+For measurements in solution, the pure-solvent response often has to be
+subtracted. The module exposes two entry points.
+
+\paragraph{Manual subtraction.} A scaled, time-shifted solvent trace is removed
+from the sample signal:
+\begin{lstlisting}
+data.subtract_solvent(solvent, dt=0.0, scale=1.0)
+\end{lstlisting}
+\code{dt} shifts the solvent delay axis before interpolation (accounts for a
+timing offset between the two measurements) and \code{scale} multiplies the
+solvent signal before subtraction.
+
+\paragraph{Automatic solvent fitting.} \code{fit\_solvent\_auto} models the
+solvent contribution pixel by pixel using the solvent trace convolved with the
+Instrument Response Function (IRF) and removes it:
+\begin{lstlisting}
+fit = data.fit_solvent_auto(solvent)
+data.subtract_solvent_fit(fit)
+\end{lstlisting}
+Optional per-pixel fits for the time-zero offset and the amplitude scale can be
+enabled through the \code{per\_pixel\_dt} and \code{per\_pixel\_scale} settings
+(Section~\ref{sec:settings}); the defaults are \code{false} and \code{true},
+respectively.
+
+\subsection{Shockwave subtraction}\label{sec:shockwave}
+In transient IR / UV-Vis measurements using flowing samples, acoustic shockwaves
+generated by the pump beam can appear as a time-dependent artefact that is
+correlated across \emph{all} probe wavelengths. The artefact is removed by
+averaging a selected subset of detector pixels (or a probe-axis range) into a
+one-dimensional shockwave trace and subtracting it from every pixel:
+\begin{lstlisting}
+from pymorgan.oneD.process import subtract_shockwave
+
+Z_corrected = subtract_shockwave(Z, pixels=[0, 1, 2])   # pixel indices (0-based)
+\end{lstlisting}
+
+The GUI exposes this through the \textbf{Subtract Shockwave\ldots} button in the
+1-D tab, which opens the \code{ShockwaveSubtractionDialog}. The dialog lets the
+user choose between pixel-index and probe-axis-value selection, displays a live
+preview of the proposed shockwave trace, and applies the correction on
+confirmation (see \S\ref{sec:oneD:gui:dialogs}).
+
+\subsection{Chirp (dispersion) correction}\label{sec:chirp}
+Ultrafast time-resolved spectroscopy measurements often suffer from Group Delay Dispersion (GDD), commonly referred to as ``chirp''. As the probe pulse passes through various dispersive optical elements (such as white-light generation crystals, lenses, sample cell windows, and the solvent itself), different spectral components are temporally stretched. Consequently, the effective time-zero $t_0(\lambda)$ varies across the probe wavelength range $\lambda$.
+
+PyMORGAN provides tools to characterise and correct this dispersion. The time-zero profile $t_0(\lambda)$ is modelled using a generalised Cauchy dispersion equation:
+\begin{equation}
+  t_0(\lambda) = c_0 + \sum_{n=1}^{N_C-1} c_n \left(\frac{\lambda_{\mathrm{ref}}}{\lambda}\right)^{2n},
+\end{equation}
+where $c_0, \dots, c_{N_C-1}$ are the dispersion coefficients, $\lambda_{\mathrm{ref}}$ is a reference wavelength (which defaults to the mean of the fitted range to make the coefficients dimensionless and of comparable magnitude), and $N_C$ is the number of terms (usually $6$).
+
+To determine $t_0(\lambda)$ across the probe range, PyMORGAN implements three fit modes in the \code{pymorgan.oneD.chirp} module:
+\begin{description}
+  \item[Automatic] Fits the coherent artefact and early dynamics at every pixel independently. The model consists of a Gaussian Instrument Response Function (IRF), its optional first and second derivatives, a constant offset, and an optional erf-broadened exponential decay. PyMORGAN uses Variable Projection (VARPRO) to eliminate the linear amplitudes in closed form, optimizing only the nonlinear parameters $(t_0, \mathrm{FWHM}, \tau_{\mathrm{exp}})$ per pixel. A second pass uses smoothed parameters from the first pass as initial guesses to improve stability.
+  \item[Step function] A simplified alternative that jointly fits a Gaussian IRF (+ derivatives) and a Heaviside step convolved with the same Gaussian over a narrow early-time window. This is robust when the early-time exponential decay is not needed or is ill-conditioned.
+  \item[Manual] Fits the Cauchy dispersion equation directly to a set of user-picked $(\lambda, t_0)$ points (e.g., clicked interactively on the contour map in the GUI), bypassing the per-pixel IRF fitting.
+\end{description}
+
+Once $t_0(\lambda)$ is obtained, the Cauchy dispersion equation is fit using bound-constrained, iteratively reweighted linear least-squares (IRLS with Tukey's bisquare weights) to handle outliers and reject bad pixel fits.
+
+To apply the correction, the dataset's delay axes are interpolated onto a common chirp-free delay grid. Two boundary handling strategies are available:
+\begin{itemize}
+  \item \code{crop}: Slices the delay axis to keep only the delay region where all wavelength channels are defined, discarding the out-of-bounds regions that become \code{NaN} after shifting.
+  \item \code{extrapolate}: Fills out-of-bound values with the nearest valid boundary endpoint value, keeping the original delay range.
+\end{itemize}
+
+\begin{lstlisting}
+# Fit chirp automatically and apply the correction
+fit = data.fit_chirp_automatic(deriv_mask=(True, True), use_exp=True)
+data.plot_chirp_diagnostics(fit)
+data.apply_chirp_correction(fit, boundary_handling="crop")
+\end{lstlisting}
+
+\subsection{Plotting}
+Five plotters live in \code{pymorgan.oneD.plot}; each is exposed both as a
+\code{Dataset1D} method and as a stage-level function that takes the dataset as
+its first argument, so a new view only needs \code{(data, ax, \dots)} and
+inherits the whole pipeline's context. Each returns the matplotlib axis (the
+kinetic view also returns the extracted traces). They are listed in
+Table~\ref{tab:plotters}.
+
+\begin{table}[h]
+  \centering
+  \begin{tabular}{ll}
+    \toprule
+    Method / function & View \\
+    \midrule
+    \code{plot\_contour}        & delay-vs-probe contour map \\
+    \code{plot\_surface}        & filled delay-vs-probe surface \\
+    \code{plot\_spectra}        & transient spectra at selected delays \\
+    \code{plot\_kinetics}       & kinetic traces at selected probe positions \\
+    \code{plot\_species\_spectra} & EAS/SAS from a global-analysis fit \\
+    \bottomrule
+  \end{tabular}
+  \caption{The 1-D plotters (\code{pymorgan.oneD.plot}).}
+  \label{tab:plotters}
+\end{table}
+
+\begin{lstlisting}
+data.plot_contour(Zscale=20)                          # method form
+data.plot_spectra([0.5, 1, 5, 20, 100], doSmooth=1)
+ax, t, Y = data.plot_kinetics([2132, 2218], plotStyle="-")
+
+from pymorgan.oneD import plot                          # stage-function form
+plot.plot_contour(data, label_style="/", cmap_ID="Rd/Wh/Bu v2")
+\end{lstlisting}
+
+The label style, colourmap, time-axis scale and \dA{} unit convention are taken
+from the active settings (\S\ref{sec:settings}); any of them can be overridden
+per figure through the corresponding keyword argument.
+
+\subsection{Composing figures and displaying}
+By default every plotter creates its own figure and axis. Passing an existing
+axis through \code{ax=} draws into it instead, which is how panels are combined
+into a layout or several datasets are overlaid on one axis. Repeated elements
+(axis labels and, for the maps, the colorbar) can be switched off so they are
+not drawn more than once; the toggles are listed in Table~\ref{tab:toggles}.
+
+\begin{table}[h]
+  \centering
+  \begin{tabular}{lll}
+    \toprule
+    Keyword & Default & Plotters \\
+    \midrule
+    \code{show\_xlabel}        & \code{True} & all \\
+    \code{show\_ylabel}        & \code{True} & all \\
+    \code{show\_colorbar}      & \code{True} & \code{plot\_contour}, \code{plot\_surface} \\
+    \code{show\_colorbar\_label} & \code{True} & \code{plot\_contour}, \code{plot\_surface} \\
+    \bottomrule
+  \end{tabular}
+  \caption{Per-call toggles for composing multi-panel figures.}
+  \label{tab:toggles}
+\end{table}
+
+\begin{lstlisting}
+import matplotlib.pyplot as plt
+fig, (axL, axR) = plt.subplots(1, 2)
+
+# two maps side by side; suppress the duplicated colorbar / y-axis label
+dataA.plot_contour(ax=axL, show_colorbar=False)
+dataB.plot_contour(ax=axR, show_ylabel=False)
+
+# overlay two datasets' transient spectra on a single axis
+dataA.plot_spectra([1, 5, 20], ax=axL)
+dataB.plot_spectra([1, 5, 20], ax=axL, show_ylabel=False)
+
+pm.show_plots()   # wrapper around plt.show(); pm.show is an alias
+\end{lstlisting}
+
+When a plotter is given an existing axis it does not resize the parent figure,
+so dropping a plot into a layout leaves the surrounding panels untouched.
+\code{pm.show\_plots(block=False)} returns immediately (e.g.\ inside a GUI event
+loop), and \code{pm.close\_plots()} closes all open figures.
+
+\subsection{Kinetic analysis}\label{sec:analyse}
+Kinetic analysis is \emph{not} part of PyMORGAN. Trace extraction and fitting
+--- multi-exponential decays, and full global/target analysis with rate-matrix
+models (the source of the EAS/SAS consumed by \code{plot\_species\_spectra})
+--- live in the companion project \textbf{PyRATE-TA}, which shares this
+loader/dataset layer.
+
+PyMORGAN keeps the two ends of that seam. Traces are obtained from
+\code{plot\_kinetics}, whose third return value is the extracted data itself:
+
+\begin{lstlisting}
+ax, t, Y = data.plot_kinetics([1950, 2000], plotStyle="-")
+Y.shape                                           # [Ndelays x Ncuts]
+\end{lstlisting}
+
+and fitted spectra are rendered by \code{plot\_species\_spectra}, which takes
+plain arrays (\code{Sfit}, \code{Taus}, \code{TauErr}, \code{isFixTau},
+\code{modelType}) and is therefore independent of how the fit was produced.
+
+The third piece of the seam is the noise. \code{Dataset1D.noise\_array()}
+returns the per-point standard deviation --- from \code{Zstdv} when a sibling
+\code{.pdatn} file was loaded, otherwise the spread across single scans, and
+\code{None} when the dataset carries neither:
+
+\begin{lstlisting}
+sigma = data.noise_array()      # [Ndelays x Npixels x Ndetectors], or None
+\end{lstlisting}
+
+A weighted fit uses it as \code{1/sigma}, which is what turns a fit statistic
+into a true reduced $\chi^2$; without it the statistic is a plain sum of
+squared residuals. PyMORGAN owns the noise because it owns the loaders; PyRATE-TA
+never estimates it.
+
+\subsection{Settings and aesthetics}\label{sec:settings}
+Presentation choices that are not intrinsic to the data are collected in a
+single \code{Settings} object. It is framework-agnostic: the GUI binds to the
+fields it describes, but the package never depends on the GUI. The fields are
+summarised in Table~\ref{tab:settings}.
+
+\begin{table}[h]
+  \centering
+  \begin{tabular}{lll}
+    \toprule
+    Field & Values & Effect \\
+    \midrule
+    \code{profile} & regular / poster / inset & selects a \code{.mplstyle} file \\
+    \code{font\_scale} & float & multiplies the profile font sizes \\
+    \code{label\_style} & \code{()} \code{[]} \code{/} (empty) & axis-label delimiter \\
+    \code{delta\_a\_units} & \code{mOD} / \code{x1E3} & \dA{} label convention \\
+    \code{cmap} & string & default contour colourmap \\
+    \code{time\_axis\_scale} & symlog / log / lin & default time-axis scale \\
+    \code{freq\_label} & Omega\_n / Omega\_PP / \dots & 2-D frequency-axis convention \\
+    \code{x\_axis\_unit} & native / nm / cm-1 / eV / THz & spectral X-axis display unit \\
+    \code{secondary\_axis} & bool & complementary X axis (top) \\
+    \code{chirp\_boundary\_handling} & crop / extrapolate & boundary handling for chirp correction \\
+    \bottomrule
+  \end{tabular}
+  \caption{Fields of the \code{Settings} object.}
+  \label{tab:settings}
+\end{table}
+
+The \code{label\_style} field controls the delimiter so that an axis reads, for
+example, ``Wavelength (nm)'', ``Wavelength [nm]'' or ``Wavelength / nm''. The
+\code{delta\_a\_units} field switches the signal-axis label between
+``\dA{} / m\,OD'' and ``\dA{} $\times 10^{3}$''; because $1\,\mathrm{mOD}
+\equiv \dA \times 10^{3}$, this is a labelling choice only and never rescales
+the stored data. The active \code{label\_style} delimiter is honoured for the
+m\,OD label on every axis, including the contour colorbar (so ``/'' yields
+``\dA{} / m\,OD''); the $\times 10^{3}$ form is always shown without a delimiter.
+
+The style profiles wrap the existing hand-tuned \code{.mplstyle} files rather
+than replacing them; \code{font\_scale} is applied as a light multiplicative
+overlay on top. Text is always rendered with matplotlib's mathtext engine; the
+LaTeX backend (\code{text.usetex}) is never enabled.
+
+The \code{x\_axis\_unit} field converts the spectral (probe) X axis of the transient-spectra and contour plots between wavelength (nm), wavenumber (cm$^{-1}$), energy (eV) and frequency (THz); \code{native} keeps each dataset's stored unit. The conversion is physical (the axis values are recomputed, pivoting through the wavelength), not a relabelling. When \code{secondary\_axis} is enabled a second X axis is drawn on top in the \emph{complementary} unit: cm$^{-1}\leftrightarrow$nm, with nm used as the complement for eV and THz. Both fields default to the active settings and can be overridden per call, e.g. \code{data.plot\_spectra([1, 5, 20], x\_axis\_unit="nm", secondary\_axis=True)}. The earlier \code{dualScale} keyword is retained as a deprecated alias (a truthy value maps to \code{secondary\_axis=True}). Whenever a wavenumber axis (main or secondary) exceeds $5000\,\mathrm{cm^{-1}}$ its tick labels are divided by $1000$ and the axis is relabelled ``Wavenumber ($\times 10^{3}$ cm$^{-1}$)'', so UV/Vis wavenumbers stay legible; IR ranges are left unscaled. The axis data, stored limits and GUI spin boxes remain in true cm$^{-1}$ -- only the displayed tick labels and unit are scaled.
+
+The \code{chirp\_boundary\_handling} field controls how out-of-bounds delays are treated during the chirp correction interpolation step, selecting between \code{crop} and \code{extrapolate} (see \S\ref{sec:chirp}).
+
+Settings are read from and written to a TOML file, with comments preserved on
+write so the file remains hand-editable after the GUI saves it:
+
+\begin{lstlisting}
+pm.load_settings("settings.toml")   # make the file's settings active
+pm.update_settings(profile="poster", label_style="/")
+pm.apply_style()                    # apply the profile to matplotlib
+pm.save_settings("settings.toml")   # persist (keeps comments)
+\end{lstlisting}
+
+A module-level \emph{active} settings object is read by the plotting methods.
+Temporary overrides can be scoped with a context manager:
+
+\begin{lstlisting}
+with pm.use_settings(delta_a_units="mOD"):
+    data.plot_spectra([1, 5, 20])   # this figure only
+\end{lstlisting}
+
+\subsection{Worked example}
+A complete script reproducing the standard workflow is provided in
+\code{examples/pump\_probe\_1D.py}. In outline, the four stages read:
+
+\begin{lstlisting}
+import pymorgan as pm
+
+pm.load_settings("settings.toml")
+pm.apply_style()
+
+data = pm.load_1D("testData/testTRIR.pdat", data_type="PDAT")  # load
+data.background_correct(tmin=-20, tmax=-5)                       # process
+data.plot_contour(Zscale=20, Yscale="lin")                      # plot
+ax, t, Y = data.plot_kinetics([1980, 2030], plotStyle="-")      # plot + extract
+\end{lstlisting}
+
+\subsection{Graphical interface — 1-D dialogs}\label{sec:oneD:gui:dialogs}
+
+Several interactive dialogs supplement the main 1-D tab.
+
+\subsubsection{Chirp correction dialog}
+
+The \textbf{Chirp\ldots} button opens \code{chirp\_dialog.py}, which guides
+the user through chirp correction in three sub-panels:
+\begin{enumerate}
+  \item \textbf{Mode selection} --- choose Automatic, Step-function or Manual.
+  \item \textbf{Parameter input} --- set the delay window, IRF FWHM, and
+        (for Automatic mode) which derivative terms to include.
+  \item \textbf{Diagnostics} --- the fitted $t_0(\lambda)$ curve overlaid on
+        the contour map; the boundary-handling strategy (crop / extrapolate)
+        is chosen here before the correction is applied.
+\end{enumerate}
+A progress dialog (\code{chirp\_progress\_dialog.py}) reports per-pixel fit
+progress for the Automatic mode, which can be parallelised via the
+\code{parallel\_fitting} setting (thread pool, process pool, or sequential).
+
+\subsubsection{Solvent subtraction dialog}
+
+The \textbf{Subtract Solvent\ldots} button opens a dialog in
+\code{dialogs.py} that loads a pure-solvent scan, previews the subtraction,
+and applies \code{fit\_solvent\_auto} or the manual \code{subtract\_solvent}
+path according to the chosen settings.
+
+\subsubsection{Shockwave subtraction dialog}
+
+The \textbf{Subtract Shockwave\ldots} button opens
+\code{shockwave\_dialog.py}. The user selects a set of pixels (by index or
+probe value) whose average forms the shockwave reference trace, inspects a
+live preview, and confirms. The correction calls \code{subtract\_shockwave}
+and updates the dataset in place.

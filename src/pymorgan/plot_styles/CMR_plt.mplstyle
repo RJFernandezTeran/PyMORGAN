@@ -1,0 +1,82 @@
+### Fonts
+	font.family: serif
+	font.serif: cmr10
+	font.sans-serif: arial
+	mathtext.fontset : cm
+
+	figure.titleweight : bold
+	axes.labelweight : bold
+
+### Font Sizes
+	axes.titlesize : 18
+	axes.labelsize : 18
+	legend.fontsize : 11
+	xtick.labelsize : 16
+	ytick.labelsize : 16
+
+### Axes
+	axes.formatter.use_mathtext : True
+
+### Lines
+	lines.linewidth : 2
+	axes.linewidth  : 1
+	lines.markersize : 10
+	hatch.linewidth: 0.25
+	
+	contour.negative_linestyle : --
+	patch.antialiased : True
+
+### Ticks
+	xtick.top: True
+	xtick.bottom: True
+	xtick.major.size: 8.0
+	xtick.minor.size: 4.0
+	xtick.major.width: 0.75
+	xtick.minor.width: 0.75
+	xtick.direction: in
+	xtick.minor.visible: True
+	xtick.major.top: True
+	xtick.major.bottom: True
+	xtick.minor.top: True
+	xtick.minor.bottom: True
+	xtick.major.pad: 7.0
+	xtick.minor.pad: 7.0
+
+	ytick.left: True
+	ytick.right: True
+	ytick.major.size: 8.0
+	ytick.minor.size: 4.0
+	ytick.major.width: 0.75
+	ytick.minor.width: 0.75
+	ytick.direction: in
+	ytick.minor.visible: True
+	ytick.major.left: True
+	ytick.major.right: True
+	ytick.minor.left: True
+	ytick.minor.right: True
+	ytick.major.pad: 7.0
+	ytick.minor.pad: 7.0
+
+### Legend
+	legend.frameon: False
+
+### Figure size
+	figure.figsize: 7, 3.5
+	figure.subplot.left: 0.125
+	figure.subplot.bottom: 0.175
+	figure.subplot.top: 0.95
+	figure.subplot.right: 0.95
+	figure.autolayout : False
+
+### TEX
+	text.usetex : True
+	text.latex.preamble : \usepackage{amsmath} \usepackage{bm}
+
+### Saving figures
+	path.simplify : True
+	savefig.dpi : 600
+	savefig.format : eps
+
+	ps.useafm : True
+	ps.fonttype : 42
+	pdf.use14corefonts : True

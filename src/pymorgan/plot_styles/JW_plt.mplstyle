@@ -1,0 +1,40 @@
+savefig.dpi             :   600
+savefig.format          :   pdf
+
+figure.figsize          :   5, 3.5
+
+xtick.major.size        :   6  # default 3.5
+ytick.major.size        :   6  # default 3.5
+
+xtick.major.width       :   1  # default 0.8
+ytick.major.width       :   1  # default 0.8
+
+axes.linewidth          :   1  # default 0.8
+lines.linewidth         :   1.7  # default 1.5
+
+xtick.major.pad         :   4  # default 3.5
+ytick.major.pad         :   4  # default 3.5
+xtick.minor.pad         :   4  # default 3.5
+ytick.minor.pad         :   4  # default 3.5
+ 
+# Turn off the legend frame and reduce the space between the point and the label  
+legend.frameon          :   False
+legend.handletextpad    :   0.5
+
+# AXES
+axes.titlesize : 16
+axes.labelsize : 16
+
+# LEGEND
+legend.fontsize : 11
+
+# LINES
+lines.markersize : 6
+
+# TICKS
+xtick.labelsize : 14
+ytick.labelsize : 14
+
+# TEX
+text.usetex: True
+text.latex.preamble: \usepackage{tgheros} \usepackage{sansmath} \sansmath \usepackage[separate-uncertainty=true]{siunitx} \sisetup{detect-all} \usepackage{amsmath} \usepackage{mhchem}

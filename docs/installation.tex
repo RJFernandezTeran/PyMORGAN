@@ -1,0 +1,281 @@
+\section{Installation}\label{sec:installation}
+
+PyMORGAN requires \textbf{Python~3.12 or later}. It can be installed directly from \href{https://pypi.org/project/pymorgan/}{PyPI} or installed from source using \href{https://docs.astral.sh/uv/}{\textbf{uv}}.
+
+% ---------------------------------------------------------------------------
+\subsection{Quick install via PyPI (Recommended)}\label{sec:install-pypi}
+
+To install the latest official release into your active Python environment:
+
+\begin{lstlisting}[language=bash, style=py]
+pip install pymorgan
+# or with uv:
+uv pip install pymorgan
+
+# Register bundled fonts into matplotlib:
+pymorgan-install-fonts
+\end{lstlisting}
+
+\noindent You can also launch the graphical interface directly without prior installation using \code{uvx}:
+
+\begin{lstlisting}[language=bash, style=py]
+uvx --from pymorgan pymorgan-gui
+\end{lstlisting}
+
+% ---------------------------------------------------------------------------
+\subsection{Installation from Source}\label{sec:install-source}
+
+The steps below describe the full setup for development or source installation.
+
+\paragraph{Step 1 — Install Python 3.12+.}
+
+\paragraph{Windows.}
+Download and run the official installer from
+\url{https://www.python.org/downloads/}. Choose \textbf{Python 3.12} or
+later, and tick \emph{Add Python to PATH} on the first installer page.
+
+Alternatively, use the \textbf{Windows Store} or
+\href{https://github.com/indygreg/python-build-standalone/releases}{Python
+Standalone Builds} (recommended for reproducibility).
+
+After the installer finishes, verify Python is on \code{PATH}:
+
+\begin{lstlisting}[language=bash, style=py]
+python --version        # should print Python 3.12.x or later
+\end{lstlisting}
+
+\paragraph{macOS.}
+\begin{lstlisting}[language=bash, style=py]
+brew install python@3.12          # Homebrew
+# or download from https://www.python.org/downloads/
+\end{lstlisting}
+
+\paragraph{Linux (Debian/Ubuntu).}
+\begin{lstlisting}[language=bash, style=py]
+sudo apt update
+sudo apt install python3.12 python3.12-venv python3.12-dev
+\end{lstlisting}
+
+% ---------------------------------------------------------------------------
+\subsection{Step 2 — Install uv}\label{sec:install-uv}
+
+uv is a single self-contained binary that replaces \code{pip},
+\code{venv}, \code{pip-tools} and \code{virtualenv} in one tool. Install
+it once, globally:
+
+\paragraph{Windows (PowerShell).}
+\begin{lstlisting}[language=bash, style=py]
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+\end{lstlisting}
+
+\paragraph{macOS / Linux.}
+\begin{lstlisting}[language=bash, style=py]
+curl -LsSf https://astral.sh/uv/install.sh | sh
+\end{lstlisting}
+
+\paragraph{Via \code{pip} (any OS).}
+\begin{lstlisting}[language=bash, style=py]
+pip install uv
+\end{lstlisting}
+
+After installing, open a new terminal window and confirm:
+\begin{lstlisting}[language=bash, style=py]
+uv --version     # e.g. uv 0.6.x
+\end{lstlisting}
+
+% ---------------------------------------------------------------------------
+\subsection{Step 3 — Obtain the PyMORGAN source}\label{sec:clone}
+
+Clone the repository (or copy the folder to a location of your choice):
+
+\begin{lstlisting}[language=bash, style=py]
+git clone https://github.com/RJFernandezTeran/PyMORGAN.git
+cd PyMORGAN
+\end{lstlisting}
+
+If you do not use git, download and extract the zip archive from GitHub,
+then open a terminal inside the extracted folder.
+
+% ---------------------------------------------------------------------------
+\subsection{Step 4 — Create the virtual environment and install}\label{sec:venv}
+
+From the repository root:
+
+\begin{lstlisting}[language=bash, style=py]
+uv venv                       # creates .venv/ with the system Python (>= 3.12)
+uv pip install -e ".[dev]"    # editable install + ruff + pytest
+uv run pymorgan-install-fonts # copy bundled fonts into matplotlib
+\end{lstlisting}
+
+\noindent\textbf{What each line does:}
+\begin{itemize}
+  \item \code{uv venv} — creates a \code{.venv/} virtual environment in the
+    current directory.  Pass \code{--python 3.12} to pin a specific
+    interpreter if multiple versions are installed.
+  \item \code{uv pip install -e ".[dev]"} — installs all core dependencies
+    (Table~\ref{tab:dependencies}), plus the development extras
+    (\code{ruff} linter and \code{pytest} test runner), in \emph{editable}
+    mode. Editable mode means changes to the source files take effect
+    immediately without reinstalling.
+  \item \code{uv run pymorgan-install-fonts} — copies the bundled
+    \code{TgTermes} and other fonts used by the plot style profiles into
+    matplotlib's font cache. Run this once after a fresh install.
+\end{itemize}
+
+\noindent If you only need to run the GUI (no development work):
+
+\begin{lstlisting}[language=bash, style=py]
+uv pip install -e .           # core only (no ruff / pytest)
+uv run pymorgan-install-fonts
+\end{lstlisting}
+
+% ---------------------------------------------------------------------------
+\subsection{Step 5 — Verify the installation}\label{sec:verify}
+
+Confirm the package imports and reports its version:
+
+\begin{lstlisting}[language=bash, style=py]
+uv run python -c "import pymorgan; print(pymorgan.__version__)"
+\end{lstlisting}
+
+Launch the graphical interface:
+
+\begin{lstlisting}[language=bash, style=py]
+uv run pymorgan-gui
+\end{lstlisting}
+
+Run the full test suite (requires the \code{dev} extras):
+
+\begin{lstlisting}[language=bash, style=py]
+uv run pytest        # 112 tests, all should pass
+\end{lstlisting}
+
+Run the end-to-end smoke check:
+
+\begin{lstlisting}[language=bash, style=py]
+uv run python scripts/run_checks.py
+\end{lstlisting}
+
+% ---------------------------------------------------------------------------
+\subsection{Dependencies}\label{sec:dependencies}
+
+Table~\ref{tab:dependencies} lists the core runtime dependencies. All are
+installed automatically by \code{uv pip install -e .}; no manual
+\code{pip install} is needed.
+
+\begin{table}[h]
+  \centering
+  \begin{tabular}{lll}
+    \toprule
+    Package & Minimum version & Purpose \\
+    \midrule
+    \code{numpy}           & 2.5.2  & Array operations \\
+    \code{scipy}           & 1.18.0 & Signal processing and fitting \\
+    \code{matplotlib}      & 3.11.1 & Plotting back-end \\
+    \code{pandas}          & 3.0.5  & Tabular data and I/O \\
+    \code{h5py}            & 3.16.0 & HDF5 file I/O (some loaders) \\
+    \code{mpl-axes-aligner}& 1.3    & Aligned multi-axis figures \\
+    \code{tomlkit}         & 0.15.1 & Settings file read/write \\
+    \code{PyQt6}           & 6.11.0 & Graphical interface framework \\
+    \code{PyQt6\_sip}      & 13.12.0& Qt bindings interface \\
+    \bottomrule
+  \end{tabular}
+  \caption{Core runtime dependencies (minimum version floors as of August 2026).
+    Exact versions are pinned in \code{uv.lock}.}
+  \label{tab:dependencies}
+\end{table}
+
+\begin{table}[h]
+  \centering
+  \begin{tabular}{lll}
+    \toprule
+    Package & Minimum version & Purpose \\
+    \midrule
+    \code{ruff}      & 0.16.2 & Linter and formatter \\
+    \code{pytest}    & 9.1.1  & Test runner \\
+    \code{pytest-qt} & 4.5.0  & Qt widget testing helpers \\
+    \bottomrule
+  \end{tabular}
+  \caption{Development extras (\code{uv pip install -e ".[dev]"}).}
+  \label{tab:dev-dependencies}
+\end{table}
+
+% ---------------------------------------------------------------------------
+\subsection{Keeping packages up to date}\label{sec:upgrade}
+
+To upgrade all dependencies to the latest compatible versions:
+
+\begin{lstlisting}[language=bash, style=py]
+uv lock --upgrade     # resolve latest versions, update uv.lock
+uv sync               # install the resolved versions into .venv
+\end{lstlisting}
+
+% ---------------------------------------------------------------------------
+\subsection{Console scripts}\label{sec:scripts}
+
+Four console scripts are installed with the package:
+
+\begin{table}[h]
+  \centering
+  \begin{tabular}{ll}
+    \toprule
+    Script & Purpose \\
+    \midrule
+    \code{pymorgan-gui}           & Launch the PyQt6 graphical interface \\
+    \code{pymorgan-install-fonts} & Install bundled fonts into matplotlib \\
+    \code{pymorgan-edit-gui}      & Open the GUI layout in Qt Designer \\
+    \code{pymorgan-settings}      & Standalone settings editor (no data loaded) \\
+    \bottomrule
+  \end{tabular}
+  \caption{Console scripts installed with the package.}
+  \label{tab:scripts}
+\end{table}
+
+All scripts are run via \code{uv run <script>} (e.g.\
+\code{uv run pymorgan-gui}), or directly if the environment is activated.
+
+% ---------------------------------------------------------------------------
+\subsection{GUI layout and compiled UI}\label{sec:compiled-ui}
+
+The GUI layout is defined in
+\code{src/pymorgan/gui/main\_window.ui} (Qt Designer XML). For performance,
+PyMORGAN also ships a pre-compiled Python translation,
+\code{main\_window\_ui.py}, generated by \code{pyuic6}. Loading the
+compiled module is approximately $1.5\times$ faster than parsing the XML at
+runtime.
+
+\textbf{No manual action is needed when editing the \code{.ui} file.} When
+\code{main\_window.ui} is saved in Qt Designer and the GUI is next launched,
+PyMORGAN detects that the compiled module is stale (via file modification
+times) and regenerates it automatically using \code{pyuic6} before loading
+the window. If \code{pyuic6} is unavailable or fails, the raw XML is parsed
+as a transparent fallback.
+
+To force a manual recompile (e.g.\ for CI):
+
+\begin{lstlisting}[language=bash, style=py]
+uv run pyuic6 src/pymorgan/gui/main_window.ui \
+              -o src/pymorgan/gui/main_window_ui.py
+\end{lstlisting}
+
+% ---------------------------------------------------------------------------
+\subsection{Activating the environment (optional)}\label{sec:activate}
+
+All commands in this manual use the \code{uv run} prefix, which
+automatically targets the project's \code{.venv} without requiring
+activation. If you prefer an activated shell (e.g.\ for interactive work
+in a terminal):
+
+\begin{lstlisting}[language=bash, style=py]
+# Linux / macOS
+source .venv/bin/activate
+
+# Windows (PowerShell)
+.venv\Scripts\Activate.ps1
+
+# Windows (Command Prompt)
+.venv\Scripts\activate.bat
+\end{lstlisting}
+
+Once activated, commands can be run without the \code{uv run} prefix
+(e.g.\ \code{pymorgan-gui} instead of \code{uv run pymorgan-gui}).
