@@ -47,9 +47,6 @@ path = "src/pymorgan/__about__.py"
 packages = ["src/pymorgan"]
 dev-mode-dirs = ["src"]
 
-[tool.hatch.build.targets.wheel.force-include]
-"src/pymorgan/gui/main_window.ui" = "src/pymorgan/gui/main_window.ui"
-"src/pymorgan/gui/icons" = "src/pymorgan/gui/icons"
 
 # --------------------------------------------------------------------------- #
 #                                   Ruff                                       #
