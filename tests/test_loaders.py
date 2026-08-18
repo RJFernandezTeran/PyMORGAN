@@ -512,3 +512,58 @@ def test_read_uos_irpp_real_dataset_discovery():
     assert ds.delays.ndim == 1
     assert ds.n_detectors in (1, 2)
 
+
+# --------------------------------------------------------------------------- #
+#                               Exported TXT                                  #
+# --------------------------------------------------------------------------- #
+def test_registry_lists_exported_txt():
+    assert "Exported_TXT" in pm.available_loaders()
+
+
+def test_read_exported_txt_synthetic(tmp_path):
+    folder = tmp_path / "exp_txt_dataset"
+    folder.mkdir()
+
+    time_file = folder / "time.txt"
+    time_file.write_text("# time / ps\n-1.0\n0.0\n1.0\n10.0\n")
+
+    probe_file = folder / "wavelength.txt"
+    probe_file.write_text("# wavelength / nm\n500.0\n510.0\n520.0\n")
+
+    ta_file = folder / "TA.txt"
+    ta_file.write_text(
+        "# Transient Absorption / mOD\n"
+        "0.1 0.2 0.3\n"
+        "0.4 0.5 0.6\n"
+        "0.7 0.8 0.9\n"
+        "1.0 1.1 1.2\n"
+    )
+
+    assert is_dataset_dir("Exported_TXT", folder) is True
+
+    ds = pm.load_1D(folder, data_type="Exported_TXT")
+    assert ds.data_type == "Exported_TXT"
+    assert ds.delays.shape == (4,)
+    assert ds.probe.shape == (3,)
+    assert ds.Zavg_R.shape == (4, 3, 1)
+    assert ds.units["unitsT_ltx"] == "ps"
+    assert ds.units["unitsL_ltx"] == "nm"
+
+    # Also test loading via single file path inside folder
+    ds_file = pm.load_1D(ta_file, data_type="Exported_TXT")
+    assert ds_file.Zavg_R.shape == (4, 3, 1)
+
+
+def test_read_exported_txt_fig4_dataset():
+    fig4_path = Path(r"C:\Users\ricar\Downloads\DATA_FIG4\4CN")
+    if not fig4_path.is_dir():
+        pytest.skip("FIG4 4CN dataset not found on disk")
+
+    assert is_dataset_dir("Exported_TXT", fig4_path) is True
+    ds = pm.load_1D(fig4_path, data_type="Exported_TXT")
+    assert ds.data_type == "Exported_TXT"
+    assert ds.delays.shape == (425,)
+    assert ds.probe.shape == (520,)
+    assert ds.Zavg_R.shape == (425, 520, 1)
+
+

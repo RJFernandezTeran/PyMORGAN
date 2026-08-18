@@ -60,6 +60,7 @@ DATA_TYPE_DISPLAY_NAMES: dict[str, str] = {
     "UniGE_FLUPSnew": "UniGE FLUPS (Modern)",
     "Helios_TA": "Helios TA (Ultrafast Systems)",
     "UoS_IRpp": "U. of Sheffield IR Pump-Probe",
+    "Exported_TXT": "Exported TXT",
     # 2D Datatypes
     "P2DAT": "Processed 2D Spectrum (.p2dat)",
     "MESS_2DIR": "UniGE 2D-IR (MESS Raw)",

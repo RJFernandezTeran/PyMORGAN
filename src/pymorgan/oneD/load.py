@@ -1675,3 +1675,137 @@ def _helios_is_dataset(folder: Path) -> bool:
     except FileNotFoundError:
         return False
 
+
+# --------------------------------------------------------------------------- #
+#                            Exported TXT TA reader                           #
+# --------------------------------------------------------------------------- #
+def _find_exported_txt_files(path: Path | str) -> tuple[Path, Path, Path]:
+    """Locate (signal_file, time_file, probe_file) for an Exported TXT dataset."""
+    p = Path(path)
+    if p.is_file():
+        folder = p.parent
+    elif p.is_dir():
+        folder = p
+    else:
+        raise FileNotFoundError(f"Exported TXT dataset path not found: {path}")
+
+    try:
+        files = {f.name.lower(): f for f in folder.iterdir() if f.is_file()}
+    except OSError:
+        raise FileNotFoundError(f"Cannot access directory: {folder}") from None
+
+    sig_file = None
+    for cand in ["ta.txt", "signal.txt"]:
+        if cand in files:
+            sig_file = files[cand]
+            break
+
+    time_file = None
+    for cand in ["time.txt", "delays.txt", "delay.txt", "times.txt"]:
+        if cand in files:
+            time_file = files[cand]
+            break
+
+    probe_file = None
+    for cand in ["wavelength.txt", "wavelengths.txt", "wavenumber.txt", "wavenumbers.txt", "probe.txt"]:
+        if cand in files:
+            probe_file = files[cand]
+            break
+
+    if not sig_file or not time_file or not probe_file:
+        missing = []
+        if not sig_file:
+            missing.append("TA.txt")
+        if not time_file:
+            missing.append("time.txt")
+        if not probe_file:
+            missing.append("wavelength.txt/wavenumber.txt")
+        raise FileNotFoundError(
+            f"Missing required Exported TXT file(s) in {folder}: {', '.join(missing)}"
+        )
+
+    return sig_file, time_file, probe_file
+
+
+@register_loader("Exported_TXT")
+def read_Exported_TXT(datafilename: str) -> LoaderResult:
+    """Read an Exported TXT transient absorption dataset (TA.txt, time.txt, wavelength.txt)."""
+    sig_file, time_file, probe_file = _find_exported_txt_files(datafilename)
+
+    def _parse_unit(filepath: Path, default: str) -> str:
+        header_line = ""
+        try:
+            with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    line_s = line.strip()
+                    if line_s.startswith("#"):
+                        header_line = line_s
+                        break
+                    elif line_s:
+                        break
+        except OSError:
+            pass
+
+        unit = default
+        if header_line and "/" in header_line:
+            parts = header_line.split("/")
+            raw_unit = parts[-1].strip().lower()
+            if "ps" in raw_unit:
+                unit = "ps"
+            elif "ns" in raw_unit:
+                unit = "ns"
+            elif "fs" in raw_unit:
+                unit = "fs"
+            elif "cm-1" in raw_unit or "cm^-1" in raw_unit:
+                unit = "cm^{-1}"
+            elif "nm" in raw_unit:
+                unit = "nm"
+            elif "ev" in raw_unit:
+                unit = "eV"
+
+        return unit
+
+    units_T = _parse_unit(time_file, "ps")
+    default_L = "cm^{-1}" if "wavenumber" in probe_file.name.lower() else "nm"
+    units_L = _parse_unit(probe_file, default_L)
+
+    delays = np.loadtxt(time_file)
+    probe = np.loadtxt(probe_file)
+    Zavg_2d = np.loadtxt(sig_file)
+
+    if delays.ndim != 1:
+        delays = np.squeeze(delays)
+    if probe.ndim != 1:
+        probe = np.squeeze(probe)
+
+    n_delays = len(delays)
+    n_probe = len(probe)
+
+    if Zavg_2d.shape == (n_probe, n_delays):
+        Zavg_2d = Zavg_2d.T
+    elif Zavg_2d.shape != (n_delays, n_probe):
+        raise ValueError(
+            f"Shape mismatch in Exported TXT dataset: TA matrix shape {Zavg_2d.shape} "
+            f"does not match delays length ({n_delays}) and probe length ({n_probe})."
+        )
+
+    Zavg_R = Zavg_2d[..., np.newaxis]  # [Ndelays x Npixels x 1]
+
+    Nscans = np.nan
+    Zss_R = np.full((*Zavg_R.shape, 1), np.nan)
+    Zstdv = np.zeros_like(Zavg_R)
+
+    Units = hlp.units2dic(units_L, units_T, "x1E3")
+    return Zavg_R, delays, probe, Units, Nscans, Zss_R, Zstdv
+
+
+@register_dataset_detector("Exported_TXT")
+def _exported_txt_is_dataset(folder: Path) -> bool:
+    """Whether ``folder`` is an Exported TXT dataset directory."""
+    try:
+        _find_exported_txt_files(folder)
+        return True
+    except (FileNotFoundError, OSError):
+        return False
+
+
