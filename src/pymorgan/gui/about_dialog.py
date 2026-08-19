@@ -36,6 +36,7 @@ class ModernAboutDialog(QDialog):
         department: str = "Department of Physical Chemistry",
         institution: str = "University of Geneva, Switzerland",
         contact_email: str = "Ricardo.FernandezTeran@unige.ch",
+        website_url: str | None = None,
         github_url: str | None = None,
         license_name: str = "BSD 3-Clause License",
         banner_path: str | None = None,
@@ -53,6 +54,7 @@ class ModernAboutDialog(QDialog):
         self._department = department
         self._institution = institution
         self._contact_email = contact_email
+        self._website_url = website_url
         self._github_url = github_url
         self._license_name = license_name
         self._banner_path = banner_path
@@ -61,7 +63,7 @@ class ModernAboutDialog(QDialog):
         self._ai_credit = ai_credit
 
         self.setWindowTitle(title)
-        self.setFixedSize(580, 520)
+        self.setFixedSize(580, 530)
         self.setModal(True)
 
         if self._icon_path and os.path.exists(self._icon_path):
@@ -194,13 +196,19 @@ class ModernAboutDialog(QDialog):
         </table>
         """
 
+        website_line = (
+            f'<b>Website:</b> <a href="{self._website_url}" style="color: #60a5fa; text-decoration: none;">{self._website_url}</a><br>'
+            if self._website_url
+            else ""
+        )
+
         body_html = f"""
         <p style="margin-top:0px; margin-bottom: 8px;">
             <b>Author:</b> {self._author}<br>
             <b>Department:</b> {self._department}<br>
             <b>Institution:</b> {self._institution}<br>
             <b>Contact:</b> <a href="mailto:{self._contact_email}" style="color: #60a5fa; text-decoration: none;">{self._contact_email}</a><br>
-            {github_line}<b>License:</b> {self._license_name}
+            {website_line}{github_line}<b>License:</b> {self._license_name}
         </p>
         {github_badge}
         <hr style="border: 0; border-top: 1px solid #334155; margin: 8px 0;">

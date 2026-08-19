@@ -1132,6 +1132,7 @@ class MainWindow(
             department="Department of Physical Chemistry",
             institution="University of Geneva, Switzerland",
             contact_email=email,
+            website_url="https://www.unige.ch/sciences/chifi/fernandez-teran/",
             license_name="AGPL-3.0 License",
             github_url="https://github.com/RJFernandezTeran/PyMORGAN",
             banner_path=str(banner_path) if banner_path.exists() else None,
