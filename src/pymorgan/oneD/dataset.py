@@ -118,6 +118,8 @@ class Dataset1D:
         self.data_type = data_type
         self.scan_ids = scan_ids
         self.counts = counts if counts is not None else self.units.get("counts")
+        self.cal_source = self.units.get("cal_source")
+        self.cal_level = self.units.get("cal_level")
 
         self.Zavg_C = None
         self.Zss_C = None
@@ -392,7 +394,8 @@ class Dataset1D:
         res_str = f"{res:.2f} {probe_unit}" if np.isfinite(res) else "n/a"
         line2 = f"<b>SNR:</b> {snr} / <b>Scans:</b> {scans} / <b>Res.:</b> {res_str}"
         line3 = _format_1d_delay_info(self.delays, u.get("unitsT_ltx", "ps"), html=True)
-        lines = [line1, line2, line3]
+        line_cal = f"<b>Calibration:</b> {self.calibration_status()}"
+        lines = [line1, line2, line3, line_cal]
         info_extra = self.units.get("sample_info")
         if info_extra:
             formatted_info = info_extra.replace("\n", "<br>")
@@ -437,13 +440,36 @@ class Dataset1D:
         res_str = f"{res:.2f} {probe_unit}" if np.isfinite(res) else "n/a"
         line2 = f"SNR: {snr} / Scans: {scans} / Res.: {res_str}"
         line3 = _format_1d_delay_info(self.delays, u.get("unitsT_ltx", "ps"), html=False)
-        lines = [line1, line2, line3]
+        line_cal = f"Calibration: {self.calibration_status()}"
+        lines = [line1, line2, line3, line_cal]
         info_extra = self.units.get("sample_info")
         if info_extra:
             lines.append(f"Sample Info:\n{info_extra}")
         else:
             lines.append("Sample Info: No additional sample information available.")
         return "\n".join(lines)
+
+    def calibration_status(self) -> str:
+        """Return a clean, human-readable probe calibration source description."""
+        cal_source = getattr(self, "cal_source", None) or self.units.get("cal_source")
+        if cal_source:
+            return cal_source
+        cal_level = getattr(self, "cal_level", None) or self.units.get("cal_level")
+        if cal_level == "datadir":
+            return "CalibratedProbe.csv (data folder)"
+        if cal_level == "rootdir":
+            return "CalibratedProbe.csv (root folder)"
+        if self.data_type == "MESS_TRIR":
+            return "Dataset probe axis (wavenumbers.csv)"
+        if self.data_type == "MESS_TRUVIS":
+            return "Dataset probe axis (wavelengths.csv)"
+        if self.data_type == "HARPIA_TA":
+            return "Embedded HARPIA probe axis"
+        if self.data_type == "PDAT":
+            return "Dataset probe axis (PDAT header)"
+        if self.data_type == "Helios_TA":
+            return "Dataset probe axis (CSV header)"
+        return "Dataset probe calibration"
 
     def print_sample_info(self) -> None:
         """Print the console-friendly summary of the 1-D dataset."""

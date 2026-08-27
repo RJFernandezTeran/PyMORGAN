@@ -196,18 +196,14 @@ class TwoDTabMixin:
             if progress is not None:
                 progress.close()
 
-        cal_msg = ""
-        if getattr(self.twoD_dataset, "cal_level", None) == "datadir":
-            cal_msg = " | Calibration loaded (datadir)"
-        elif getattr(self.twoD_dataset, "cal_level", None) == "rootdir":
-            cal_msg = " | Calibration loaded (rootdir)"
-        else:
-            cal_msg = " | Using dataset probe calibration"
-
-        if self.twoD_dataset.in_progress:
-            msg = f"Loaded 2D ({self.twoD_dataset.datatype} - IN PROGRESS): {Path(path).name} — {self.twoD_dataset!r}{cal_msg}"
-        else:
-            msg = f"Loaded 2D ({self.twoD_dataset.datatype}): {Path(path).name} — {self.twoD_dataset!r}{cal_msg}"
+        name = Path(path).name
+        dt_type = (
+            f"{self.twoD_dataset.datatype} - IN PROGRESS"
+            if self.twoD_dataset.in_progress
+            else self.twoD_dataset.datatype
+        )
+        cal_str = self.twoD_dataset.calibration_status()
+        msg = f"Loaded 2D ({dt_type}): {name} — Probe calibration: {cal_str}"
         self.statusBar().showMessage(msg)
 
         self._update_twoD_delay_list(prev_delay, prev_idx)

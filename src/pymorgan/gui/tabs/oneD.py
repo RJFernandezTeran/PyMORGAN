@@ -52,6 +52,7 @@ from ..busy import busy_guard
 from ..mw_common import (
     _DEFAULT_SPEC_DELAYS,
     _safe_set_limits,
+    DATA_TYPE_DISPLAY_NAMES,
     get_combo_datatype,
 )
 
@@ -125,9 +126,10 @@ class OneDTabMixin:
             self._update_sample_info()
             return
         self._configure_state_controls(meta)
-        msg = f"Loaded {Path(path).name} — {self.dataset!r}"
-        if meta is not None:
-            msg += f" — {mess_calibration_status(path)}"
+        name = Path(path).name
+        dt_display = DATA_TYPE_DISPLAY_NAMES.get(dt, dt)
+        cal_str = self.dataset.calibration_status()
+        msg = f"Loaded {name} ({dt_display}) — Probe calibration: {cal_str}"
         self.statusBar().showMessage(msg)
         if getattr(self, "plot_controls", None) is not None:
             self.plot_controls.set_dataset(self.dataset)

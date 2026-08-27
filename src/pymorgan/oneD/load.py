@@ -229,6 +229,7 @@ def read_PDAT(datafilename: str) -> LoaderResult:
         Zstdv = np.zeros_like(Zavg_R)
 
     Units = hlp.units2dic(unitsL, unitsT, unitsZ)
+    Units["cal_source"] = "Dataset probe axis (PDAT header)"
     return Zavg_R, delays, probe, Units, Nscans, Zss_R, Zstdv
 
 
@@ -364,39 +365,50 @@ def read_UniGE_nsTA(datafilename: str) -> LoaderResult:
 
     # Probe wavelength calibration lookup (pix2lam.mat or CalibratedProbe.csv)
     probe = None
+    cal_source = None
+    cal_level = None
     csv_candidates = [
-        path.parent / "CalibratedProbe.csv",
-        path.parent / "calib" / "CalibratedProbe.csv",
-        path.parent.parent / "CalibratedProbe.csv",
-        path.parent.parent / "calib" / "CalibratedProbe.csv",
+        (path.parent / "CalibratedProbe.csv", "data folder", "datadir"),
+        (path.parent / "calib" / "CalibratedProbe.csv", "calib folder", "datadir"),
+        (path.parent.parent / "CalibratedProbe.csv", "root folder", "rootdir"),
+        (path.parent.parent / "calib" / "CalibratedProbe.csv", "parent calib folder", "rootdir"),
     ]
-    for cand in csv_candidates:
+    for cand, loc, lvl in csv_candidates:
         if cand.is_file():
             try:
-                probe = np.loadtxt(cand, delimiter=",").ravel().astype(float)
-                break
+                cand_probe = np.loadtxt(cand, delimiter=",").ravel().astype(float)
+                if len(cand_probe) == Npixels:
+                    probe = cand_probe
+                    cal_source = f"CalibratedProbe.csv ({loc})"
+                    cal_level = lvl
+                    break
             except Exception:
                 pass
 
     if probe is None or len(probe) != Npixels:
         mat_candidates = [
-            path.parent / "pix2lam.mat",
-            path.parent / "calib" / "pix2lam.mat",
-            path.parent.parent / "pix2lam.mat",
-            path.parent.parent / "calib" / "pix2lam.mat",
+            (path.parent / "pix2lam.mat", "data folder", "datadir"),
+            (path.parent / "calib" / "pix2lam.mat", "calib folder", "datadir"),
+            (path.parent.parent / "pix2lam.mat", "root folder", "rootdir"),
+            (path.parent.parent / "calib" / "pix2lam.mat", "parent calib folder", "rootdir"),
         ]
-        for cand in mat_candidates:
+        for cand, loc, lvl in mat_candidates:
             if cand.is_file():
                 try:
                     mat = sio.loadmat(cand)
                     if "lam" in mat:
-                        probe = mat["lam"].ravel().astype(float)
-                        break
+                        cand_probe = mat["lam"].ravel().astype(float)
+                        if len(cand_probe) == Npixels:
+                            probe = cand_probe
+                            cal_source = f"pix2lam.mat ({loc})"
+                            cal_level = lvl
+                            break
                 except Exception:
                     pass
 
     if probe is None or len(probe) != Npixels:
         probe = np.arange(1, Npixels + 1, dtype=float)
+        cal_source = "Pixel indices (uncalibrated)"
 
     # Automatically cut edge pixels containing noise/nonsense (>100 mOD signal, >20 mOD noise, or empty <0.01 mOD)
     max_s = np.max(np.abs(tmpsignal), axis=0)
@@ -440,6 +452,8 @@ def read_UniGE_nsTA(datafilename: str) -> LoaderResult:
     Units["counts"] = cts
     Units["rms"] = tmprms
     Units["error"] = tmpnoise
+    Units["cal_source"] = cal_source
+    Units["cal_level"] = cal_level
     return Zavg_R, delays, probe, Units, Nscans, Zss_R, Zstdv, scan_ids, cts
 
 
@@ -524,39 +538,50 @@ def read_UniGE_fsTA(datafilename: str) -> LoaderResult:
 
     # Probe wavelength calibration lookup (CalibratedProbe.csv preferred, then pix2lam.mat)
     probe = None
+    cal_source = None
+    cal_level = None
     csv_candidates = [
-        path.parent / "CalibratedProbe.csv",
-        path.parent / "calib" / "CalibratedProbe.csv",
-        path.parent.parent / "CalibratedProbe.csv",
-        path.parent.parent / "calib" / "CalibratedProbe.csv",
+        (path.parent / "CalibratedProbe.csv", "data folder", "datadir"),
+        (path.parent / "calib" / "CalibratedProbe.csv", "calib folder", "datadir"),
+        (path.parent.parent / "CalibratedProbe.csv", "root folder", "rootdir"),
+        (path.parent.parent / "calib" / "CalibratedProbe.csv", "parent calib folder", "rootdir"),
     ]
-    for cand in csv_candidates:
+    for cand, loc, lvl in csv_candidates:
         if cand.is_file():
             try:
-                probe = np.loadtxt(cand, delimiter=",").ravel().astype(float)
-                break
+                cand_probe = np.loadtxt(cand, delimiter=",").ravel().astype(float)
+                if len(cand_probe) == Npixels:
+                    probe = cand_probe
+                    cal_source = f"CalibratedProbe.csv ({loc})"
+                    cal_level = lvl
+                    break
             except Exception:
                 pass
 
     if probe is None or len(probe) != Npixels:
         mat_candidates = [
-            path.parent / "pix2lam.mat",
-            path.parent / "calib" / "pix2lam.mat",
-            path.parent.parent / "pix2lam.mat",
-            path.parent.parent / "calib" / "pix2lam.mat",
+            (path.parent / "pix2lam.mat", "data folder", "datadir"),
+            (path.parent / "calib" / "pix2lam.mat", "calib folder", "datadir"),
+            (path.parent.parent / "pix2lam.mat", "root folder", "rootdir"),
+            (path.parent.parent / "calib" / "pix2lam.mat", "parent calib folder", "rootdir"),
         ]
-        for cand in mat_candidates:
+        for cand, loc, lvl in mat_candidates:
             if cand.is_file():
                 try:
                     mat = sio.loadmat(cand)
                     if "lam" in mat:
-                        probe = mat["lam"].ravel().astype(float)
-                        break
+                        cand_probe = mat["lam"].ravel().astype(float)
+                        if len(cand_probe) == Npixels:
+                            probe = cand_probe
+                            cal_source = f"pix2lam.mat ({loc})"
+                            cal_level = lvl
+                            break
                 except Exception:
                     pass
 
     if probe is None or len(probe) != Npixels:
         probe = np.arange(1, Npixels + 1, dtype=float)
+        cal_source = "Pixel indices (uncalibrated)"
 
     # Pixel trimming calculation (0-based indexing)
     if probe[0] >= probe[-1]:
@@ -618,6 +643,8 @@ def read_UniGE_fsTA(datafilename: str) -> LoaderResult:
     scan_ids = list(range(int(Nscans))) if not np.isnan(Nscans) else None
 
     Units = hlp.units2dic("nm", "ps", "x1E3")
+    Units["cal_source"] = cal_source
+    Units["cal_level"] = cal_level
     return Zavg_R, delays, probe, Units, Nscans, Zss_R, Zstdv, scan_ids
 
 
@@ -770,17 +797,27 @@ def read_UoS_IRpp(
 
     # Probe wavenumber calibration lookup
     cal_file = folder / "CalibratedProbe.csv"
+    cal_loc = "data folder"
+    cal_lvl = "datadir"
     if not cal_file.is_file():
         cal_file = folder.parent / "CalibratedProbe.csv"
+        cal_loc = "root folder"
+        cal_lvl = "rootdir"
 
     probe = None
+    cal_source = None
+    cal_level = None
     if cal_file.is_file():
         try:
             tmp_probe = np.loadtxt(cal_file, delimiter=",").ravel().astype(float)
             if n_detectors == 2 and len(tmp_probe) >= 192:
                 probe = np.column_stack([tmp_probe[:96], tmp_probe[96:192]])
-            else:
+                cal_source = f"CalibratedProbe.csv ({cal_loc})"
+                cal_level = cal_lvl
+            elif len(tmp_probe) >= pixels_per_det:
                 probe = tmp_probe[:pixels_per_det]
+                cal_source = f"CalibratedProbe.csv ({cal_loc})"
+                cal_level = cal_lvl
         except Exception:
             probe = None
 
@@ -793,11 +830,15 @@ def read_UoS_IRpp(
                 for d in range(n_detectors)
             ]
             probe = np.column_stack(probe_cols) if n_detectors > 1 else probe_cols[0]
+            cal_source = f"Estimated from log file ({lg_file.name})"
         else:
             pix = np.arange(1, pixels_per_det + 1, dtype=float)
             probe = np.column_stack([pix] * n_detectors) if n_detectors > 1 else pix
+            cal_source = "Pixel indices (uncalibrated)"
 
     Units = hlp.units2dic("cm^{-1}", units_T, "x1E3")
+    Units["cal_source"] = cal_source
+    Units["cal_level"] = cal_level
     return Zavg_R, delays, probe, Units, Nscans_val, Zss_R, Zstdv, scan_ids
 
 
@@ -1163,13 +1204,16 @@ def _read_mess(
     # Probe axis: a calibrated-probe file overrides the acquisition axis
     # (dataset folder = level 2, takes precedence over the root folder = level 1);
     # otherwise the format-specific file (wavenumbers / wavelengths) is used.
-    cal_path, _cal_level = _mess_probe_calibration(folder)
+    cal_path, cal_level = _mess_probe_calibration(folder)
     if cal_path is not None:
         probe = np.loadtxt(cal_path, delimiter=",").ravel().astype(float)
+        loc = "data folder" if cal_level == "datadir" else "root folder"
+        cal_source = f"CalibratedProbe.csv ({loc})"
     else:
         probe = (
             np.loadtxt(folder / f"{name}_{probe_suffix}.csv", delimiter=",").ravel().astype(float)
         )
+        cal_source = f"Dataset probe axis ({name}_{probe_suffix}.csv)"
 
     rawsignal, noise = _mess_combine(folder, name, sp, sm, anisotropy, n_slowmod)
 
@@ -1198,6 +1242,8 @@ def _read_mess(
     Nscans = nscans
 
     Units = hlp.units2dic(units_L, unitsT, "x1E3")
+    Units["cal_source"] = cal_source
+    Units["cal_level"] = cal_level
     info_file = _find_mess_sample_info_file(folder)
     if info_file is not None:
         info_str = parse_mess_sample_info(info_file)
@@ -1299,6 +1345,31 @@ def _mess_describe(folder: Path) -> dict:
 register_dataset_glob("HARPIA_TA", "*.dat")
 
 
+def _is_harpia_main_file(path: Path) -> bool:
+    """Whether ``path`` is a HARPIA-TA dataset file (excluding matrix, stats, FluDep, etc.)."""
+    if not path.is_file() or path.suffix.lower() != ".dat":
+        return False
+    stem = path.stem
+    if stem.lower().endswith(("_matrix", "_stats")):
+        return False
+    if re.search(r"(?:^|_)fludep(?:_\d+)?$", stem, re.IGNORECASE):
+        return False
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            header_sample = f.read(2048)
+        if "Pump-probe" not in header_sample and "Wavelength" not in header_sample:
+            return False
+        return True
+    except Exception:
+        return False
+
+
+@register_dataset_file_filter("HARPIA_TA")
+def _harpia_file_filter(path: Path) -> bool:
+    """Filter files for dataset listing so only main HARPIA dataset files are shown."""
+    return _is_harpia_main_file(Path(path))
+
+
 @register_loader("HARPIA_TA")
 def read_HARPIA(datafilename: str) -> LoaderResult:
     """Read a Light Conversion HARPIA-TA transient absorption data file (.dat).
@@ -1340,6 +1411,7 @@ def read_HARPIA(datafilename: str) -> LoaderResult:
     probe = np.fromstring(probe_str, sep="\t").astype(float)
     if probe.size == 0:
         raise ValueError(f"Could not parse wavelength probe axis from line 4 in {datafilename}.")
+    Npixels = len(probe)
 
     bcks: dict[int, dict[str, np.ndarray]] = {}
     meas: dict[int, list[dict[str, Any]]] = {}
@@ -1394,19 +1466,45 @@ def read_HARPIA(datafilename: str) -> LoaderResult:
     scans = sorted(meas.keys())
     Nscans = len(scans)
 
-    first_meas = meas[scans[0]]
-    raw_delays = np.array([m["delay"] for m in first_meas], dtype=float)
-
+    # Master delay grid: unique delays across all scans, sorted ascending
+    all_delays = sorted({m["delay"] for s in scans for m in meas[s]})
+    delays = np.array(all_delays, dtype=float)
+    Ndelays = len(delays)
     unitsT = "ps"
-    delays = raw_delays
 
-    fallback_bck = next(iter(bcks.values()), {"sp": 0.0, "rp": 0.0, "su": 0.0, "ru": 0.0})
+    # Probe wavelength calibration lookup (CalibratedProbe.csv preferred, then line 4 header)
+    cal_source = "Embedded HARPIA probe axis"
+    cal_level = None
+    cal_candidates = [
+        (path.parent / "CalibratedProbe.csv", "data folder", "datadir"),
+        (path.parent / "calib" / "CalibratedProbe.csv", "calib folder", "datadir"),
+        (path.parent.parent / "CalibratedProbe.csv", "root folder", "rootdir"),
+        (path.parent.parent / "calib" / "CalibratedProbe.csv", "parent calib folder", "rootdir"),
+    ]
+    for cand, loc, lvl in cal_candidates:
+        if cand.is_file():
+            try:
+                cal_probe = np.loadtxt(cand, delimiter=",").ravel().astype(float)
+                if len(cal_probe) == Npixels:
+                    probe = cal_probe
+                    cal_source = f"CalibratedProbe.csv ({loc})"
+                    cal_level = lvl
+                    break
+            except Exception:
+                pass
 
-    scan_signals = []
-    for scan in scans:
+    fallback_bck = next(
+        iter(bcks.values()),
+        {"sp": np.zeros(Npixels), "rp": np.zeros(Npixels), "su": np.zeros(Npixels), "ru": np.zeros(Npixels)},
+    )
+
+    Zss_R = np.full((Ndelays, Npixels, 1, Nscans), np.nan, dtype=float)
+
+    for s_idx, scan in enumerate(scans):
         bck = bcks.get(scan, fallback_bck)
         m_list = meas[scan]
-        scan_da = []
+        scan_delay_groups: dict[int, list[np.ndarray]] = {}
+
         for m in m_list:
             b_sp, b_rp, b_su, b_ru = bck["sp"], bck["rp"], bck["su"], bck["ru"]
             m_sp, m_rp, m_su, m_ru = m["sp"], m["rp"], m["su"], m["ru"]
@@ -1425,21 +1523,41 @@ def read_HARPIA(datafilename: str) -> LoaderResult:
                 da = 1000.0 * np.log10(ratio)
                 da = np.nan_to_num(da, nan=0.0, posinf=0.0, neginf=0.0)
 
-            scan_da.append(da)
-        scan_signals.append(np.array(scan_da))
+            d_matches = np.where(np.isclose(delays, m["delay"], atol=1e-5, rtol=1e-5))[0]
+            if len(d_matches) > 0:
+                d_i = int(d_matches[0])
+                scan_delay_groups.setdefault(d_i, []).append(da)
 
-    Zss_2d = np.stack(scan_signals, axis=-1)
-    Zss_R = Zss_2d[:, :, np.newaxis, :]
+        for d_i, da_list in scan_delay_groups.items():
+            if len(da_list) == 1:
+                Zss_R[d_i, :, 0, s_idx] = da_list[0]
+            else:
+                Zss_R[d_i, :, 0, s_idx] = np.mean(da_list, axis=0)
 
-    Zavg_R = np.mean(Zss_R, axis=-1)
-    if Nscans > 1:
-        Zstdv = np.std(Zss_R, axis=-1, ddof=1)
-    else:
-        Zstdv = np.zeros_like(Zavg_R)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        Zavg_R = np.nanmean(Zss_R, axis=-1)
+        if Nscans > 1:
+            import warnings
+
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", category=RuntimeWarning)
+                Zstdv = np.nanstd(Zss_R, axis=-1, ddof=1)
+            Zstdv = np.nan_to_num(Zstdv, nan=0.0)
+        else:
+            Zstdv = np.zeros_like(Zavg_R)
+
+    # Reverse probe & data axes if wavelength decreases with pixel index
+    if len(probe) > 1 and probe[0] >= probe[-1]:
+        probe = np.flip(probe)
+        Zavg_R = np.flip(Zavg_R, axis=1)
+        Zstdv = np.flip(Zstdv, axis=1)
+        Zss_R = np.flip(Zss_R, axis=1)
 
     scan_ids = [s - 1 for s in scans]
 
     Units = hlp.units2dic("nm", unitsT, "x1E3")
+    Units["cal_source"] = cal_source
+    Units["cal_level"] = cal_level
     return Zavg_R, delays, probe, Units, Nscans, Zss_R, Zstdv, scan_ids
 
 
@@ -1663,6 +1781,7 @@ def read_Helios_TA(datafilename: str, dataset_name: str | None = None) -> Loader
         scan_ids = None
 
     Units = hlp.units2dic("nm", "ps", "x1E3")
+    Units["cal_source"] = "Dataset probe axis (CSV header)"
     return Zavg_R, delays, probe, Units, Nscans, Zss_R, Zstdv, scan_ids
 
 
@@ -1796,6 +1915,7 @@ def read_Exported_TXT(datafilename: str) -> LoaderResult:
     Zstdv = np.zeros_like(Zavg_R)
 
     Units = hlp.units2dic(units_L, units_T, "x1E3")
+    Units["cal_source"] = f"Exported text file ({probe_file.name})"
     return Zavg_R, delays, probe, Units, Nscans, Zss_R, Zstdv
 
 

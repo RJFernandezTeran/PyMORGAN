@@ -209,9 +209,10 @@ class DatasetBrowserMixin:
                 files = []
             for f in files:
                 valid = True if twoD else is_dataset_file(dt, f)
-                entries.append((f.name, f, False, valid))
-                if valid:
-                    n_datasets += 1
+                if not valid:
+                    continue
+                entries.append((f.name, f, False, True))
+                n_datasets += 1
 
         if stamp is not None:
             if len(cache) > 32:

@@ -54,6 +54,7 @@ class Dataset2D:
         raw_interferogram=None,
         raw_t1delays=None,
         cal_level: str | None = None,
+        cal_source: str | None = None,
     ):
         self.Z_R = np.asarray(Z)
         self.pump = np.asarray(pump)
@@ -65,6 +66,7 @@ class Dataset2D:
         self.data_type = data_type
         self.in_progress = in_progress
         self.cal_level = cal_level
+        self.cal_source = cal_source
 
         self.raw_signal = raw_signal
         self.raw_interferogram = raw_interferogram
@@ -163,6 +165,7 @@ class Dataset2D:
                     cal_path = cand_root
 
         cal_level = None
+        cal_source = None
         if cal_path is not None:
             try:
                 # Load calibrated probe axis
@@ -170,12 +173,11 @@ class Dataset2D:
                 # Check that its length matches the probe shape
                 if len(calibrated_probe) == len(probe):
                     probe = calibrated_probe
-                    cal_level = (
-                        "datadir"
-                        if (folder.is_dir() and cal_path.parent == folder)
-                        or (not folder.is_dir() and cal_path.parent == folder.parent)
-                        else "rootdir"
+                    is_datadir = (folder.is_dir() and cal_path.parent == folder) or (
+                        not folder.is_dir() and cal_path.parent == folder.parent
                     )
+                    cal_level = "datadir" if is_datadir else "rootdir"
+                    cal_source = f"CalibratedProbe.csv ({'data folder' if is_datadir else 'root folder'})"
             except Exception:
                 logger.warning(
                     "Could not read the probe calibration file %s; "
@@ -183,6 +185,12 @@ class Dataset2D:
                     cal_path,
                     exc_info=True,
                 )
+
+        if cal_source is None:
+            if data_type == "MESS_2DIR":
+                cal_source = f"Dataset probe axis ({folder.name}_wavenumbers.csv)"
+            elif data_type == "P2DAT":
+                cal_source = "Dataset probe axis (P2DAT header)"
 
         return cls(
             Z,
@@ -199,6 +207,7 @@ class Dataset2D:
             raw_interferogram=raw_interferogram,
             raw_t1delays=raw_t1delays,
             cal_level=cal_level,
+            cal_source=cal_source,
         )
 
     # ----------------------------------------------------------------- #
@@ -412,6 +421,24 @@ class Dataset2D:
         else:
             lines.append("Sample Info: No additional sample information available.")
         return "\n".join(lines)
+
+    def calibration_status(self) -> str:
+        """Return a clean, human-readable probe calibration source description."""
+        cal_source = getattr(self, "cal_source", None)
+        if cal_source:
+            return cal_source
+        cal = getattr(self, "cal_level", None)
+        if cal == "datadir":
+            return "CalibratedProbe.csv (data folder)"
+        if cal == "rootdir":
+            return "CalibratedProbe.csv (root folder)"
+        if cal == "autocalibrated":
+            return "Auto-calibrated from CAL tab"
+        if self.data_type == "MESS_2DIR":
+            return "Dataset probe axis (wavenumbers.csv)"
+        if self.data_type == "P2DAT":
+            return "Dataset probe axis (P2DAT header)"
+        return "Dataset probe calibration"
 
     def print_sample_info(self) -> None:
         """Print the console-friendly summary of the 2-D dataset."""

@@ -80,13 +80,14 @@ def test_sample_info_without_noise(tmp_path):
     text_html = ds.sample_info().replace("<br>", "\n")
     text = re.sub("<[^<]+?>", "", text_html).replace("&nbsp;", " ")
     lines = text.split("\n")
-    line1, line2, line3, line4 = lines[0], lines[1], lines[2], lines[3]
+    line1, line2, line3, line4, line5 = lines[0], lines[1], lines[2], lines[3], lines[4]
 
     assert line1 == "No single scan data available"
     assert "SNR: Inf" in line2
     assert "Res.:" in line2 and "cm⁻¹" in line2
     assert f"Delays: {ds.delays.size}, range:" in line3
-    assert line4 == "Sample Info: No additional sample information available."
+    assert "Calibration:" in line4
+    assert line5 == "Sample Info: No additional sample information available."
 
 
 def test_sample_info_with_pdatn(tmp_path):
@@ -293,6 +294,86 @@ def test_load_harpia_synthetic_file(tmp_path):
     assert not np.isnan(ds.Zavg_R).all()
 
 
+def test_harpia_file_filter(tmp_path):
+    main_file = tmp_path / "sample.dat"
+    synthetic.make_synthetic_harpia_dataset(main_file)
+    matrix_file = tmp_path / "sample_matrix.dat"
+    matrix_file.write_text("matrix data")
+    stats_file = tmp_path / "sample_stats.dat"
+    stats_file.write_text("stats data")
+    fludep_file1 = tmp_path / "FluDep_1.dat"
+    fludep_file1.write_text("fludep data")
+    fludep_file2 = tmp_path / "FluDep_02.dat"
+    fludep_file2.write_text("fludep data")
+    fludep_file3 = tmp_path / "sample_FluDep_1.dat"
+    fludep_file3.write_text("fludep data")
+    other_dat = tmp_path / "random.dat"
+    other_dat.write_text("Random content\n")
+
+    assert is_dataset_file("HARPIA_TA", main_file) is True
+    assert is_dataset_file("HARPIA_TA", matrix_file) is False
+    assert is_dataset_file("HARPIA_TA", stats_file) is False
+    assert is_dataset_file("HARPIA_TA", fludep_file1) is False
+    assert is_dataset_file("HARPIA_TA", fludep_file2) is False
+    assert is_dataset_file("HARPIA_TA", fludep_file3) is False
+    assert is_dataset_file("HARPIA_TA", other_dat) is False
+
+
+def test_harpia_missing_delay_in_scan(tmp_path):
+    # Construct a dataset where scan 2 is missing one delay
+    probe = np.linspace(300.0, 500.0, 10)
+    delays_scan1 = [-2.0, 0.0, 1.0, 5.0, 10.0]
+    delays_scan2 = [-2.0, 0.0, 5.0, 10.0]  # Missing 1.0
+
+    lines = [
+        "Pump-probe, Not referenced, 1000 Hz",
+        "Background header",
+        "Measurement header",
+        "Wavelength:\t" + "\t".join(f"{p:.4f}" for p in probe),
+        "Background, scan 1, Delay -2.0000",
+        "Pump=0.0",
+        "\t".join(["0.1"] * 10),
+        "\t".join(["0.1"] * 10),
+        "\t".join(["0.1"] * 10),
+        "\t".join(["0.1"] * 10),
+    ]
+    for d in delays_scan1:
+        lines.append(f"Measurement, scan 1, Delay {d:.4f}")
+        lines.append("Pump=1.0")
+        lines.extend(["\t".join(["1.5"] * 10)] * 4)
+
+    lines.append("Background, scan 2, Delay -2.0000")
+    lines.append("Pump=0.0")
+    lines.extend(["\t".join(["0.1"] * 10)] * 4)
+
+    for d in delays_scan2:
+        lines.append(f"Measurement, scan 2, Delay {d:.4f}")
+        lines.append("Pump=1.0")
+        lines.extend(["\t".join(["1.5"] * 10)] * 4)
+
+    dat_file = tmp_path / "missing_delay.dat"
+    dat_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    ds = pm.load_1D(dat_file, data_type="HARPIA_TA")
+    assert ds.nscans == 2
+    assert ds.Zavg_R.shape == (5, 10, 1)
+    assert ds.Zss_R.shape == (5, 10, 1, 2)
+    # Check that the missing delay in scan 2 is NaN in single scans
+    # Delay 1.0 is at index 2 ([-2, 0, 1, 5, 10])
+    assert np.isnan(ds.Zss_R[2, :, 0, 1]).all()
+    assert not np.isnan(ds.Zss_R[2, :, 0, 0]).any()
+    assert not np.isnan(ds.Zavg_R[2, :, 0]).any()
+
+
+def test_harpia_calibrated_probe_override(tmp_path):
+    info = synthetic.make_synthetic_harpia_dataset(tmp_path / "sample_cal.dat", nscans=2)
+    cal_probe = np.linspace(400.0, 600.0, 10)
+    np.savetxt(tmp_path / "CalibratedProbe.csv", cal_probe, delimiter=",")
+
+    ds = pm.load_1D(info["path"], data_type="HARPIA_TA")
+    assert np.allclose(ds.probe, cal_probe)
+
+
 def test_harpia_missing_file_raises():
     with pytest.raises(FileNotFoundError):
         pm.load_1D("non_existent_harpia_file.dat", data_type="HARPIA_TA")
@@ -303,6 +384,27 @@ def test_harpia_invalid_file_raises(tmp_path):
     invalid_file.write_text("Not a HARPIA file\nHeader line 1\nHeader line 2\nLine 3\n")
     with pytest.raises(ValueError, match="valid HARPIA"):
         pm.load_1D(invalid_file, data_type="HARPIA_TA")
+
+
+def test_harpia_demo_data_loading():
+    demo_dir = Path(r"D:\RicardoFiles\switchdrive\Ambizione UniGE\Scripts\testData\HARPIA\probe spectra for wl calibration\demo data")
+    if not demo_dir.is_dir():
+        pytest.skip("Demo dataset directory not available on local path")
+
+    files = [
+        demo_dir / "RuBiPy_water_430nm_UV_10kHz_25CD_TA_1.dat",
+        demo_dir / "I0B3_TOL_430nm_UV_10kHz_20CD_30pct_TA_1.dat",
+    ]
+    for f in files:
+        if f.is_file():
+            assert is_dataset_file("HARPIA_TA", f) is True
+            ds = pm.load_1D(str(f), data_type="HARPIA_TA")
+            assert ds.data_type == "HARPIA_TA"
+            assert ds.Zavg_R.ndim == 3
+            assert len(ds.delays) > 0
+            assert len(ds.probe) > 0
+            assert np.isfinite(ds.Zavg_R).any()
+
 
 
 # --------------------------------------------------------------------------- #
