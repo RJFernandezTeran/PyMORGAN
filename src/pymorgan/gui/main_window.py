@@ -1107,41 +1107,39 @@ class MainWindow(
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(manual)))
 
     def _about(self):
-        """Show the About dialog: the window image on top, text below."""
+        """Show the modern dark-themed About dialog."""
         from pymorgan.__about__ import __author__, __email__
 
-        text = (
-            "PyMORGAN: Multidimensional Optical spectroscopy Graphical "
-            "Analysis iNterface\n\n"
-            f"Version {pm.__version__}\n\n"
-            f"{__author__} ({__email__.replace('[at]', ' [at] ')})\n\n"
-            "Plotting and analysis of ultrafast time-resolved spectroscopy "
-            "(1-D, 2-D and steady-state) data."
+        from .about_dialog import ModernAboutDialog
+
+        email = __email__.replace("[at]", "@")
+        icons_dir = Path(__file__).with_name("icons")
+        banner_path = icons_dir / "window.png"
+        icon_path = icons_dir / "pirate-hat.png"
+        manual_path = Path(pm.__file__).resolve().parent.parent.parent / "docs" / "main.pdf"
+
+        dlg = ModernAboutDialog(
+            parent=self,
+            title="About PyMORGAN",
+            app_name="PyMORGAN",
+            version=pm.__version__,
+            subtitle="Multidimensional Optical Spectroscopy Graphical Analysis Interface",
+            description=(
+                "PyMORGAN provides interactive plotting and analysis of ultrafast "
+                "time-resolved spectroscopy (1-D, 2-D and steady-state) data."
+            ),
+            author=__author__,
+            department="Department of Physical Chemistry",
+            institution="University of Geneva, Switzerland",
+            contact_email=email,
+            website_url="https://www.unige.ch/sciences/chifi/fernandez-teran/",
+            license_name="AGPL-3.0 License",
+            github_url="https://github.com/RJFernandezTeran/PyMORGAN",
+            banner_path=str(banner_path) if banner_path.exists() else None,
+            icon_path=str(icon_path) if icon_path.exists() else None,
+            manual_pdf_path=str(manual_path) if manual_path.exists() else None,
+            ai_credit="Developed with AI assistance from <b>Google Antigravity</b>.",
         )
-        dlg = QDialog(self)
-        dlg.setWindowTitle("About PyMORGAN")
-        layout = QVBoxLayout(dlg)
-
-        image_path = Path(__file__).with_name("icons") / "window.png"
-        pix = QPixmap(str(image_path))
-        if not pix.isNull():
-            if pix.width() > 240:
-                pix = pix.scaledToWidth(360, Qt.TransformationMode.SmoothTransformation)
-            image_label = QLabel(dlg)
-            image_label.setPixmap(pix)
-            image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            layout.addWidget(image_label)
-
-        text_label = QLabel(text, dlg)
-        text_label.setWordWrap(True)
-        text_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        text_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
-        layout.addWidget(text_label)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok, parent=dlg)
-        buttons.accepted.connect(dlg.accept)
-        layout.addWidget(buttons)
-
         dlg.exec()
 
     def _retain_hidden_space(self):

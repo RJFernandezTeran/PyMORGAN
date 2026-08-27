@@ -351,13 +351,48 @@ def test_plot_noise_button_enabled_state(qapp, tmp_path):
     synthetic.make_synthetic_pdatn(pdat2_info["path"])
     win.load_path(pdat2_info["path"], "PDAT")
     assert win.PP_plotNoise_btn.isEnabled()
-
-    # Load MESS dataset with single scans -> enabled
+    # Load MESS dataset with single scans -> enabled
     mess_info = synthetic.make_synthetic_mess(tmp_path / "mess_noise", nscans=3)
     win.load_path(mess_info["folder"], "MESS_TRIR")
     assert win.PP_plotNoise_btn.isEnabled()
 
     win.close()
+
+
+def test_about_dialog(qapp, monkeypatch):
+    from pymorgan.gui.about_dialog import ModernAboutDialog
+
+    dlg = ModernAboutDialog(
+        title="About PyMORGAN",
+        app_name="PyMORGAN",
+        version="1.0.0",
+        subtitle="Multidimensional Optical Spectroscopy Graphical Analysis Interface",
+        description="Testing PyMORGAN about dialog.",
+        github_url="https://github.com/RJFernandezTeran/PyMORGAN",
+        manual_pdf_path="non_existent_manual.pdf",
+    )
+    assert dlg.windowTitle() == "About PyMORGAN"
+    assert dlg.isModal() is True
+
+    # Test open manual warning path when manual does not exist
+    warned = []
+    monkeypatch.setattr(
+        "PyQt6.QtWidgets.QMessageBox.warning",
+        lambda *args, **kwargs: warned.append(True),
+    )
+    dlg._on_open_manual()
+    assert len(warned) == 1
+
+    # Test open GitHub URL
+    opened_urls = []
+    monkeypatch.setattr(
+        "PyQt6.QtGui.QDesktopServices.openUrl",
+        lambda url: opened_urls.append(url.toString()),
+    )
+    dlg._on_open_github()
+    assert opened_urls == ["https://github.com/RJFernandezTeran/PyMORGAN"]
+
+    dlg.close()
 
 
 def test_twoD_gaussian_dialog(qapp, tmp_path):
@@ -455,3 +490,11 @@ def test_twoD_gaussian_dialog(qapp, tmp_path):
 
     dlg.close()
 
+
+def test_main_window_about_invokes_modern_dialog(window, monkeypatch):
+    executed = []
+    from pymorgan.gui.about_dialog import ModernAboutDialog
+
+    monkeypatch.setattr(ModernAboutDialog, "exec", lambda self: executed.append(True))
+    window._about()
+    assert len(executed) == 1
