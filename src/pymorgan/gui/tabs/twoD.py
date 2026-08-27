@@ -20,6 +20,7 @@ from PyQt6.QtGui import (
     QStandardItem,
 )
 from PyQt6.QtWidgets import (
+    QDialog,
     QFileDialog,
     QHBoxLayout,
     QInputDialog,
@@ -1776,7 +1777,7 @@ class TwoDTabMixin:
             ax.scatter(
                 t_fit,
                 y_fit,
-                color=color,
+                color=colour,
                 s=40,
                 edgecolor="black",
                 alpha=0.9,

@@ -102,6 +102,10 @@ class Spectrum:
             source=self.source,
         )
 
+    def normalized(self) -> Spectrum:
+        """Alias for :meth:`normalised`."""
+        return self.normalised()
+
     def to_stimulated_emission(self) -> Spectrum:
         """Return the stimulated-emission spectrum ``F_stim = F_spont * x^4``.
 
@@ -146,6 +150,7 @@ class Spectrum:
         settings: Settings | None = None,
         label_style: str | None = None,
         normalise: bool = False,
+        normalize: bool | None = None,
         **kwargs,
     ):
         """Plot the spectrum on its own. Extra kwargs go to ``Axes.plot``."""
@@ -153,6 +158,8 @@ class Spectrum:
 
         from pymorgan import helpers as hlp
 
+        if normalize is not None:
+            normalise = normalize
         s = settings or get_settings()
         style = label_style if label_style is not None else s.label_style.value
         spec = self.normalised() if normalise else self
@@ -211,6 +218,10 @@ class SpectrumSeries:
         """Return a copy in which every spectrum is normalised."""
         return SpectrumSeries(sp.normalised() for sp in self.spectra)
 
+    def normalized(self) -> SpectrumSeries:
+        """Alias for :meth:`normalised`."""
+        return self.normalised()
+
     def plot(
         self,
         ax=None,
@@ -218,6 +229,7 @@ class SpectrumSeries:
         settings: Settings | None = None,
         label_style: str | None = None,
         normalise: bool = False,
+        normalize: bool | None = None,
         cmap: str = "rainbow",
         **kwargs,
     ):
@@ -226,6 +238,8 @@ class SpectrumSeries:
 
         from pymorgan import helpers as hlp
 
+        if normalize is not None:
+            normalise = normalize
         if not self.spectra:
             raise ValueError("SpectrumSeries is empty.")
 
@@ -237,7 +251,7 @@ class SpectrumSeries:
             _, ax = plt.subplots()
         colours = plt.get_cmap(cmap)(np.linspace(0, 1, len(series)))
         for colour, spec in zip(colours, series, strict=False):
-            ax.plot(spec.x, spec.y, color=color, label=spec.label, **kwargs)
+            ax.plot(spec.x, spec.y, color=colour, label=spec.label, **kwargs)
 
         x_units, y_units = series.spectra[0]._xy_units()
         hlp.setXYlabels(ax, style, x_units, y_units, normY=normalise)

@@ -89,17 +89,19 @@ def diagonal(
 
 def antidiagonal(
     data,
-    centre: tuple[float, float],
+    centre: tuple[float, float] | None = None,
     t2: float | None = None,
     method: str = "linear",
     num_points: int | None = None,
+    *,
+    center: tuple[float, float] | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Return anti-diagonal cut passing through centre=(w1_0, w3_0) along w1 + w3 = w1_0 + w3_0.
 
     Parameters
     ----------
     data : Dataset2D
-    centre : tuple (w1_0, w3_0)
+    centre, center : tuple (w1_0, w3_0)
         Peak centre coordinates.
     t2 : float, optional
     method : str, default 'linear'
@@ -114,7 +116,10 @@ def antidiagonal(
     """
     from scipy.interpolate import RegularGridInterpolator
 
-    w1_0, w3_0 = float(centre[0]), float(centre[1])
+    c = centre if centre is not None else center
+    if c is None:
+        raise TypeError("antidiagonal() missing required argument: 'centre' (or 'center')")
+    w1_0, w3_0 = float(c[0]), float(c[1])
     C = w1_0 + w3_0
 
     p_min, p_max = float(np.min(data.pump)), float(np.max(data.pump))
@@ -124,7 +129,7 @@ def antidiagonal(
     w1_hi = min(p_max, C - r_min)
 
     if not w1_lo < w1_hi:
-        raise ValueError(f"Anti-diagonal cut through centre={centre} falls outside data range.")
+        raise ValueError(f"Anti-diagonal cut through centre={c} falls outside data range.")
 
     N = num_points if (num_points and num_points > 1) else 50
     w1_pts = np.linspace(w1_lo, w1_hi, N)
@@ -154,9 +159,11 @@ def antidiagonal(
 
 def compare_diag_antidiag(
     data,
-    centre: tuple[float, float],
+    centre: tuple[float, float] | None = None,
     t2: float | None = None,
     method: str = "cubic",
+    *,
+    center: tuple[float, float] | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Extract and normalise Diagonal and Anti-Diagonal profiles passing through centre=(w1_0, w3_0).
 
@@ -169,26 +176,38 @@ def compare_diag_antidiag(
     norm_antidiag : ndarray
         Anti-diagonal profile normalised to peak max = 1.0.
     """
-    w1_0, w3_0 = centre
+    c = centre if centre is not None else center
+    if c is None:
+        raise TypeError("compare_diag_antidiag() missing required argument: 'centre' (or 'center')")
+    w1_0, w3_0 = float(c[0]), float(c[1])
     offset = w3_0 - w1_0
 
     w1_d, sig_d = diagonal(data, t2=t2, offset=offset, method=method, num_points=100)
     rel_disp_d = w1_d - w1_0
 
-    rel_disp_a, sig_a = antidiagonal(data, centre=centre, t2=t2, method=method, num_points=100)
+    rel_disp_a, sig_a = antidiagonal(data, centre=c, t2=t2, method=method, num_points=100)
 
     disp_min = max(np.min(rel_disp_d), np.min(rel_disp_a))
     disp_max = min(np.max(rel_disp_d), np.max(rel_disp_a))
     rel_disp = np.linspace(disp_min, disp_max, 100)
 
-    norm_diag = np.interp(rel_disp, rel_disp_d, sig_d)
-    norm_antidiag = np.interp(rel_disp, rel_disp_a, sig_a)
-
-    max_d = np.max(np.abs(norm_diag)) or 1.0
-    max_a = np.max(np.abs(norm_antidiag)) or 1.0
-
-    norm_diag = norm_diag / max_d
-    norm_antidiag = norm_antidiag / max_a
+    if sig_d.ndim == 1:
+        norm_diag = np.interp(rel_disp, rel_disp_d, sig_d)
+        norm_antidiag = np.interp(rel_disp, rel_disp_a, sig_a)
+        max_d = np.max(np.abs(norm_diag)) or 1.0
+        max_a = np.max(np.abs(norm_antidiag)) or 1.0
+        norm_diag = norm_diag / max_d
+        norm_antidiag = norm_antidiag / max_a
+    else:
+        norm_diag = np.zeros((len(rel_disp), sig_d.shape[1]))
+        norm_antidiag = np.zeros((len(rel_disp), sig_a.shape[1]))
+        for k in range(sig_d.shape[1]):
+            nd = np.interp(rel_disp, rel_disp_d, sig_d[:, k])
+            na = np.interp(rel_disp, rel_disp_a, sig_a[:, k])
+            max_d = np.max(np.abs(nd)) or 1.0
+            max_a = np.max(np.abs(na)) or 1.0
+            norm_diag[:, k] = nd / max_d
+            norm_antidiag[:, k] = na / max_a
 
     return rel_disp, norm_diag, norm_antidiag
 

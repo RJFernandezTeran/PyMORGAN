@@ -645,17 +645,32 @@ class Dataset2D:
 
         return analyse.diagonal(self, t2=t2, offset=offset, method=method, num_points=num_points)
 
-    def antidiagonal(self, centre: tuple[float, float], t2=None, method: str = "linear", num_points: int | None = None):
+    def antidiagonal(
+        self,
+        centre: tuple[float, float] | None = None,
+        t2=None,
+        method: str = "linear",
+        num_points: int | None = None,
+        *,
+        center: tuple[float, float] | None = None,
+    ):
         """Return ``(rel_disp, signal)`` along anti-diagonal cut passing through centre."""
         from . import analyse
 
-        return analyse.antidiagonal(self, centre=centre, t2=t2, method=method, num_points=num_points)
+        return analyse.antidiagonal(self, centre=centre, t2=t2, method=method, num_points=num_points, center=center)
 
-    def compare_diag_antidiag(self, centre: tuple[float, float], t2=None, method: str = "cubic"):
+    def compare_diag_antidiag(
+        self,
+        centre: tuple[float, float] | None = None,
+        t2=None,
+        method: str = "cubic",
+        *,
+        center: tuple[float, float] | None = None,
+    ):
         """Return ``(rel_disp, norm_diag, norm_antidiag)`` comparing normalised profiles."""
         from . import analyse
 
-        return analyse.compare_diag_antidiag(self, centre=centre, t2=t2, method=method)
+        return analyse.compare_diag_antidiag(self, centre=centre, t2=t2, method=method, center=center)
 
     def integral_dynamics(self, pump_range: tuple[float, float], probe_range: tuple[float, float], method: str = "trapezoid"):
         """Return ``(delays, I_t2)`` for 2D ROI integration across population delays."""
@@ -665,6 +680,12 @@ class Dataset2D:
 
     def center_line_slope(self, *args, **kwargs):
         """Centre-line-slope analysis."""
+        from . import analyse
+
+        return analyse.center_line_slope(self, *args, **kwargs)
+
+    def centre_line_slope(self, *args, **kwargs):
+        """Alias for :meth:`center_line_slope`."""
         from . import analyse
 
         return analyse.center_line_slope(self, *args, **kwargs)

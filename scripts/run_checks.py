@@ -28,6 +28,7 @@ REPO = Path(__file__).resolve().parent.parent
 # source regardless of how the script is invoked or what is installed in
 # the active environment (a stale site-packages copy otherwise shadows it).
 sys.path.insert(0, str(REPO))
+sys.path.insert(0, str(REPO / "src"))
 sys.path.insert(0, str(REPO / "tests"))
 import synthetic  # noqa: E402
 

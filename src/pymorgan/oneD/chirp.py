@@ -587,7 +587,7 @@ def _movmedian(x: np.ndarray, window: int) -> np.ndarray:
     import pandas as pd
 
     s = pd.Series(np.asarray(x, dtype=float))
-    return s.rolling(window=max(1, int(window)), centre=True, min_periods=1).median().to_numpy()
+    return s.rolling(window=max(1, int(window)), center=True, min_periods=1).median().to_numpy()
 
 
 def _interpolate_nans(x: np.ndarray) -> np.ndarray:
@@ -1454,6 +1454,7 @@ def fit_chirp_wavelet(
     do_2nd_pass: bool = True,
     smooth_window: int = 10,
     optimise_wavelet: bool = False,
+    optimize_wavelet: bool | None = None,
     opt_max_iter: int = 100,
     opt_progress_callback: Callable[[int, str, float], None] | None = None,
     fit_pixels: Sequence[int] | None = None,
@@ -1467,7 +1468,7 @@ def fit_chirp_wavelet(
     Based on the method by Kefer et al. (Applied Optics 2024). Convolves raw
     kinetics with a Morlet wavelet to isolate edge-like signal onsets (modulus peak).
 
-    When ``optimise_wavelet=True``, the wavelet parameters ``omega_w`` and ``gamma_w``
+    When ``optimise_wavelet=True`` (or ``optimize_wavelet=True``), the wavelet parameters ``omega_w`` and ``gamma_w``
     are refined iteratively before the main per-pixel scan. A Nelder-Mead simplex
     optimiser minimises the RMS of the ``t0`` residuals around the fitted Cauchy
     dispersion curve -- i.e. it finds the wavelet shape that yields the smoothest,
@@ -1476,6 +1477,8 @@ def fit_chirp_wavelet(
     (``fit.omega_w``, ``fit.gamma_w``). ``opt_progress_callback``, if given, is called
     after every optimiser iteration as ``(iter_number, param_summary_str, rms_fs)``.
     """
+    if optimize_wavelet is not None:
+        optimise_wavelet = optimize_wavelet
     delays = np.asarray(data.delays, dtype=float)
     probe = data._detector_probe(detector)
     Z = data._detector_slice(detector)

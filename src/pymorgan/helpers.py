@@ -846,19 +846,20 @@ def ApplyMasks(mask_rgns, X):
     return X
 
 
-def add_glow(ax, x, y, colour, base_frac=0.04):
+def add_glow(ax, x, y, colour=None, base_frac=0.04, *, color=None):
     """
     Adds a soft glow around a curve.
     Thickness adapts automatically to axis y-range.
     """
+    col = colour if colour is not None else color
     ymin, ymax = ax.get_ylim()
     yrange = ymax - ymin
 
     for alpha, frac in zip([0.05, 0.08, 0.12], [base_frac * 1.6, base_frac, base_frac * 0.6], strict=True):
         width = frac * yrange
-        ax.fill_between(x, y - width, y + width, color=color, alpha=alpha, linewidth=0)
+        ax.fill_between(x, y - width, y + width, color=col, alpha=alpha, linewidth=0)
 
-    ax.plot(x, y, color=color, linewidth=2, solid_capstyle="round")
+    ax.plot(x, y, color=col, linewidth=2, solid_capstyle="round")
 
 
 def parse_value_list(text: str, all_values=None) -> list[float] | None:

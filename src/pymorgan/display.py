@@ -186,8 +186,8 @@ def add_subplot_labels(
         "top-right": ("top-right", "tr"),
         "bottom-left": ("bottom-left", "bl"),
         "bottom-right": ("bottom-right", "br"),
-        "top-centre": ("top-centre", "tc"),
-        "bottom-centre": ("bottom-centre", "bc"),
+        "top-centre": ("top-centre", "top-center", "tc"),
+        "bottom-centre": ("bottom-centre", "bottom-center", "bc"),
     }
     # Resolve aliases
     resolved_pos = "top-left"
@@ -213,10 +213,10 @@ def add_subplot_labels(
                 ha, va = "right", "bottom"
             case "top-centre":
                 x, y = 0.5, 1.0 - y_pad
-                ha, va = "centre", "top"
+                ha, va = "center", "top"
             case "bottom-centre":
                 x, y = 0.5, y_pad
-                ha, va = "centre", "bottom"
+                ha, va = "center", "bottom"
     else:  # outside
         match resolved_pos:
             case "top-left":
@@ -233,10 +233,10 @@ def add_subplot_labels(
                 ha, va = "left", "top"
             case "top-centre":
                 x, y = 0.5, 1.0 + y_pad
-                ha, va = "centre", "bottom"
+                ha, va = "center", "bottom"
             case "bottom-centre":
                 x, y = 0.5, -y_pad
-                ha, va = "centre", "top"
+                ha, va = "center", "top"
 
     text_objs = []
     for idx, ax in enumerate(flat_axes):

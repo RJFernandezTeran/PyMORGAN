@@ -564,7 +564,7 @@ def _draw_overlay_helper(
     if style_val in (OverlayDrawStyle.POINTS, OverlayDrawStyle.BOTH, "Points", "Both"):
         x_plot = y_raw if is_vertical else x_raw
         y_plot = x_raw if is_vertical else y_raw
-        ax.plot(x_plot, y_plot, "o", color=color, markersize=lw * 3, zorder=5)
+        ax.plot(x_plot, y_plot, "o", color=colour, markersize=lw * 3, zorder=5)
 
     # 2. Plot the line if style is Lines or Both (using idealized best-fit line)
     if style_val in (OverlayDrawStyle.LINES, OverlayDrawStyle.BOTH, "Lines", "Both"):
@@ -573,7 +573,7 @@ def _draw_overlay_helper(
             x_line, y_line = line
             x_plot = y_line if is_vertical else x_line
             y_plot = x_line if is_vertical else y_line
-            ax.plot(x_plot, y_plot, "-", color=color, linewidth=lw, zorder=5)
+            ax.plot(x_plot, y_plot, "-", color=colour, linewidth=lw, zorder=5)
         elif fit_params is not None and len(x_raw) > 0:
             m, c = fit_params
             if is_inverse:
@@ -587,11 +587,11 @@ def _draw_overlay_helper(
 
             x_plot = y_line if is_vertical else x_line
             y_plot = x_line if is_vertical else y_line
-            ax.plot(x_plot, y_plot, "-", color=color, linewidth=lw, zorder=5)
+            ax.plot(x_plot, y_plot, "-", color=colour, linewidth=lw, zorder=5)
         elif len(x_raw) > 0:
             x_plot = y_raw if is_vertical else x_raw
             y_plot = x_raw if is_vertical else y_raw
-            ax.plot(x_plot, y_plot, "-", color=color, linewidth=lw, zorder=5)
+            ax.plot(x_plot, y_plot, "-", color=colour, linewidth=lw, zorder=5)
 
 
 def plot_surface(
