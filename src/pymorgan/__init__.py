@@ -60,6 +60,8 @@ _EXPORTS: dict[str, str] = {
     "available_spectrum_loaders": ".steadyState",
     "load_spectrum": ".steadyState",
     "register_spectrum_loader": ".steadyState",
+    # calibration
+    "available_calibration_types": ".cal",
     # settings
     "DeltaAUnits": ".settings",
     "FreqLabel": ".settings",
@@ -88,6 +90,7 @@ _EXPORTS: dict[str, str] = {
 _SUBMODULES = ("oneD", "twoD", "steadyState", "settings", "display", "helpers", "cal", "log")
 
 if TYPE_CHECKING:  # keeps type checkers and IDE completion fully informed
+    from .cal import available_calibration_types
     from .display import add_subplot_labels, close_plots, show, show_plots
     from .oneD import (
         Dataset1D,
@@ -170,6 +173,8 @@ __all__ = [
     "load_spectrum",
     "register_spectrum_loader",
     "available_spectrum_loaders",
+    # calibration
+    "available_calibration_types",
     # settings
     "Settings",
     "StyleProfile",

@@ -393,30 +393,10 @@ def subpixel_peak(x, y, idx, method="quadratic", window: int = 2, want_min: bool
 
 
 def robust_polyfit(x, y):
-    """Robust linear fit (y = m * x + c) using Huber loss minimization."""
-    from scipy.optimize import minimize
+    """Robust linear fit (y = m * x + c) using MSAC consensus sampling and Tukey's bisquare IRLS."""
+    from .process import robust_polyfit as _process_robust_polyfit
 
-    if len(x) < 3:
-        # Fallback to standard linear fit if not enough points
-        return np.polyfit(x, y, 1)
-
-    p0 = np.polyfit(x, y, 1)
-
-    def huber_loss(params, x, y):
-        m, c = params
-        diff = y - (m * x + c)
-        std_dev = np.std(diff) if np.std(diff) > 1e-5 else 1.0
-        delta = 1.345 * std_dev
-        abs_diff = np.abs(diff)
-        loss = np.where(abs_diff <= delta,
-                        0.5 * (diff ** 2),
-                        delta * (abs_diff - 0.5 * delta))
-        return np.sum(loss)
-
-    res = minimize(huber_loss, p0, args=(x, y), method='BFGS')
-    if res.success:
-        return res.x
-    return p0
+    return _process_robust_polyfit(x, y, deg=1)
 
 
 def _upsample_slice(x, y, factor):
@@ -799,11 +779,19 @@ def get_slice_integrate_probe(data, probe_min, probe_max) -> SliceDataset1D:
 
 
 # ----------------------------------------------------------------- #
-#                        2D Gaussian Fitting                        #
+#                        2D Peak Fitting                            #
 # ----------------------------------------------------------------- #
 
-def evaluate_2d_gaussian_map(pump, probe, modes, correlated: bool = False) -> np.ndarray:
-    """Evaluate a multi-mode 2D Gaussian spectrum (GSB + ESA feature pairs).
+def evaluate_2d_gaussian_map(
+    pump,
+    probe,
+    modes: list[dict],
+    correlated: bool = False,
+    peak_shape: str = "gaussian",
+) -> np.ndarray:
+    """Evaluate a multi-mode 2D spectrum map (GSB + ESA feature pairs).
+
+    Supports both 2D Gaussian and 2D Lorentzian peak shapes.
 
     Parameters
     ----------
@@ -818,11 +806,14 @@ def evaluate_2d_gaussian_map(pump, probe, modes, correlated: bool = False) -> np
         - 'anharm': anharmonicity shift along w3 (ESA = w3 - anharm)
         - 'amp_gsb': GSB amplitude
         - 'amp_esa': ESA amplitude
-        - 'sigma_w1': Gaussian std dev along pump axis
-        - 'sigma_w3': Gaussian std dev along probe axis
-        - 'rho': (optional) correlation coefficient in [-0.99, 0.99]
+        - 'sigma_w1': width along pump axis (Gaussian std dev σ or Lorentzian HWHM Γ)
+        - 'sigma_w3': width along probe axis (Gaussian std dev σ or Lorentzian HWHM Γ)
+        - 'rho': (optional) correlation coefficient in [-0.95, 0.95]
+        - 'peak_shape': (optional) 'gaussian' or 'lorentzian' (overrides default)
     correlated : bool, default False
-        Whether to include correlation (tilted 2D Gaussian) via rho.
+        Whether to include correlation (tilted 2D peaks) via rho.
+    peak_shape : str, default 'gaussian'
+        Default 2D peak shape: 'gaussian' or 'lorentzian'.
 
     Returns
     -------
@@ -842,30 +833,97 @@ def evaluate_2d_gaussian_map(pump, probe, modes, correlated: bool = False) -> np
         sigma_w3 = max(float(mode.get("sigma_w3", 10.0)), 1e-3)
         rho = float(mode.get("rho", 0.0)) if correlated else 0.0
         rho = np.clip(rho, -0.95, 0.95)
+        m_shape = str(mode.get("peak_shape", peak_shape)).lower()
 
         x = P - w1
         y_gsb = R - w3
         y_esa = R - (w3 - anharm)
 
-        if correlated and abs(rho) > 1e-4:
-            denom = 1.0 - rho**2
-            Q_gsb = (1.0 / denom) * (
-                (x / sigma_w1) ** 2
-                - (2.0 * rho * x * y_gsb) / (sigma_w1 * sigma_w3)
-                + (y_gsb / sigma_w3) ** 2
-            )
-            Q_esa = (1.0 / denom) * (
-                (x / sigma_w1) ** 2
-                - (2.0 * rho * x * y_esa) / (sigma_w1 * sigma_w3)
-                + (y_esa / sigma_w3) ** 2
-            )
+        if "lorentz" in m_shape:
+            # 2D Lorentzian peaks are strictly uncorrelated (homogeneous product)
+            S_gsb = 1.0 / ((1.0 + (x / sigma_w1)**2) * (1.0 + (y_gsb / sigma_w3)**2))
+            S_esa = 1.0 / ((1.0 + (x / sigma_w1)**2) * (1.0 + (y_esa / sigma_w3)**2))
+            Z_sim += amp_gsb * S_gsb + amp_esa * S_esa
         else:
-            Q_gsb = (x / sigma_w1) ** 2 + (y_gsb / sigma_w3) ** 2
-            Q_esa = (x / sigma_w1) ** 2 + (y_esa / sigma_w3) ** 2
+            if correlated and abs(rho) > 1e-4:
+                denom = 1.0 - rho**2
+                Q_gsb = (1.0 / denom) * (
+                    (x / sigma_w1) ** 2
+                    - (2.0 * rho * x * y_gsb) / (sigma_w1 * sigma_w3)
+                    + (y_gsb / sigma_w3) ** 2
+                )
+                Q_esa = (1.0 / denom) * (
+                    (x / sigma_w1) ** 2
+                    - (2.0 * rho * x * y_esa) / (sigma_w1 * sigma_w3)
+                    + (y_esa / sigma_w3) ** 2
+                )
+            else:
+                Q_gsb = (x / sigma_w1) ** 2 + (y_gsb / sigma_w3) ** 2
+                Q_esa = (x / sigma_w1) ** 2 + (y_esa / sigma_w3) ** 2
 
-        Z_sim += amp_gsb * np.exp(-0.5 * Q_gsb) + amp_esa * np.exp(-0.5 * Q_esa)
+            Z_sim += amp_gsb * np.exp(-0.5 * Q_gsb) + amp_esa * np.exp(-0.5 * Q_esa)
 
     return Z_sim
+
+
+evaluate_2d_peak_map = evaluate_2d_gaussian_map
+
+
+def _build_mode_param_map(modes: list[dict], keys: list[str]) -> tuple[dict, int]:
+    """Build a mapping for (mode_index, param_key) -> ('free', p_index) or ('link', master_index, master_key)."""
+    param_map = {}
+    free_count = 0
+    n_modes = len(modes)
+
+    for i, m in enumerate(modes):
+        for k in keys:
+            link_key = f"link_{k}"
+            master_idx = m.get(link_key, None)
+            if (
+                master_idx is not None
+                and isinstance(master_idx, (int, np.integer))
+                and 0 <= int(master_idx) < n_modes
+                and int(master_idx) != i
+            ):
+                param_map[(i, k)] = ("link", int(master_idx), k)
+            else:
+                param_map[(i, k)] = ("free", free_count)
+                free_count += 1
+
+    return param_map, free_count
+
+
+def _resolve_mode_params(
+    param_map: dict,
+    free_values: list[float] | np.ndarray,
+    n_modes: int,
+    keys: list[str],
+) -> list[dict]:
+    """Resolve full parameter dictionaries for all modes from free parameter values and link mappings."""
+    resolved = [{} for _ in range(n_modes)]
+    for (i, k), info in param_map.items():
+        if info[0] == "free":
+            resolved[i][k] = float(free_values[info[1]])
+
+    # Resolve link chains
+    for (i, k), info in param_map.items():
+        if info[0] == "link":
+            cur_idx, cur_k = info[1], info[2]
+            hops = 0
+            while (
+                (cur_idx, cur_k) in param_map
+                and param_map[(cur_idx, cur_k)][0] == "link"
+                and hops < n_modes
+            ):
+                next_info = param_map[(cur_idx, cur_k)]
+                cur_idx, cur_k = next_info[1], next_info[2]
+                hops += 1
+            if (cur_idx, cur_k) in param_map and param_map[(cur_idx, cur_k)][0] == "free":
+                resolved[i][k] = float(free_values[param_map[(cur_idx, cur_k)][1]])
+            else:
+                resolved[i][k] = float(resolved[cur_idx].get(cur_k, 0.0))
+
+    return resolved
 
 
 def fit_2d_gaussian_map(
@@ -876,10 +934,14 @@ def fit_2d_gaussian_map(
     correlated: bool = False,
     bounds_config: dict | None = None,
     normalize_t2: bool = False,
+    peak_shape: str = "gaussian",
     progress_callback=None,
     show_progress: bool = False,
 ) -> tuple[list[dict], np.ndarray, np.ndarray]:
-    """Fit a single 2D map with multi-mode GSB/ESA 2D Gaussians.
+    """Fit a single 2D map with multi-mode GSB/ESA 2D peaks (Gaussian or Lorentzian).
+
+    Supports parameter linking (e.g. locking cross-peaks to diagonal peaks via
+    'link_w1', 'link_w3', 'link_anharm', 'link_sigma_w1', 'link_sigma_w3').
 
     Parameters
     ----------
@@ -892,9 +954,12 @@ def fit_2d_gaussian_map(
     correlated : bool, default False
         Whether to fit correlation coefficient rho.
     bounds_config : dict, optional
-        Custom bounds dictionary with keys 'anharm_min', 'anharm_max', 'sigma_min', 'sigma_max'.
+        Custom bounds dictionary with keys 'pos_tol', 'anharm_min', 'anharm_max', 'anharm_tol',
+        'sigma_min', 'sigma_max', 'constrain_signs', 'peak_shape'.
     normalize_t2 : bool, default False
         If True, scale the map by its maximum amplitude before fitting.
+    peak_shape : str, default 'gaussian'
+        Default peak shape ('gaussian' or 'lorentzian').
     progress_callback : callable, optional
         Callback function `fn(current_step, total_steps, label)` for progress updates.
     show_progress : bool, default False
@@ -916,83 +981,150 @@ def fit_2d_gaussian_map(
     scale_factor = float(np.max(np.abs(map_2d))) if (normalize_t2 and np.max(np.abs(map_2d)) > 0) else 1.0
     map_2d_fit = map_2d / scale_factor
 
-    # Build initial parameter vector p0 and bounds
-    # Per mode: [w1, w3, anharm, amp_gsb, amp_esa, sigma_w1, sigma_w3, (rho)]
-    p0 = []
-    bounds_lower = []
-    bounds_upper = []
+    cfg = bounds_config or {}
+    active_shape = str(cfg.get("peak_shape", peak_shape)).lower()
+    is_correlated = correlated and ("lorentz" not in active_shape)
+
+    param_keys = ["w1", "w3", "anharm", "amp_gsb", "amp_esa", "sigma_w1", "sigma_w3"]
+    if is_correlated:
+        param_keys.append("rho")
+
+    param_map, n_free = _build_mode_param_map(initial_modes, param_keys)
+
+    p0 = [0.0] * n_free
+    bounds_lower = [-np.inf] * n_free
+    bounds_upper = [np.inf] * n_free
 
     w1_min, w1_max = float(np.min(pump)), float(np.max(pump))
     w3_min, w3_max = float(np.min(probe)), float(np.max(probe))
     w1_span = w1_max - w1_min
     w3_span = w3_max - w3_min
-    max_amp = (float(np.max(np.abs(map_2d_fit))) * 5.0 or 10.0)
+    max_amp = float(np.max(np.abs(map_2d_fit))) * 5.0 or 10.0
 
-    cfg = bounds_config or {}
-
-    for m in initial_modes:
-        w1 = float(m.get("w1", (w1_min + w1_max) / 2))
-        w3 = float(m.get("w3", (w3_min + w3_max) / 2))
-        anharm = float(m.get("anharm", 15.0))
-        amp_gsb = float(m.get("amp_gsb", -1.0)) / scale_factor
-        amp_esa = float(m.get("amp_esa", 0.8)) / scale_factor
-        sigma_w1 = float(m.get("sigma_w1", 10.0))
-        sigma_w3 = float(m.get("sigma_w3", 10.0))
+    for i, m in enumerate(initial_modes):
+        w1_init = float(m.get("w1", (w1_min + w1_max) / 2))
+        w3_init = float(m.get("w3", (w3_min + w3_max) / 2))
+        anharm_init = float(m.get("anharm", 15.0))
+        amp_gsb_init = float(m.get("amp_gsb", -1.0)) / scale_factor
+        amp_esa_init = float(m.get("amp_esa", 0.8)) / scale_factor
+        sigma_w1_init = float(m.get("sigma_w1", 10.0))
+        sigma_w3_init = float(m.get("sigma_w3", 10.0))
         rho = float(m.get("rho", 0.0))
 
-        anharm_min = float(m.get("anharm_min", cfg.get("anharm_min", 0.1)))
+        # Position bounds: tight window around initial guess if pos_tol is given
+        pos_tol = cfg.get("pos_tol", None)
+        pos_tol_w1 = m.get("pos_tol_w1", m.get("pos_tol", cfg.get("pos_tol_w1", pos_tol)))
+        pos_tol_w3 = m.get("pos_tol_w3", m.get("pos_tol", cfg.get("pos_tol_w3", pos_tol)))
+
+        if pos_tol_w1 is not None and float(pos_tol_w1) > 0:
+            m_w1_min = max(w1_min, w1_init - float(pos_tol_w1))
+            m_w1_max = min(w1_max, w1_init + float(pos_tol_w1))
+        else:
+            m_w1_min = w1_min - 0.2 * w1_span
+            m_w1_max = w1_max + 0.2 * w1_span
+
+        if pos_tol_w3 is not None and float(pos_tol_w3) > 0:
+            m_w3_min = max(w3_min, w3_init - float(pos_tol_w3))
+            m_w3_max = min(w3_max, w3_init + float(pos_tol_w3))
+        else:
+            m_w3_min = w3_min - 0.2 * w3_span
+            m_w3_max = w3_max + 0.2 * w3_span
+
+        # Allow explicit mode-level bounds override
+        m_w1_min = float(m.get("w1_min", m_w1_min))
+        m_w1_max = float(m.get("w1_max", m_w1_max))
+        m_w3_min = float(m.get("w3_min", m_w3_min))
+        m_w3_max = float(m.get("w3_max", m_w3_max))
+
+        # Anharmonicity bounds
+        anharm_min = float(m.get("anharm_min", cfg.get("anharm_min", 2.0)))
         anharm_max = float(m.get("anharm_max", cfg.get("anharm_max", w3_span)))
+        anharm_tol = m.get("anharm_tol", cfg.get("anharm_tol", None))
+        if anharm_tol is not None and float(anharm_tol) > 0:
+            anharm_min = max(anharm_min, anharm_init - float(anharm_tol))
+            anharm_max = min(anharm_max, anharm_init + float(anharm_tol))
+
         sigma_min = float(m.get("sigma_min", cfg.get("sigma_min", 0.5)))
         sigma_max = float(m.get("sigma_max", cfg.get("sigma_max", max(w1_span, w3_span))))
 
+        # Ensure min < max
+        if m_w1_min >= m_w1_max:
+            m_w1_min, m_w1_max = min(m_w1_min, m_w1_max) - 1e-4, max(m_w1_min, m_w1_max) + 1e-4
+        if m_w3_min >= m_w3_max:
+            m_w3_min, m_w3_max = min(m_w3_min, m_w3_max) - 1e-4, max(m_w3_min, m_w3_max) + 1e-4
+        if anharm_min >= anharm_max:
+            anharm_min, anharm_max = min(anharm_min, anharm_max) - 1e-4, max(anharm_min, anharm_max) + 1e-4
+        if sigma_min >= sigma_max:
+            sigma_min, sigma_max = min(sigma_min, sigma_max) - 1e-4, max(sigma_min, sigma_max) + 1e-4
+
         # Clamp initial guesses inside bounds
-        anharm = np.clip(anharm, anharm_min, anharm_max)
-        sigma_w1 = np.clip(sigma_w1, sigma_min, sigma_max)
-        sigma_w3 = np.clip(sigma_w3, sigma_min, sigma_max)
+        w1 = float(np.clip(w1_init, m_w1_min, m_w1_max))
+        w3 = float(np.clip(w3_init, m_w3_min, m_w3_max))
+        anharm = float(np.clip(anharm_init, anharm_min, anharm_max))
+        sigma_w1 = float(np.clip(sigma_w1_init, sigma_min, sigma_max))
+        sigma_w3 = float(np.clip(sigma_w3_init, sigma_min, sigma_max))
 
-        p0.extend([w1, w3, anharm, amp_gsb, amp_esa, sigma_w1, sigma_w3])
-        bounds_lower.extend([w1_min - 0.2 * w1_span, w3_min - 0.2 * w3_span, anharm_min, -max_amp, -max_amp, sigma_min, sigma_min])
-        bounds_upper.extend([w1_max + 0.2 * w1_span, w3_max + 0.2 * w3_span, anharm_max, max_amp, max_amp, sigma_max, sigma_max])
+        # Amplitude sign constraints
+        constrain_signs = cfg.get("constrain_signs", True)
+        if constrain_signs:
+            g_lb = -max_amp if amp_gsb_init <= 0 else 0.0
+            g_ub = 0.0 if amp_gsb_init <= 0 else max_amp
+            e_lb = 0.0 if amp_esa_init >= 0 else -max_amp
+            e_ub = max_amp if amp_esa_init >= 0 else 0.0
+        else:
+            g_lb, g_ub = -max_amp, max_amp
+            e_lb, e_ub = -max_amp, max_amp
 
-        if correlated:
-            p0.append(rho)
-            bounds_lower.append(-0.95)
-            bounds_upper.append(0.95)
+        amp_gsb = float(np.clip(amp_gsb_init, g_lb, g_ub))
+        amp_esa = float(np.clip(amp_esa_init, e_lb, e_ub))
 
-    n_params_per_mode = 8 if correlated else 7
+        val_map = {
+            "w1": (w1, m_w1_min, m_w1_max),
+            "w3": (w3, m_w3_min, m_w3_max),
+            "anharm": (anharm, anharm_min, anharm_max),
+            "amp_gsb": (amp_gsb, g_lb, g_ub),
+            "amp_esa": (amp_esa, e_lb, e_ub),
+            "sigma_w1": (sigma_w1, sigma_min, sigma_max),
+            "sigma_w3": (sigma_w3, sigma_min, sigma_max),
+            "rho": (rho, -0.95, 0.95),
+        }
+
+        for k in param_keys:
+            info = param_map[(i, k)]
+            if info[0] == "free":
+                p_idx = info[1]
+                v, lb, ub = val_map[k]
+                p0[p_idx] = v
+                bounds_lower[p_idx] = lb
+                bounds_upper[p_idx] = ub
+
     max_nfev = 1000
     eval_counter = 0
 
     tracker = None
     if show_progress and progress_callback is None:
-        tracker = ProgressTracker(total=100, title="2D Gaussian Fit", label="Optimizing 2D Gaussian fit...")
+        title_label = "2D Lorentzian Fit" if "lorentz" in active_shape else "2D Gaussian Fit"
+        tracker = ProgressTracker(total=100, title=title_label, label=f"Optimizing {title_label}...")
 
     def residuals(p):
         nonlocal eval_counter
         eval_counter += 1
         pct = min(99, int(100 * eval_counter / 300))
-        lbl = f"Fitting 2D map... (eval {eval_counter})"
+        lbl = f"Fitting 2D map ({active_shape})... (eval {eval_counter})"
         if progress_callback is not None:
             progress_callback(pct, 100, lbl)
         elif tracker is not None and eval_counter % 3 == 0:
             tracker.update(pct, lbl)
 
+        resolved_dicts = _resolve_mode_params(param_map, p, len(initial_modes), param_keys)
         modes = []
-        for i in range(len(initial_modes)):
-            offset = i * n_params_per_mode
-            mode_dict = {
-                "w1": p[offset],
-                "w3": p[offset + 1],
-                "anharm": p[offset + 2],
-                "amp_gsb": p[offset + 3],
-                "amp_esa": p[offset + 4],
-                "sigma_w1": p[offset + 5],
-                "sigma_w3": p[offset + 6],
-            }
-            if correlated:
-                mode_dict["rho"] = p[offset + 7]
-            modes.append(mode_dict)
-        sim = evaluate_2d_gaussian_map(pump, probe, modes, correlated=correlated)
+        for i_m, r_dict in enumerate(resolved_dicts):
+            m_dict = dict(initial_modes[i_m])
+            m_dict.update(r_dict)
+            m_dict["peak_shape"] = active_shape
+            modes.append(m_dict)
+
+        sim = evaluate_2d_gaussian_map(pump, probe, modes, correlated=is_correlated, peak_shape=active_shape)
         return (sim - map_2d_fit).ravel()
 
     try:
@@ -1004,25 +1136,22 @@ def fit_2d_gaussian_map(
             tracker.close()
 
     p_opt = res.x
+    opt_resolved = _resolve_mode_params(param_map, p_opt, len(initial_modes), param_keys)
     fitted_modes = []
-    for i in range(len(initial_modes)):
-        offset = i * n_params_per_mode
-        mode_dict = {
-            "w1": float(p_opt[offset]),
-            "w3": float(p_opt[offset + 1]),
-            "anharm": float(p_opt[offset + 2]),
-            "amp_gsb": float(p_opt[offset + 3]) * scale_factor,
-            "amp_esa": float(p_opt[offset + 4]) * scale_factor,
-            "sigma_w1": float(p_opt[offset + 5]),
-            "sigma_w3": float(p_opt[offset + 6]),
-        }
-        if correlated:
-            mode_dict["rho"] = float(p_opt[offset + 7])
-        fitted_modes.append(mode_dict)
+    for i_m, r_dict in enumerate(opt_resolved):
+        m_dict = dict(initial_modes[i_m])
+        m_dict.update(r_dict)
+        m_dict["amp_gsb"] = r_dict["amp_gsb"] * scale_factor
+        m_dict["amp_esa"] = r_dict["amp_esa"] * scale_factor
+        m_dict["peak_shape"] = active_shape
+        fitted_modes.append(m_dict)
 
-    fit_map = evaluate_2d_gaussian_map(pump, probe, fitted_modes, correlated=correlated)
+    fit_map = evaluate_2d_gaussian_map(pump, probe, fitted_modes, correlated=is_correlated, peak_shape=active_shape)
     residual_map = map_2d - fit_map
     return fitted_modes, fit_map, residual_map
+
+
+fit_2d_peak_map = fit_2d_gaussian_map
 
 
 def fit_2d_gaussian_global(
@@ -1034,10 +1163,11 @@ def fit_2d_gaussian_global(
     correlated: bool = False,
     bounds_config: dict | None = None,
     normalize_t2: bool = False,
+    peak_shape: str = "gaussian",
     progress_callback=None,
     show_progress: bool = False,
 ) -> tuple[list[dict], list[list[dict]], np.ndarray, np.ndarray]:
-    """Fit a 3D dataset cube globally across all population delays t2.
+    """Fit a 3D dataset cube globally across all population delays t2 with parameter linking support.
 
     Shared parameters across all delays: w1, w3, anharm, sigma_w1, sigma_w3, (rho).
     Independent parameters per delay: amp_gsb(t2), amp_esa(t2).
@@ -1049,9 +1179,12 @@ def fit_2d_gaussian_global(
     initial_modes : list of dict
     correlated : bool, default False
     bounds_config : dict, optional
-        Custom bounds dictionary with keys 'anharm_min', 'anharm_max', 'sigma_min', 'sigma_max'.
+        Custom bounds dictionary with keys 'pos_tol', 'anharm_min', 'anharm_max', 'anharm_tol',
+        'sigma_min', 'sigma_max', 'constrain_signs', 'peak_shape'.
     normalize_t2 : bool, default False
         If True, normalise each t2 delay map by its maximum amplitude before fitting.
+    peak_shape : str, default 'gaussian'
+        Default peak shape ('gaussian' or 'lorentzian').
     progress_callback : callable, optional
         Callback function `fn(current_step, total_steps, label)` for progress updates.
     show_progress : bool, default False
@@ -1059,7 +1192,7 @@ def fit_2d_gaussian_global(
     Returns
     -------
     shared_modes : list of dict
-    all_delay_modes : list of list of dict (per delay)
+    all_delay_modes : list of list of dict (shape Nt2, Nmodes)
     fit_cube : ndarray, shape (Npump, Nprobe, Nt2)
     residual_cube : ndarray, shape (Npump, Nprobe, Nt2)
     """
@@ -1068,6 +1201,7 @@ def fit_2d_gaussian_global(
 
     pump = np.asarray(pump)
     probe = np.asarray(probe)
+    delays = np.asarray(delays)
     cube_3d = np.asarray(cube_3d)
     Nt2 = cube_3d.shape[2]
 
@@ -1080,102 +1214,155 @@ def fit_2d_gaussian_global(
             scales[i_t2] = m_max if m_max > 0 else 1.0
         cube_3d_fit[:, :, i_t2] = cube_3d[:, :, i_t2] / scales[i_t2]
 
-    # Shared per mode: [w1, w3, anharm, sigma_w1, sigma_w3, (rho)] -> 5 or 6 params
-    # Independent per mode per delay: [amp_gsb, amp_esa] -> 2 * Nt2 params
-    p0 = []
-    bounds_lower = []
-    bounds_upper = []
+    cfg = bounds_config or {}
+    constrain_signs = cfg.get("constrain_signs", True)
+    active_shape = str(cfg.get("peak_shape", peak_shape)).lower()
+    is_correlated = correlated and ("lorentz" not in active_shape)
+
+    shared_keys = ["w1", "w3", "anharm", "sigma_w1", "sigma_w3"]
+    if is_correlated:
+        shared_keys.append("rho")
+
+    shared_map, n_free_shared = _build_mode_param_map(initial_modes, shared_keys)
+    n_amp_free = len(initial_modes) * 2 * Nt2
+    n_total_free = n_free_shared + n_amp_free
+
+    p0 = [0.0] * n_total_free
+    bounds_lower = [-np.inf] * n_total_free
+    bounds_upper = [np.inf] * n_total_free
 
     w1_min, w1_max = float(np.min(pump)), float(np.max(pump))
     w3_min, w3_max = float(np.min(probe)), float(np.max(probe))
     w1_span = w1_max - w1_min
     w3_span = w3_max - w3_min
-    max_amp = (float(np.max(np.abs(cube_3d_fit))) * 5.0 or 10.0)
+    max_amp = float(np.max(np.abs(cube_3d_fit))) * 5.0 or 10.0
 
-    cfg = bounds_config or {}
-
-    n_shared_per_mode = 6 if correlated else 5
-    n_amp_per_mode = 2 * Nt2
-
-    for m in initial_modes:
-        w1 = float(m.get("w1", (w1_min + w1_max) / 2))
-        w3 = float(m.get("w3", (w3_min + w3_max) / 2))
-        anharm = float(m.get("anharm", 15.0))
-        sigma_w1 = float(m.get("sigma_w1", 10.0))
-        sigma_w3 = float(m.get("sigma_w3", 10.0))
+    for i, m in enumerate(initial_modes):
+        w1_init = float(m.get("w1", (w1_min + w1_max) / 2))
+        w3_init = float(m.get("w3", (w3_min + w3_max) / 2))
+        anharm_init = float(m.get("anharm", 15.0))
+        sigma_w1_init = float(m.get("sigma_w1", 10.0))
+        sigma_w3_init = float(m.get("sigma_w3", 10.0))
         rho = float(m.get("rho", 0.0))
 
-        anharm_min = float(m.get("anharm_min", cfg.get("anharm_min", 0.1)))
+        # Position bounds
+        pos_tol = cfg.get("pos_tol", None)
+        pos_tol_w1 = m.get("pos_tol_w1", m.get("pos_tol", cfg.get("pos_tol_w1", pos_tol)))
+        pos_tol_w3 = m.get("pos_tol_w3", m.get("pos_tol", cfg.get("pos_tol_w3", pos_tol)))
+
+        if pos_tol_w1 is not None and float(pos_tol_w1) > 0:
+            m_w1_min = max(w1_min, w1_init - float(pos_tol_w1))
+            m_w1_max = min(w1_max, w1_init + float(pos_tol_w1))
+        else:
+            m_w1_min = w1_min - 0.2 * w1_span
+            m_w1_max = w1_max + 0.2 * w1_span
+
+        if pos_tol_w3 is not None and float(pos_tol_w3) > 0:
+            m_w3_min = max(w3_min, w3_init - float(pos_tol_w3))
+            m_w3_max = min(w3_max, w3_init + float(pos_tol_w3))
+        else:
+            m_w3_min = w3_min - 0.2 * w3_span
+            m_w3_max = w3_max + 0.2 * w3_span
+
+        m_w1_min = float(m.get("w1_min", m_w1_min))
+        m_w1_max = float(m.get("w1_max", m_w1_max))
+        m_w3_min = float(m.get("w3_min", m_w3_min))
+        m_w3_max = float(m.get("w3_max", m_w3_max))
+
+        # Anharmonicity bounds
+        anharm_min = float(m.get("anharm_min", cfg.get("anharm_min", 2.0)))
         anharm_max = float(m.get("anharm_max", cfg.get("anharm_max", w3_span)))
+        anharm_tol = m.get("anharm_tol", cfg.get("anharm_tol", None))
+        if anharm_tol is not None and float(anharm_tol) > 0:
+            anharm_min = max(anharm_min, anharm_init - float(anharm_tol))
+            anharm_max = min(anharm_max, anharm_init + float(anharm_tol))
+
         sigma_min = float(m.get("sigma_min", cfg.get("sigma_min", 0.5)))
         sigma_max = float(m.get("sigma_max", cfg.get("sigma_max", max(w1_span, w3_span))))
 
-        anharm = np.clip(anharm, anharm_min, anharm_max)
-        sigma_w1 = np.clip(sigma_w1, sigma_min, sigma_max)
-        sigma_w3 = np.clip(sigma_w3, sigma_min, sigma_max)
+        if m_w1_min >= m_w1_max:
+            m_w1_min, m_w1_max = min(m_w1_min, m_w1_max) - 1e-4, max(m_w1_min, m_w1_max) + 1e-4
+        if m_w3_min >= m_w3_max:
+            m_w3_min, m_w3_max = min(m_w3_min, m_w3_max) - 1e-4, max(m_w3_min, m_w3_max) + 1e-4
+        if anharm_min >= anharm_max:
+            anharm_min, anharm_max = min(anharm_min, anharm_max) - 1e-4, max(anharm_min, anharm_max) + 1e-4
+        if sigma_min >= sigma_max:
+            sigma_min, sigma_max = min(sigma_min, sigma_max) - 1e-4, max(sigma_min, sigma_max) + 1e-4
 
-        p0.extend([w1, w3, anharm, sigma_w1, sigma_w3])
-        bounds_lower.extend([w1_min - 0.2 * w1_span, w3_min - 0.2 * w3_span, anharm_min, sigma_min, sigma_min])
-        bounds_upper.extend([w1_max + 0.2 * w1_span, w3_max + 0.2 * w3_span, anharm_max, sigma_max, sigma_max])
+        w1 = float(np.clip(w1_init, m_w1_min, m_w1_max))
+        w3 = float(np.clip(w3_init, m_w3_min, m_w3_max))
+        anharm = float(np.clip(anharm_init, anharm_min, anharm_max))
+        sigma_w1 = float(np.clip(sigma_w1_init, sigma_min, sigma_max))
+        sigma_w3 = float(np.clip(sigma_w3_init, sigma_min, sigma_max))
 
-        if correlated:
-            p0.append(rho)
-            bounds_lower.append(-0.95)
-            bounds_upper.append(0.95)
+        val_map = {
+            "w1": (w1, m_w1_min, m_w1_max),
+            "w3": (w3, m_w3_min, m_w3_max),
+            "anharm": (anharm, anharm_min, anharm_max),
+            "sigma_w1": (sigma_w1, sigma_min, sigma_max),
+            "sigma_w3": (sigma_w3, sigma_min, sigma_max),
+            "rho": (rho, -0.95, 0.95),
+        }
+
+        for k in shared_keys:
+            info = shared_map[(i, k)]
+            if info[0] == "free":
+                p_idx = info[1]
+                v, lb, ub = val_map[k]
+                p0[p_idx] = v
+                bounds_lower[p_idx] = lb
+                bounds_upper[p_idx] = ub
 
         # Amplitudes per t2 (scaled)
         amp_g_init = float(m.get("amp_gsb", -1.0))
         amp_e_init = float(m.get("amp_esa", 0.8))
-        for i_t2 in range(Nt2):
-            p0.extend([amp_g_init / scales[i_t2], amp_e_init / scales[i_t2]])
-            bounds_lower.extend([-max_amp, -max_amp])
-            bounds_upper.extend([max_amp, max_amp])
 
-    n_mode_total_params = n_shared_per_mode + n_amp_per_mode
+        if constrain_signs:
+            g_lb = -max_amp if amp_g_init <= 0 else 0.0
+            g_ub = 0.0 if amp_g_init <= 0 else max_amp
+            e_lb = 0.0 if amp_e_init >= 0 else -max_amp
+            e_ub = max_amp if amp_e_init >= 0 else 0.0
+        else:
+            g_lb, g_ub = -max_amp, max_amp
+            e_lb, e_ub = -max_amp, max_amp
+
+        for i_t2 in range(Nt2):
+            g_val = float(np.clip(amp_g_init / scales[i_t2], g_lb, g_ub))
+            e_val = float(np.clip(amp_e_init / scales[i_t2], e_lb, e_ub))
+            idx_amp = n_free_shared + (i * Nt2 + i_t2) * 2
+            p0[idx_amp] = g_val
+            p0[idx_amp + 1] = e_val
+            bounds_lower[idx_amp] = g_lb
+            bounds_lower[idx_amp + 1] = e_lb
+            bounds_upper[idx_amp] = g_ub
+            bounds_upper[idx_amp + 1] = e_ub
+
     max_nfev = 1500
     eval_counter = 0
 
     tracker = None
     if show_progress and progress_callback is None:
-        tracker = ProgressTracker(total=100, title="Global 2D Gaussian Fit", label=f"Fitting 3D cube across {Nt2} delays...")
+        title_label = "Global 2D Lorentzian Fit" if "lorentz" in active_shape else "Global 2D Gaussian Fit"
+        tracker = ProgressTracker(total=100, title=title_label, label=f"Fitting 3D cube ({active_shape}) across {Nt2} delays...")
 
     def unpack_modes_for_t2(p, i_t2):
+        resolved_shared = _resolve_mode_params(shared_map, p[:n_free_shared], len(initial_modes), shared_keys)
         modes = []
-        for i_m in range(len(initial_modes)):
-            m_offset = i_m * n_mode_total_params
-            w1 = p[m_offset]
-            w3 = p[m_offset + 1]
-            anharm = p[m_offset + 2]
-            sigma_w1 = p[m_offset + 3]
-            sigma_w3 = p[m_offset + 4]
-
-            if correlated:
-                rho = p[m_offset + 5]
-                amp_offset = m_offset + 6 + 2 * i_t2
-            else:
-                rho = 0.0
-                amp_offset = m_offset + 5 + 2 * i_t2
-
-            amp_gsb = p[amp_offset]
-            amp_esa = p[amp_offset + 1]
-
-            modes.append({
-                "w1": w1,
-                "w3": w3,
-                "anharm": anharm,
-                "amp_gsb": amp_gsb,
-                "amp_esa": amp_esa,
-                "sigma_w1": sigma_w1,
-                "sigma_w3": sigma_w3,
-                "rho": rho,
-            })
+        for i_m, r_dict in enumerate(resolved_shared):
+            m_dict = dict(initial_modes[i_m])
+            m_dict.update(r_dict)
+            idx_amp = n_free_shared + (i_m * Nt2 + i_t2) * 2
+            m_dict["amp_gsb"] = float(p[idx_amp])
+            m_dict["amp_esa"] = float(p[idx_amp + 1])
+            m_dict["peak_shape"] = active_shape
+            modes.append(m_dict)
         return modes
 
     def residuals(p):
         nonlocal eval_counter
         eval_counter += 1
         pct = min(99, int(100 * eval_counter / 400))
-        lbl = f"Global fitting across {Nt2} delays... (eval {eval_counter})"
+        lbl = f"Global fitting across {Nt2} delays ({active_shape})... (eval {eval_counter})"
         if progress_callback is not None:
             progress_callback(pct, 100, lbl)
         elif tracker is not None and eval_counter % 3 == 0:
@@ -1184,7 +1371,7 @@ def fit_2d_gaussian_global(
         res_cube = np.zeros_like(cube_3d_fit)
         for i_t2 in range(Nt2):
             modes_t2 = unpack_modes_for_t2(p, i_t2)
-            sim_t2 = evaluate_2d_gaussian_map(pump, probe, modes_t2, correlated=correlated)
+            sim_t2 = evaluate_2d_gaussian_map(pump, probe, modes_t2, correlated=is_correlated, peak_shape=active_shape)
             res_cube[:, :, i_t2] = sim_t2 - cube_3d_fit[:, :, i_t2]
         return res_cube.ravel()
 
@@ -1203,24 +1390,26 @@ def fit_2d_gaussian_global(
 
     for i_t2 in range(Nt2):
         modes_t2 = unpack_modes_for_t2(p_opt, i_t2)
+        # Rescale amplitudes to real data units
+        for m in modes_t2:
+            m["amp_gsb"] *= scales[i_t2]
+            m["amp_esa"] *= scales[i_t2]
         all_delay_modes[i_t2] = modes_t2
-        sim_t2 = evaluate_2d_gaussian_map(pump, probe, modes_t2, correlated=correlated)
+
+        sim_t2 = evaluate_2d_gaussian_map(pump, probe, modes_t2, correlated=is_correlated, peak_shape=active_shape)
         fit_cube[:, :, i_t2] = sim_t2
         residual_cube[:, :, i_t2] = cube_3d[:, :, i_t2] - sim_t2
 
     # Construct shared modes summary
+    shared_resolved = _resolve_mode_params(shared_map, p_opt[:n_free_shared], len(initial_modes), shared_keys)
     shared_modes = []
-    for i_m in range(len(initial_modes)):
-        m_offset = i_m * n_mode_total_params
-        shared_dict = {
-            "w1": float(p_opt[m_offset]),
-            "w3": float(p_opt[m_offset + 1]),
-            "anharm": float(p_opt[m_offset + 2]),
-            "sigma_w1": float(p_opt[m_offset + 3]),
-            "sigma_w3": float(p_opt[m_offset + 4]),
-        }
-        if correlated:
-            shared_dict["rho"] = float(p_opt[m_offset + 5])
-        shared_modes.append(shared_dict)
+    for i_m, r_dict in enumerate(shared_resolved):
+        m_dict = dict(initial_modes[i_m])
+        m_dict.update(r_dict)
+        m_dict["peak_shape"] = active_shape
+        shared_modes.append(m_dict)
 
     return shared_modes, all_delay_modes, fit_cube, residual_cube
+
+
+fit_2d_peak_global = fit_2d_gaussian_global

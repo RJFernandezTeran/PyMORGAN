@@ -12,8 +12,11 @@ from __future__ import annotations
 
 from .fit import CalibrationResult, fit_wavelength_axis, get_default_calibration_params
 from .load import (
+    CALIBRATION_TYPES,
     ExperimentalData,
     ReferenceSpectrum,
+    available_calibration_types,
+    load_HARPIA_calibration_spectrum,
     load_experimental_spectrum,
     load_reference_spectrum,
 )
@@ -39,6 +42,8 @@ __all__ = [
     "ProbeFitResult",
     "ExperimentalData",
     "ReferenceSpectrum",
+    "CALIBRATION_TYPES",
+    "available_calibration_types",
     "fit_wavelength_axis",
     "fit_spectrum_gaussian",
     "fit_probe_spectrum",
@@ -50,6 +55,7 @@ __all__ = [
     "n_sellmeier_sf10",
     "load_reference_spectrum",
     "load_experimental_spectrum",
+    "load_HARPIA_calibration_spectrum",
     "split_calibration",
     "merge_calibration",
     "save_calibration_file",

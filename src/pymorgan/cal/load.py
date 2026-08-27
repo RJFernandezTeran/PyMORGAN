@@ -25,6 +25,54 @@ class ExperimentalData(NamedTuple):
     wavelengths: np.ndarray | None = None
 
 
+CALIBRATION_TYPES: dict[int, str] = {
+    1: "UoS TRIR",
+    2: "UniGE fsTA",
+    3: "UniGE nsTA",
+    4: "UZH Lab 2",
+    5: "UniGE NIR-TA",
+    6: "RAL LIFEtime (Absorbance)",
+    7: "RAL LIFEtime (Intensity)",
+    8: "UniGE TRIR (Intensity)",
+    9: "UniGE TRIR (Absorbance)",
+    10: "UniGE TRUVIS-II (Intensity)",
+    11: "Light Conversion HARPIA-TA (Int.)",
+}
+
+
+def available_calibration_types(
+    name: str | None = None,
+    as_dict: bool = False,
+) -> dict[int, str] | list[str] | int:
+    """Return available calibration setup types or look up the integer code for a given setup name.
+
+    Parameters
+    ----------
+    name : str, optional
+        Setup display name or search query (e.g. "HARPIA", "fsTA", "UoS TRIR") to look up the magic integer code for.
+    as_dict : bool, default False
+        If True, return dictionary mapping integer setup code -> display name.
+
+    Returns
+    -------
+    int, dict[int, str], or list[str]
+        - If ``name`` is provided: returns integer calibration code (1..11).
+        - If ``as_dict=True``: returns dict mapping ``{code: display_name}``.
+        - Otherwise: returns list of display names.
+    """
+    if name is not None:
+        n_lower = name.lower().strip()
+        for code, disp_name in CALIBRATION_TYPES.items():
+            if n_lower in disp_name.lower() or disp_name.lower() in n_lower:
+                return code
+        raise KeyError(
+            f"Unknown calibration type {name!r}. Available setup types: {list(CALIBRATION_TYPES.values())}"
+        )
+    if as_dict:
+        return dict(CALIBRATION_TYPES)
+    return list(CALIBRATION_TYPES.values())
+
+
 class ReferenceSpectrum(NamedTuple):
     """Container for a standard calibration reference spectrum."""
 
@@ -349,6 +397,17 @@ def load_experimental_spectrum(
             max_wl_val = parsed["max_wl"]
             wn_axis = parsed["wn_axis"]
             wl_axis = parsed["wl_axis"]
+    elif cal_type_code == 11:
+        # Light Conversion HARPIA-TA (Int.) (Col 0 = wavelength nm, Col 1 = detector signal V)
+        raw = read_numeric_matrix(path)
+        if raw.ndim > 1 and raw.shape[1] >= 2:
+            wl_axis = raw[:, 0]
+            data_list = [raw[:, 1]]
+            min_wl_val = float(np.min(wl_axis))
+            max_wl_val = float(np.max(wl_axis))
+            cwl[0] = float((min_wl_val + max_wl_val) / 2.0)
+        else:
+            data_list = [raw[:, 0] if raw.ndim > 1 else raw]
     else:
         # Default single column text reader
         raw = read_numeric_matrix(path)
@@ -364,3 +423,10 @@ def load_experimental_spectrum(
         wavenumbers=wn_axis,
         wavelengths=wl_axis,
     )
+
+
+def load_HARPIA_calibration_spectrum(file_path: str | Path) -> ExperimentalData:
+    """Load Light Conversion HARPIA-TA spectral calibration measurement text file."""
+    return load_experimental_spectrum(file_path, cal_type_code=11)
+
+

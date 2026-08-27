@@ -186,3 +186,60 @@ def test_shaper_panel_visibility_toggle(qapp):
     win.cal_type_combo.setCurrentIndex(idx_trir)
     assert not win.cal_shaper_group.isHidden()
 
+
+def test_load_harpia_ta_calibration_spectrum(tmp_path):
+    from pymorgan.cal import load_HARPIA_calibration_spectrum
+
+    # Test synthetic HARPIA calibration file
+    wl = np.linspace(330.0, 530.0, 200)
+    sig = np.sin(np.linspace(0, np.pi, 200)) * 5.0
+    mat = np.column_stack([wl, sig])
+    fpath = tmp_path / "harpia_cal.txt"
+    np.savetxt(fpath, mat, delimiter="\t", header="Wavelength (nm)\tDetector signal (V)", comments="")
+
+    exp = load_HARPIA_calibration_spectrum(fpath)
+    assert len(exp.detector_data) == 1
+    assert len(exp.detector_data[0]) == 200
+    np.testing.assert_allclose(exp.detector_data[0], sig)
+    assert exp.wavelengths is not None
+    np.testing.assert_allclose(exp.wavelengths, wl)
+    assert exp.min_wl == pytest.approx(330.0)
+    assert exp.max_wl == pytest.approx(530.0)
+
+    # Test load_experimental_spectrum with cal_type_code=11
+    exp11 = load_experimental_spectrum(fpath, cal_type_code=11)
+    assert len(exp11.detector_data) == 1
+    np.testing.assert_allclose(exp11.detector_data[0], sig)
+
+
+def test_load_harpia_ta_real_testdata():
+    from pathlib import Path
+    real_file = Path(r"C:\Users\ricar\switchdrive\Ambizione UniGE\Scripts\testData\HARPIA\probe spectra for wl calibration\260629_newWL_0ns_1_average (number of measured spectra 250).txt")
+    if not real_file.is_file():
+        pytest.skip("HARPIA test data file not present")
+
+    exp = load_experimental_spectrum(real_file, cal_type_code=11)
+    assert len(exp.detector_data) == 1
+    assert len(exp.detector_data[0]) == 256
+    assert exp.wavelengths is not None
+    assert len(exp.wavelengths) == 256
+    assert exp.min_wl == pytest.approx(326.373077392578)
+    assert exp.max_wl == pytest.approx(533.762634277344)
+
+
+def test_available_calibration_types():
+    import pymorgan as pm
+    types = pm.available_calibration_types()
+    assert isinstance(types, list)
+    assert len(types) >= 11
+    assert "Light Conversion HARPIA-TA (Int.)" in types
+    assert "UoS TRIR" in types
+
+    mapping = pm.available_calibration_types(as_dict=True)
+    assert isinstance(mapping, dict)
+    assert mapping[11] == "Light Conversion HARPIA-TA (Int.)"
+    assert mapping[1] == "UoS TRIR"
+
+    code = pm.available_calibration_types("HARPIA")
+    assert code == 11
+

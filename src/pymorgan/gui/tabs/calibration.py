@@ -774,7 +774,7 @@ class CalibrationTabMixin:
         if ref_spec is None:
             ref_dir = Path(__file__).resolve().parent.parent.parent / "cal" / "ref_spectra"
             holmium_ref = ref_dir / "UVVis-Holmium.csv"
-            if cal_type_idx in (2, 3, 10) and holmium_ref.exists():
+            if cal_type_idx in (2, 3, 10, 11) and holmium_ref.exists():
                 from pymorgan.cal import load_reference_spectrum
                 ref_spec = load_reference_spectrum(holmium_ref)
                 self._cal_ref_spec = ref_spec

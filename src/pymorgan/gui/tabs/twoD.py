@@ -2818,20 +2818,36 @@ class TwoDTabMixin:
             ax.plot(pixels + 1, scattering_maxima, "xr", label="Data")
 
             # Robust Parabolic fit
+            y_fit = None
             if len(pixels) > 2:
                 try:
                     coeffs = robust_polyfit(pixels + 1, scattering_maxima, 2)
                     p = np.poly1d(coeffs)
                     pixels_fit = np.linspace(pixels.min() + 1, pixels.max() + 1, 200)
+                    y_fit = p(pixels_fit)
                     ax.plot(
                         pixels_fit,
-                        p(pixels_fit),
+                        y_fit,
                         "k-",
                         linewidth=1.0 if is_qt else 1.5,
                         label="Fit",
                     )
                 except Exception:
-                    logger.debug("Could not draw the phase fit overlay.", exc_info=True)
+                    logger.debug("Could not draw the calibration fit overlay.", exc_info=True)
+                    y_fit = None
+
+            # Plot current pixel calibration (dashed, olive green)
+            curr_probe = getattr(self.twoD_dataset, "probe", None)
+            if curr_probe is not None and len(curr_probe) > 0:
+                curr_pixels = np.arange(1, len(curr_probe) + 1)
+                ax.plot(
+                    curr_pixels,
+                    curr_probe,
+                    color="olive",
+                    linestyle="--",
+                    linewidth=1.0 if is_qt else 1.5,
+                    label="Current",
+                )
 
             ax.set_xlabel("Pixel number", fontsize=10 if is_qt else 12, fontweight="bold")
             ax.set_ylabel(
@@ -2843,8 +2859,14 @@ class TwoDTabMixin:
             if not is_qt:
                 ax.set_title("Probe Calibration", fontsize=12, fontweight="bold")
             ax.set_xlim(pixels.min() + 0.5, pixels.max() + 1.5)
-            if len(scattering_maxima) > 0:
-                ax.set_ylim(scattering_maxima.min() - 5, scattering_maxima.max() + 5)
+            y_vals = [scattering_maxima]
+            if y_fit is not None and len(y_fit) > 0:
+                y_vals.append(y_fit)
+            if curr_probe is not None and len(curr_probe) > 0:
+                y_vals.append(curr_probe)
+            y_concat = np.concatenate(y_vals)
+            if len(y_concat) > 0:
+                ax.set_ylim(y_concat.min() - 5, y_concat.max() + 5)
             ax.legend(loc="best", frameon=False, fontsize=8 if is_qt else 10)
 
         elif self.twoD_other_btn_TD.isChecked():

@@ -1,4 +1,4 @@
-# Form implementation generated from reading ui file 'src\pymorgan\gui\main_window.ui'
+# Form implementation generated from reading ui file 'C:\Users\ricar\Documents\GitHub\PyMORGAN\src\pymorgan\gui\main_window.ui'
 #
 # Created by: PyQt6 UI code generator 6.11.0
 #
@@ -1316,6 +1316,7 @@ class Ui_MainWindow(object):
         self.cal_type_combo.addItem("")
         self.cal_type_combo.addItem("")
         self.cal_type_combo.addItem("")
+        self.cal_type_combo.addItem("")
         self.cal_type_layout.addWidget(self.cal_type_combo)
         self.cal_merge_split_layout = QtWidgets.QHBoxLayout()
         self.cal_merge_split_layout.setObjectName("cal_merge_split_layout")
@@ -1930,6 +1931,7 @@ class Ui_MainWindow(object):
         self.cal_type_combo.setItemText(7, _translate("MainWindow", "UniGE TRIR (Intensity)"))
         self.cal_type_combo.setItemText(8, _translate("MainWindow", "UniGE TRIR (Absorbance)"))
         self.cal_type_combo.setItemText(9, _translate("MainWindow", "UniGE TRUVIS-II (Intensity)"))
+        self.cal_type_combo.setItemText(10, _translate("MainWindow", "Light Conversion HARPIA-TA (Int.)"))
         self.cal_btn_merge.setText(_translate("MainWindow", "Merge Calib."))
         self.cal_btn_split.setText(_translate("MainWindow", "Split Calib."))
         self.cal_shaper_group.setTitle(_translate("MainWindow", "Pulse Shaper Calibration"))

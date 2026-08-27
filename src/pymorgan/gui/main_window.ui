@@ -3198,6 +3198,7 @@ The magnitude sets the smoothing window width.</string>
                  <item><property name="text"><string>UniGE TRIR (Intensity)</string></property></item>
                  <item><property name="text"><string>UniGE TRIR (Absorbance)</string></property></item>
                  <item><property name="text"><string>UniGE TRUVIS-II (Intensity)</string></property></item>
+                 <item><property name="text"><string>Light Conversion HARPIA-TA (Int.)</string></property></item>
                 </widget>
                </item>
                <item>

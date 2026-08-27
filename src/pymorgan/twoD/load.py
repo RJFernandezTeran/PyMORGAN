@@ -96,6 +96,52 @@ def read_P2DAT(datafilename: str) -> LoaderResult:
     return Z, pump, probe, delays, _units_2d("ps", "cm-1"), "cm-1"
 
 
+def write_P2DAT(
+    path: str | PathLike,
+    pump: np.ndarray,
+    probe: np.ndarray,
+    delays: np.ndarray,
+    Z_cube: np.ndarray,
+) -> None:
+    """Write a 3D dataset cube into standard P2DAT format.
+
+    Parameters
+    ----------
+    path : str or Path
+        Destination filepath.
+    pump : 1D array-like
+        Pump frequency axis (Npump).
+    probe : 1D array-like
+        Probe frequency axis (Nprobe).
+    delays : 1D array-like
+        Population delay times t2 (Nt2).
+    Z_cube : 2D or 3D ndarray
+        Signal array of shape (Npump, Nprobe, Nt2) or (Npump, Nprobe).
+    """
+    pump = np.asarray(pump, dtype=float)
+    probe = np.asarray(probe, dtype=float)
+    delays = np.asarray(delays, dtype=float)
+    Z_cube = np.asarray(Z_cube, dtype=float)
+
+    if Z_cube.ndim == 2:
+        Z_cube = Z_cube[:, :, np.newaxis]
+    if len(delays) == 0:
+        delays = np.array([0.0])
+
+    lines = [",".join(["0", "0"] + [f"{d}" for d in delays])]
+    for j in range(len(probe)):
+        for i in range(len(pump)):
+            row = [f"{pump[i]:.4f}", f"{probe[j]:.4f}"]
+            row += [f"{Z_cube[i, j, k]:.8g}" for k in range(len(delays))]
+            lines.append(",".join(row))
+
+    with open(str(path), "w", encoding="utf-8") as fh:
+        fh.write("\n".join(lines) + "\n")
+
+
+save_P2DAT = write_P2DAT
+
+
 def _stub_loader(name: str) -> Loader:
     """Build a placeholder loader that fails loudly until implemented."""
 

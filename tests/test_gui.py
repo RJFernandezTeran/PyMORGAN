@@ -360,8 +360,98 @@ def test_plot_noise_button_enabled_state(qapp, tmp_path):
     win.close()
 
 
+def test_twoD_gaussian_dialog(qapp, tmp_path):
+    from pymorgan.gui.twoD_gaussian_dialog import TwoDGaussianFitDialog
 
+    info = synthetic.make_synthetic_p2dat(tmp_path / "sample_2d.p2dat")
+    ds = pm.load_2D(info["path"], data_type="P2DAT")
 
+    dlg = TwoDGaussianFitDialog(None, ds)
+    assert hasattr(dlg, "tab_widget")
+    assert dlg.tab_widget.count() == 2
+    assert dlg.tab_widget.tabText(0) == "Peaks & Modes"
+    assert dlg.tab_widget.tabText(1) == "Fitting Options & Bounds"
 
+    assert hasattr(dlg, "spn_pos_tol")
+    assert hasattr(dlg, "spn_anharm_min")
+    assert hasattr(dlg, "spn_anharm_max")
+    assert hasattr(dlg, "spn_anharm_tol")
+    assert hasattr(dlg, "chk_constrain_signs")
+    assert hasattr(dlg, "cb_peak_shape")
+    assert dlg.spn_pos_tol.value() == 10.0
+    assert dlg.chk_constrain_signs.isChecked() is True
+    assert dlg.cb_peak_shape.currentText() == "Gaussian"
+    assert dlg.table_modes.columnCount() == 11
+    assert dlg.table_modes.horizontalHeaderItem(9).text() == "σ1"
+    assert dlg.table_modes.horizontalHeaderItem(10).text() == "σ3"
+    assert dlg.chk_correlated.isEnabled() is True
 
+    # Switch to Lorentzian (correlated disabled and unchecked, headers Γ1, Γ3)
+    dlg.cb_peak_shape.setCurrentText("Lorentzian")
+    assert dlg.table_modes.horizontalHeaderItem(9).text() == "Γ1"
+    assert dlg.table_modes.horizontalHeaderItem(10).text() == "Γ3"
+    assert "Γ" in dlg.lbl_sigma.text()
+    assert dlg.chk_correlated.isEnabled() is False
+    assert dlg.chk_correlated.isChecked() is False
+
+    # Switch back to Gaussian (correlated re-enabled)
+    dlg.cb_peak_shape.setCurrentText("Gaussian")
+    assert dlg.table_modes.horizontalHeaderItem(9).text() == "σ1"
+    assert "σ" in dlg.lbl_sigma.text()
+    assert dlg.chk_correlated.isEnabled() is True
+
+    # Add 2 diagonal modes and 1 cross-peak manually
+    dlg.modes.append({
+        "w1": 2010.0, "w3": 2010.0, "anharm": 16.0,
+        "amp_gsb": -1.0, "amp_esa": 0.8, "sigma_w1": 10.0, "sigma_w3": 10.0,
+    })
+    dlg.modes.append({
+        "w1": 2040.0, "w3": 2040.0, "anharm": 14.0,
+        "amp_gsb": -1.2, "amp_esa": 1.0, "sigma_w1": 10.0, "sigma_w3": 10.0,
+    })
+    dlg.modes.append({
+        "w1": 2010.0, "w3": 2040.0, "anharm": 14.0,
+        "amp_gsb": -0.3, "amp_esa": 0.2, "sigma_w1": 10.0, "sigma_w3": 10.0,
+        "link_w1": 0, "link_w3": 1, "link_anharm": 1,
+    })
+    dlg._populate_table()
+    assert dlg.table_modes.rowCount() == 3
+    assert dlg.table_modes.item(0, 0).text() == "#1"
+    assert dlg.table_modes.item(0, 1).text() == "2010.0"
+    assert dlg.table_modes.item(1, 1).text() == "2040.0"
+
+    # Cross-peak 3 displays linked values
+    assert dlg.table_modes.item(2, 1).text() == "2010.0"
+    assert dlg.table_modes.item(2, 3).text() == "2040.0"
+    assert dlg.table_modes.item(2, 5).text() == "14.0"
+
+    # Editing master Mode 1 w1 should synchronize linked slave Mode 3 w1
+    dlg.table_modes.item(0, 1).setText("2015.5")
+    assert dlg.modes[0]["w1"] == 2015.5
+    assert dlg.modes[2]["w1"] == 2015.5
+    assert dlg.table_modes.item(2, 1).text() == "2015.5"
+
+    # Test Save Simulated P2DAT button
+    assert hasattr(dlg, "btn_save_p2dat")
+    out_sim_p2dat = tmp_path / "simulated_test.p2dat"
+    from unittest.mock import patch
+    with (
+        patch("PyQt6.QtWidgets.QFileDialog.getSaveFileName", return_value=(str(out_sim_p2dat), "P2DAT (*.p2dat)")),
+        patch("PyQt6.QtWidgets.QMessageBox.information"),
+        patch("PyQt6.QtWidgets.QMessageBox.warning"),
+        patch("PyQt6.QtWidgets.QMessageBox.critical"),
+    ):
+        dlg._save_simulated_p2dat()
+
+    assert out_sim_p2dat.exists()
+    out_sim_txt = tmp_path / "simulated_test_parameters.txt"
+    assert out_sim_txt.exists()
+
+    # Verify saved file is a valid P2DAT reloadable dataset
+    ds_sim = pm.load_2D(out_sim_p2dat, data_type="P2DAT")
+    assert np.allclose(ds_sim.pump, ds.pump)
+    assert np.allclose(ds_sim.probe, ds.probe)
+    assert np.allclose(ds_sim.delays, ds.delays)
+
+    dlg.close()
 

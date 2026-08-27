@@ -34,44 +34,141 @@ def background_correct(Z, reference_index, do_correct: bool = True):
     return Zc
 
 
-def robust_polyfit(x, y, deg, max_iter=30, tol=1e-6):
-    """Robust linear/quadratic/polynomial fit using Tukey's bisquare weights."""
+def robust_polyfit(x, y, deg, max_iter=50, tol=1e-6, random_state=42):
+    """Robust polynomial fit using MSAC consensus sampling followed by Tukey's bisquare IRLS.
+
+    Parameters
+    ----------
+    x, y : array_like
+        1-D coordinate and response arrays.
+    deg : int
+        Polynomial degree (e.g. 0 for constant, 1 for linear, 2 for quadratic).
+    max_iter : int, optional
+        Maximum number of IRLS refinement iterations (default 50).
+    tol : float, optional
+        Convergence tolerance for weight changes in IRLS (default 1e-6).
+    random_state : int or None, optional
+        Seed for the random consensus sampler to ensure deterministic reproducibility.
+
+    Returns
+    -------
+    coeffs : np.ndarray
+        Polynomial coefficients in descending order of powers (highest degree first),
+        matching ``np.polyfit`` conventions.
+    """
     x = np.asarray(x, dtype=float)
     y = np.asarray(y, dtype=float)
     valid = np.isfinite(x) & np.isfinite(y)
     x = x[valid]
     y = y[valid]
+    n = len(x)
 
-    if len(x) <= deg:
+    if deg < 0:
+        raise ValueError("deg must be non-negative")
+    if n <= deg + 1:
+        return np.polyfit(x, y, deg)
+
+    if deg == 0:
+        return np.array([np.median(y)])
+
+    data_range = float(np.ptp(y))
+    if data_range < 1e-12:
+        return np.polyfit(x, y, deg)
+
+    # 1. MSAC / RANSAC robust consensus sampling
+    rng = np.random.default_rng(random_state)
+    n_samples = deg + 1
+    n_trials = max(300, min(2000, 200 * (deg + 1)))
+
+    sample_indices = np.empty((n_trials, n_samples), dtype=int)
+    for i in range(n_trials):
+        sample_indices[i] = rng.choice(n, size=n_samples, replace=False)
+
+    xs = x[sample_indices]
+    ys = y[sample_indices]
+
+    if deg == 1:
+        dx = xs[:, 1] - xs[:, 0]
+        valid_slopes = np.abs(dx) > 1e-10
+        xs = xs[valid_slopes]
+        ys = ys[valid_slopes]
+        dx = dx[valid_slopes]
+        m = (ys[:, 1] - ys[:, 0]) / dx
+        c = ys[:, 0] - m * xs[:, 0]
+        candidate_coeffs = np.column_stack((m, c))
+    elif deg == 2:
+        x0, x1, x2 = xs[:, 0], xs[:, 1], xs[:, 2]
+        y0, y1, y2 = ys[:, 0], ys[:, 1], ys[:, 2]
+        denom = (x0 - x1) * (x0 - x2) * (x1 - x2)
+        valid_denom = np.abs(denom) > 1e-10
+        x0, x1, x2 = x0[valid_denom], x1[valid_denom], x2[valid_denom]
+        y0, y1, y2 = y0[valid_denom], y1[valid_denom], y2[valid_denom]
+        denom = denom[valid_denom]
+
+        a = (x2 * (y1 - y0) + x1 * (y0 - y2) + x0 * (y2 - y1)) / denom
+        b = (x2**2 * (y0 - y1) + x1**2 * (y2 - y0) + x0**2 * (y1 - y2)) / denom
+        c = (x1 * x2 * (x1 - x2) * y0 + x2 * x0 * (x2 - x0) * y1 + x0 * x1 * (x0 - x1) * y2) / denom
+        candidate_coeffs = np.column_stack((a, b, c))
+    else:
+        candidate_list = []
+        for i in range(n_trials):
+            try:
+                candidate_list.append(np.polyfit(xs[i], ys[i], deg))
+            except (np.linalg.LinAlgError, ValueError):
+                continue
+        candidate_coeffs = np.array(candidate_list) if len(candidate_list) > 0 else np.empty((0, deg + 1))
+
+    if len(candidate_coeffs) == 0:
         return np.polyfit(x, y, deg)
 
     X = np.vander(x, deg + 1)
-    w = np.ones_like(y)
-    coeffs = np.zeros(deg + 1)
+    preds = candidate_coeffs @ X.T
+    residuals = np.abs(preds - y[np.newaxis, :])
 
-    for _ in range(max_iter):
-        sw = np.sqrt(w)
-        # Solve weighted least squares using numpy.linalg.lstsq
-        new_coeffs, _, _, _ = np.linalg.lstsq(X * sw[:, np.newaxis], y * sw, rcond=None)
+    med_res = np.median(residuals, axis=1)
+    scales = 1.4826 * med_res
 
-        resid = y - X @ new_coeffs
-        mad = np.median(np.abs(resid - np.median(resid)))
-        s = 1.4826 * mad
-        if not np.isfinite(s) or s < 1e-12:
-            new_w = np.ones_like(resid)
-        else:
+    default_threshold = max(1.0, data_range * 0.05)
+    thresh = np.clip(3.0 * scales, 1.0, default_threshold)
+
+    losses = np.sum(np.minimum(residuals**2, thresh[:, np.newaxis]**2), axis=1)
+
+    best_idx = int(np.argmin(losses))
+    best_coeffs = candidate_coeffs[best_idx]
+    best_inliers = residuals[best_idx] < thresh[best_idx]
+
+    # 2. Refinement on inliers using IRLS with Tukey's bisquare weights
+    x_in = x[best_inliers]
+    y_in = y[best_inliers]
+
+    if len(x_in) > deg + 1:
+        X_in = np.vander(x_in, deg + 1)
+        coeffs = best_coeffs.copy()
+        w = np.ones_like(y_in)
+
+        for _ in range(max_iter):
+            sw = np.sqrt(w)
+            try:
+                new_coeffs, _, _, _ = np.linalg.lstsq(X_in * sw[:, np.newaxis], y_in * sw, rcond=None)
+            except np.linalg.LinAlgError:
+                break
+
+            resid = y_in - X_in @ new_coeffs
+            mad = np.median(np.abs(resid - np.median(resid)))
+            s = 1.4826 * mad
+            if not np.isfinite(s) or s < 1e-12:
+                break
             u = resid / (4.685 * s)
             new_w = np.where(np.abs(u) < 1.0, (1.0 - u**2) ** 2, 0.0)
-            if np.sum(new_w) == 0:
-                new_w = np.ones_like(resid)
-
-        if np.all(np.abs(new_w - w) < tol):
+            if np.sum(new_w > 0) <= deg + 1:
+                break
+            if np.all(np.abs(new_w - w) < tol):
+                coeffs = new_coeffs
+                break
             coeffs = new_coeffs
-            break
-        w = new_w
-    else:
-        coeffs = new_coeffs
-    return coeffs
+            w = new_w
+        return coeffs
+    return best_coeffs
 
 
 def process(

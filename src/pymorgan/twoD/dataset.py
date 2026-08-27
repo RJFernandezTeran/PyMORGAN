@@ -717,6 +717,13 @@ class Dataset2D:
 
         return analyse.get_slice_integrate_probe(self, probe_min, probe_max)
 
+    def to_p2dat(self, path: str | PathLike, use_corrected: bool = True) -> None:
+        """Write this 2D dataset to a P2DAT file."""
+        from .load import write_P2DAT
+
+        Z_data = self.Z if use_corrected else self.Z_R
+        write_P2DAT(path, self.pump, self.probe, self.delays, Z_data)
+
 
 def load_2D(path: str | PathLike, data_type: str = "P2DAT", progress_tracker=None) -> Dataset2D:
     """Convenience wrapper for :meth:`Dataset2D.from_file`."""

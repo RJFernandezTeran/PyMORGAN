@@ -29,6 +29,8 @@ from .load import (
     map_dataset_glob,
     read_P2DAT,
     register_map_loader,
+    save_P2DAT,
+    write_P2DAT,
 )
 from .plot import Map2DAxes, plot_map
 from .process import background_correct
@@ -40,6 +42,8 @@ __all__ = [
     "get_map_loader",
     "available_map_loaders",
     "read_P2DAT",
+    "write_P2DAT",
+    "save_P2DAT",
     "background_correct",
     "plot_map",
     "Map2DAxes",
