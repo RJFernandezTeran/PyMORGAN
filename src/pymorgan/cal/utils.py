@@ -64,7 +64,7 @@ def merge_calibration(det1_cm: np.ndarray, det2_cm: np.ndarray) -> np.ndarray:
 
 
 def save_calibration_file(
-    cm_axis: np.ndarray,
+    probe_axis: np.ndarray,
     output_dir: str | Path,
     filename: str = "CalibratedProbe.csv",
     save_timestamped: bool = False,
@@ -78,8 +78,8 @@ def save_calibration_file(
 
     Parameters
     ----------
-    cm_axis : np.ndarray
-        Calibrated wavenumber or wavelength vector.
+    probe_axis : np.ndarray
+        Calibrated wavenumber or wavelength vector (in native detector units).
     output_dir : str or Path
         Target export directory.
     filename : str, default "CalibratedProbe.csv"
@@ -87,7 +87,7 @@ def save_calibration_file(
     save_timestamped : bool, default False
         If True, also saves a timestamped copy (e.g. CalibProbe_20260722-2119.csv).
     cal_type_code : int, optional
-        Calibration setup type code (1..10).
+        Calibration setup type code (1..11).
     save_mat : bool, optional
         Explicit override to save pix2lam.mat. If None, auto-activates for UniGE fsTA/nsTA (codes 2, 3, 5).
 
@@ -100,7 +100,7 @@ def save_calibration_file(
     out_path.mkdir(parents=True, exist_ok=True)
 
     primary_file = out_path / filename
-    np.savetxt(primary_file, cm_axis, delimiter=",", fmt="%.6f")
+    np.savetxt(primary_file, probe_axis, delimiter=",", fmt="%.6f")
 
     # Save pix2lam.mat only for UniGE fsTA / nsTA datasets (codes 2, 3, 5) or if save_mat=True
     should_save_mat = save_mat if save_mat is not None else (cal_type_code in (2, 3, 5))
@@ -109,7 +109,7 @@ def save_calibration_file(
 
         mat_file = out_path / "pix2lam.mat"
         try:
-            sio.savemat(mat_file, {"lam": np.asarray(cm_axis, dtype=float).ravel()})
+            sio.savemat(mat_file, {"lam": np.asarray(probe_axis, dtype=float).ravel()})
         except Exception:
             pass
 
@@ -119,9 +119,9 @@ def save_calibration_file(
         timestamp_file = out_path / f"CalibProbe_{stamp}.csv"
 
         # Format 2-column format [pixel_index, calibrated_value]
-        n = len(cm_axis)
+        n = len(probe_axis)
         pixels = np.arange(n, dtype=float)
-        stacked = np.column_stack([pixels, cm_axis])
+        stacked = np.column_stack([pixels, probe_axis])
         np.savetxt(timestamp_file, stacked, delimiter=",", fmt=["%d", "%.6f"])
 
     return primary_file, timestamp_file

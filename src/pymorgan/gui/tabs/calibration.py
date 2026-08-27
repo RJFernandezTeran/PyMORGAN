@@ -881,12 +881,14 @@ class CalibrationTabMixin:
 
         try:
             cal_code = (
-                self.cal_combo_setup.currentIndex() + 1
-                if hasattr(self, "cal_combo_setup") and self.cal_combo_setup is not None
+                self.cal_type_combo.currentIndex() + 1
+                if hasattr(self, "cal_type_combo") and self.cal_type_combo is not None
                 else None
             )
+            is_ir = cal_code in (1, 4, 6, 7, 8, 9) if cal_code is not None else False
+            probe_vector = res1.wavenumber_cm1 if is_ir else res1.wavelength_nm
             primary, _ = save_calibration_file(
-                res1.wavenumber_cm1, target_path, save_timestamped=False, cal_type_code=cal_code
+                probe_vector, target_path, save_timestamped=False, cal_type_code=cal_code
             )
             QMessageBox.information(
                 self,
