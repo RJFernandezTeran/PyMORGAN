@@ -2562,32 +2562,63 @@ def plot_species_spectra(
             yplot_s = hlp.uniform_smooth(yplot, np.abs(doSmooth))
             yplot_s = np.ma.masked_where(cond, yplot_s)
 
-        # The lifetime is formatted once, centrally: unit from the magnitude,
-        # digits bounded, uncertainty in the same unit, and no uncertainty on a
-        # parameter that was held fixed (see helpers.format_lifetime_label).
-        tau_text = hlp.format_lifetime_label(
-            Taus[i],
-            Units["unitsT_ltx"],
-            err=TauErr[i] if (printErrors and TauErr is not None and i < len(TauErr)) else None,
-            roundT=roundT,
-            fixed=bool(isFixTau[i]) if isFixTau is not None and i < len(isFixTau) else False,
-            pair_round=bool(pair_round),
-            settings=s,
-        )
         name = (
             species_labels[i]
             if species_labels and i < len(species_labels)
             else string.ascii_uppercase[i]
         )
-        if modelType == "Sequential":
-            lbl = f"{name} ({tau_text})"
+        if modelType == "Target":
+            # For Target models, species spectra represent individual chemical species
+            # rather than single unbranched lifetimes. Label with the species name.
+            lbl = name
+        elif modelType == "Sequential":
+            tau_text = (
+                hlp.format_lifetime_label(
+                    Taus[i],
+                    Units["unitsT_ltx"],
+                    err=TauErr[i] if (printErrors and TauErr is not None and i < len(TauErr)) else None,
+                    roundT=roundT,
+                    fixed=bool(isFixTau[i]) if isFixTau is not None and i < len(isFixTau) else False,
+                    pair_round=bool(pair_round),
+                    settings=s,
+                )
+                if (Taus is not None and i < len(Taus))
+                else ""
+            )
+            lbl = f"{name} ({tau_text})" if tau_text else name
         elif modelType == "Parallel":
+            tau_text = (
+                hlp.format_lifetime_label(
+                    Taus[i],
+                    Units["unitsT_ltx"],
+                    err=TauErr[i] if (printErrors and TauErr is not None and i < len(TauErr)) else None,
+                    roundT=roundT,
+                    fixed=bool(isFixTau[i]) if isFixTau is not None and i < len(isFixTau) else False,
+                    pair_round=bool(pair_round),
+                    settings=s,
+                )
+                if (Taus is not None and i < len(Taus))
+                else ""
+            )
             if species_labels and i < len(species_labels):
-                lbl = f"{name} ({tau_text})"
+                lbl = f"{name} ({tau_text})" if tau_text else name
             else:
-                lbl = r"$\tau_{%i}$ = %s" % (i + 1, tau_text)
+                lbl = r"$\tau_{%i}$ = %s" % (i + 1, tau_text) if tau_text else f"Component {i + 1}"
         else:
-            lbl = f"{name} ({tau_text})"
+            tau_text = (
+                hlp.format_lifetime_label(
+                    Taus[i],
+                    Units["unitsT_ltx"],
+                    err=TauErr[i] if (printErrors and TauErr is not None and i < len(TauErr)) else None,
+                    roundT=roundT,
+                    fixed=bool(isFixTau[i]) if isFixTau is not None and i < len(isFixTau) else False,
+                    pair_round=bool(pair_round),
+                    settings=s,
+                )
+                if (Taus is not None and i < len(Taus))
+                else ""
+            )
+            lbl = f"{name} ({tau_text})" if tau_text else name
 
 
         if doSmooth > 0:

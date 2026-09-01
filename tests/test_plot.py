@@ -54,6 +54,23 @@ def test_species_spectra(corrected):
     assert isinstance(ax, Axes)
 
 
+def test_species_spectra_target_labels_only_species_names(corrected):
+    n = corrected.probe.size
+    Sfit = np.random.RandomState(0).randn(n, 3)
+    ax = corrected.plot_species_spectra(
+        Sfit,
+        [1.0, 5.0, 20.0, 50.0],  # 4 rates, 3 species
+        None,
+        None,
+        "Target",
+        species_labels=["Q", "I", "D"],
+    )
+    assert isinstance(ax, Axes)
+    labels = [line.get_label() for line in ax.get_lines()]
+    assert labels == ["Q", "I", "D"]
+
+
+
 def test_settings_drive_defaults(corrected):
     pm.update_settings(cmap="DkRd/Wh/DkBu", time_axis_scale="lin", label_style="[]")
     assert isinstance(corrected.plot_contour(), Axes)
