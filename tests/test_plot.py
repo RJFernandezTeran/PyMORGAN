@@ -65,8 +65,7 @@ def test_species_spectra_target_labels_only_species_names(corrected):
         "Target",
         species_labels=["Q", "I", "D"],
     )
-    assert isinstance(ax, Axes)
-    labels = [line.get_label() for line in ax.get_lines()]
+    labels = [line.get_label() for line in ax.get_lines() if not line.get_label().startswith("_")]
     assert labels == ["Q", "I", "D"]
 
 

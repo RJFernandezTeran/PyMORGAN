@@ -770,6 +770,7 @@ class MainWindow(
             "actionQuit": self.close,
             "actionLoadSpectrum": self._load_spectrum,
             "actionSubtractShockwave": self._subtract_shockwave,
+            "actionTimeDerivative": self._calculate_time_derivative,
             "actionLoadAbsorption": lambda _=False: self._load_steady_state("absorption"),
             "actionLoadEmission": lambda _=False: self._load_steady_state("emission"),
             "actionClearSteadyState": self._clear_steady_state,
@@ -1083,13 +1084,16 @@ class MainWindow(
             QMessageBox.warning(self, "Export failed", str(exc))
 
     def _on_main_tabs_changed(self, index: int):
-        """Enable / disable PDAT / P2DAT actions based on current tab index."""
+        """Enable / disable PDAT / P2DAT / oneD actions based on current tab index."""
         act_1d = getattr(self, "actionExportPDAT", None)
         act_2d = getattr(self, "actionExportP2DAT", None)
+        act_deriv = getattr(self, "actionTimeDerivative", None)
         if act_1d is not None:
             act_1d.setEnabled(index == 0)
         if act_2d is not None:
             act_2d.setEnabled(index == 1)
+        if act_deriv is not None:
+            act_deriv.setEnabled(index == 0 and getattr(self, "dataset", None) is not None)
         if index == 0 and getattr(self, "plot_controls", None) is not None:
             self.plot_controls.sync_from_settings()
         elif index == 2:

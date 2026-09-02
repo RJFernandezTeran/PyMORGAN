@@ -498,3 +498,49 @@ def test_main_window_about_invokes_modern_dialog(window, monkeypatch):
     monkeypatch.setattr(ModernAboutDialog, "exec", lambda self: executed.append(True))
     window._about()
     assert len(executed) == 1
+
+
+def test_time_derivative_dialog_and_menu_gating(window, tmp_path):
+    from pymorgan.gui.time_derivative_dialog import TimeDerivativeDialog
+
+    act = getattr(window, "actionTimeDerivative", None)
+    assert act is not None
+
+    # Before dataset load, action is disabled
+    assert not act.isEnabled()
+
+    # Load 1D dataset
+    info = synthetic.make_synthetic_pdat(tmp_path / "td_test.pdat")
+    window.load_path(info["path"], "PDAT")
+    assert window.dataset is not None
+    assert act.isEnabled()
+
+    # Switch to 2D tab (index 1) -> action should be disabled
+    window.MainTabs.setCurrentIndex(1)
+    assert not act.isEnabled()
+
+    # Switch to Calibration tab (index 2) -> action should be disabled
+    window.MainTabs.setCurrentIndex(2)
+    assert not act.isEnabled()
+
+    # Switch back to 1D tab (index 0) -> action should be enabled
+    window.MainTabs.setCurrentIndex(0)
+    assert act.isEnabled()
+
+    # Test TimeDerivativeDialog construction and options
+    dlg = TimeDerivativeDialog(window, window.dataset)
+    opts = dlg.get_options()
+    assert isinstance(opts, dict)
+    assert "interpolate" in opts
+    assert "smooth" in opts
+
+    # Toggle interpolation and smoothing
+    dlg.interp_chk.setChecked(True)
+    dlg.smooth_chk.setChecked(True)
+    opts_updated = dlg.get_options()
+    assert opts_updated["interpolate"] is True
+    assert opts_updated["smooth"] is True
+    assert opts_updated["smooth_method"] == "savgol"
+
+    dlg.close()
+

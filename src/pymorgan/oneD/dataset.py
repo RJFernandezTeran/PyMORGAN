@@ -838,6 +838,71 @@ class Dataset1D:
             per_pixel_scale=per_pixel_scale,
         )
 
+    def time_derivative(
+        self,
+        *,
+        t_min: float | None = None,
+        interpolate: bool = False,
+        n_interp: int | None = None,
+        interp_kind: str = "cubic",
+        smooth: bool = False,
+        smooth_method: str = "savgol",
+        smooth_window: int = 7,
+        smooth_poly: int = 2,
+    ) -> Dataset1D:
+        """Calculate the time derivative d(Delta A)/dt along the delay axis.
+
+        Returns a new :class:`Dataset1D` holding the differentiated signals
+        with updated units metadata (e.g. ``d(Delta A)/dt``).
+        """
+        from .process import time_derivative
+
+        delays_out, Zavg_dt, Zss_dt = time_derivative(
+            self.delays,
+            self.Z,
+            self.Zss_R,
+            t_min=t_min,
+            interpolate=interpolate,
+            n_interp=n_interp,
+            interp_kind=interp_kind,
+            smooth=smooth,
+            smooth_method=smooth_method,
+            smooth_window=smooth_window,
+            smooth_poly=smooth_poly,
+        )
+
+        units_out = dict(self.units)
+        t_unit = units_out.get("unitsT_ltx") or units_out.get("time_unit") or "ps"
+        units_out["unitsZ_lbl"] = r"$\mathrm{d}(\Delta A)/\mathrm{d}t$"
+        units_out["unitsZ_ltx"] = rf"$\mathrm{{mOD}}/\mathrm{{{t_unit}}}$"
+        units_out["unitsZ"] = "dZ/dt"
+
+        Zstdv_out = None
+        if self.Zstdv is not None and np.any(self.Zstdv):
+            try:
+                if t_min is not None:
+                    mask = self.delays >= float(t_min)
+                    Zstdv_out = self.Zstdv[mask, ...]
+                else:
+                    Zstdv_out = self.Zstdv.copy()
+            except Exception:
+                Zstdv_out = None
+
+        new_ds = Dataset1D(
+            Zavg_dt,
+            delays_out,
+            self.probe.copy(),
+            units_out,
+            nscans=self.nscans,
+            Zss_R=Zss_dt,
+            Zstdv=Zstdv_out,
+            source=self.source,
+            data_type=self.data_type,
+            scan_ids=self.scan_ids,
+            counts=self.counts,
+        )
+        return new_ds
+
     # ----------------------------------------------------------------- #
     #                              Plot                                 #
     # ----------------------------------------------------------------- #

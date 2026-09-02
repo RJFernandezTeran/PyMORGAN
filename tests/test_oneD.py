@@ -336,3 +336,58 @@ def test_shockwave_subtraction_on_dataset(dataset):
     assert ds.Zavg_C is not None
     np.testing.assert_allclose(ds._shockwave_pixels, [0, 1])
     assert ds._shockwave_trace is not None
+
+
+# --------------------------------------------------------------------------- #
+#                             Time Derivative                                 #
+# --------------------------------------------------------------------------- #
+def test_time_derivative_process_basic():
+    from pymorgan.oneD.process import time_derivative
+
+    t = np.linspace(0.0, 50.0, 101)
+    # Z(t) = 10 * exp(-t / 10.0) -> dZ/dt = -exp(-t / 10.0)
+    Z = 10.0 * np.exp(-t / 10.0)[:, np.newaxis, np.newaxis]
+    t_out, Z_dt, _ = time_derivative(t, Z)
+    assert np.array_equal(t_out, t)
+    # Check interior points for second-order accuracy
+    expected = -np.exp(-t[1:-1] / 10.0)[:, np.newaxis, np.newaxis]
+    np.testing.assert_allclose(Z_dt[1:-1], expected, atol=0.01, rtol=0.02)
+
+
+def test_time_derivative_t_min_cutoff():
+    from pymorgan.oneD.process import time_derivative
+
+    t = np.linspace(-5.0, 50.0, 111)
+    Z = np.sin(t)[:, np.newaxis]
+    t_out, Z_dt, _ = time_derivative(t, Z, t_min=1.0)
+    assert np.all(t_out >= 1.0)
+    assert len(t_out) < len(t)
+
+
+def test_time_derivative_interpolation_and_smoothing():
+    from pymorgan.oneD.process import time_derivative
+
+    t = np.geomspace(0.1, 100.0, 40)
+    Z = np.exp(-t / 20.0)[:, np.newaxis]
+    t_out, Z_dt, _ = time_derivative(
+        t,
+        Z,
+        interpolate=True,
+        n_interp=80,
+        interp_kind="pchip",
+        smooth=True,
+        smooth_method="savgol",
+        smooth_window=7,
+    )
+    assert len(t_out) == 80
+    assert Z_dt.shape[0] == 80
+
+
+def test_time_derivative_on_dataset(dataset):
+    ds = dataset
+    ds_dt = ds.time_derivative(t_min=0.0, smooth=True, smooth_window=5)
+    assert isinstance(ds_dt, Dataset1D)
+    assert np.all(ds_dt.delays >= 0.0)
+    assert ds_dt.units.get("unitsZ_lbl") == r"$\mathrm{d}(\Delta A)/\mathrm{d}t$"
+    assert ds_dt.Z.shape[0] == ds_dt.delays.shape[0]
+    assert ds_dt.Z.shape[1] == ds.probe.shape[0]

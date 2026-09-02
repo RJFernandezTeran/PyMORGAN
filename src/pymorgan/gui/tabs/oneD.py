@@ -138,6 +138,11 @@ class OneDTabMixin:
         self._update_sample_info()
         self._set_dataset_widgets_visible(True)
 
+        act_deriv = getattr(self, "actionTimeDerivative", None)
+        if act_deriv is not None:
+            tab_idx = self.MainTabs.currentIndex() if hasattr(self, "MainTabs") and self.MainTabs is not None else 0
+            act_deriv.setEnabled(tab_idx == 0 and self.dataset is not None)
+
         if self.dataset is not None:
             has_single = bool(np.isfinite(self.dataset.nscans) and self.dataset.nscans > 0)
             box_single = getattr(self, "oneD_singleScan_box", None)
@@ -1031,6 +1036,29 @@ class OneDTabMixin:
             self.statusBar().showMessage(f"Shockwave kinetic trace subtracted ({p_str})")
         except Exception as exc:
             QMessageBox.critical(self, "Shockwave Subtraction Failed", str(exc))
+
+    @busy_guard("Calculating time derivative...")
+    def _calculate_time_derivative(self):
+        """Prompt for options and compute the time derivative d(Delta A)/dt of transient spectra."""
+        if self.dataset is None:
+            self.open_file()
+            if self.dataset is None:
+                return
+
+        from pymorgan.gui.time_derivative_dialog import TimeDerivativeDialog
+
+        dlg = TimeDerivativeDialog(self, self.dataset)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        try:
+            opts = dlg.get_options()
+            self.dataset = self.dataset.time_derivative(**opts)
+            self._preview_contour()
+            self._update_sample_info()
+            self.statusBar().showMessage("Calculated time derivative d(\u0394A)/dt of spectra")
+        except Exception as exc:
+            QMessageBox.critical(self, "Time Derivative Failed", str(exc))
 
     @busy_guard("Fitting chirp correction...")
     def _fit_chirp(self):

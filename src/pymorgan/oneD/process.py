@@ -539,3 +539,135 @@ def subtract_shockwave(Z, pixels, one_based: bool = True):
         raise ValueError(f"Unsupported Z dimension {Z_arr.ndim} for shockwave subtraction.")
 
     return Z_corrected, shockwave_trace
+
+
+def time_derivative(
+    delays: np.ndarray,
+    Zavg_R: np.ndarray,
+    Zss_R: np.ndarray | None = None,
+    *,
+    t_min: float | None = None,
+    interpolate: bool = False,
+    n_interp: int | None = None,
+    interp_kind: str = "cubic",
+    smooth: bool = False,
+    smooth_method: str = "savgol",
+    smooth_window: int = 7,
+    smooth_poly: int = 2,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
+    """Calculate the time derivative d(Delta A)/dt along the delay axis.
+
+    Parameters
+    ----------
+    delays : np.ndarray, shape (Ndelays,)
+        Original delay values.
+    Zavg_R : np.ndarray
+        Averaged transient absorption signal.
+    Zss_R : np.ndarray, optional
+        Single-scan data if present.
+    t_min : float, optional
+        If specified, drops all delay points where delays < t_min.
+    interpolate : bool, default False
+        Whether to interpolate the data onto a denser delay grid before differentiating.
+    n_interp : int, optional
+        Number of points for the interpolated delay grid. Defaults to 2 * len(delays).
+    interp_kind : str, default "cubic"
+        Interpolation method: "linear", "cubic", or "pchip".
+    smooth : bool, default False
+        Whether to smooth the kinetics before differentiating.
+    smooth_method : str, default "savgol"
+        Smoothing filter: "savgol", "gaussian", or "moving_average".
+    smooth_window : int, default 7
+        Window size for smoothing (odd integer >= 5 for savgol).
+    smooth_poly : int, default 2
+        Polynomial order for Savitzky-Golay filter.
+
+    Returns
+    -------
+    delays_out : np.ndarray
+        Output delay axis.
+    Zavg_dt : np.ndarray
+        Differentiated averaged signal array (dZ/dt).
+    Zss_dt : np.ndarray or None
+        Differentiated single-scan array if Zss_R was provided.
+    """
+    delays = np.asarray(delays, dtype=float)
+    Zavg = np.asarray(Zavg_R, dtype=float)
+    Zss_arr = np.asarray(Zss_R, dtype=float) if Zss_R is not None else None
+    has_ss = Zss_arr is not None and Zss_arr.ndim == 4 and Zss_arr.shape[3] >= 1 and np.any(np.isfinite(Zss_arr))
+    Zss = Zss_arr if has_ss else None
+
+    # 1. Early delay cutoff
+    if t_min is not None:
+        mask = delays >= float(t_min)
+        if not np.any(mask):
+            raise ValueError(f"No delay points remain with t >= {t_min}")
+        delays = delays[mask]
+        Zavg = Zavg[mask, ...]
+        if Zss is not None:
+            Zss = Zss[mask, ...]
+
+    if len(delays) < 3:
+        raise ValueError(f"At least 3 delay points are required to compute time derivatives, got {len(delays)}.")
+
+    # 2. Interpolation
+    if interpolate:
+        n_pts = int(n_interp) if n_interp is not None else int(2 * len(delays))
+        n_pts = max(len(delays), n_pts)
+        if np.all(delays > 0) and (delays[-1] / delays[0]) > 20.0:
+            t_new = np.geomspace(delays[0], delays[-1], n_pts)
+        else:
+            t_new = np.linspace(delays[0], delays[-1], n_pts)
+
+        if interp_kind.lower() == "pchip":
+            from scipy.interpolate import PchipInterpolator
+
+            f_avg = PchipInterpolator(delays, Zavg, axis=0)
+            Zavg = f_avg(t_new)
+            if Zss is not None:
+                f_ss = PchipInterpolator(delays, Zss, axis=0)
+                Zss = f_ss(t_new)
+        else:
+            from scipy.interpolate import interp1d
+
+            kind = interp_kind.lower() if interp_kind.lower() in ("linear", "cubic", "quadratic", "nearest") else "cubic"
+            f_avg = interp1d(delays, Zavg, axis=0, kind=kind, bounds_error=False, fill_value="extrapolate")
+            Zavg = f_avg(t_new)
+            if Zss is not None:
+                f_ss = interp1d(delays, Zss, axis=0, kind=kind, bounds_error=False, fill_value="extrapolate")
+                Zss = f_ss(t_new)
+        delays = t_new
+
+    # 3. Smoothing
+    if smooth:
+        sm = str(smooth_method).lower()
+        if sm == "gaussian":
+            from scipy.ndimage import gaussian_filter1d
+
+            sig = max(0.5, float(smooth_window) / 3.0)
+            Zavg = gaussian_filter1d(Zavg, sigma=sig, axis=0)
+            if Zss is not None:
+                Zss = gaussian_filter1d(Zss, sigma=sig, axis=0)
+        elif sm in ("moving_average", "uniform"):
+            from scipy.ndimage import uniform_filter1d
+
+            win = max(3, int(smooth_window))
+            Zavg = uniform_filter1d(Zavg, size=win, axis=0)
+            if Zss is not None:
+                Zss = uniform_filter1d(Zss, size=win, axis=0)
+        else:  # savgol (default)
+            from scipy.signal import savgol_filter
+
+            win = int(smooth_window) if int(smooth_window) % 2 == 1 else int(smooth_window) + 1
+            win = max(5, win)
+            win = min(win, len(delays) if len(delays) % 2 == 1 else len(delays) - 1)
+            poly = min(int(smooth_poly), win - 1)
+            Zavg = savgol_filter(Zavg, win, polyorder=poly, axis=0)
+            if Zss is not None:
+                Zss = savgol_filter(Zss, win, polyorder=poly, axis=0)
+
+    # 4. Numerical gradient
+    Zavg_dt = np.gradient(Zavg, delays, axis=0)
+    Zss_dt = np.gradient(Zss, delays, axis=0) if Zss is not None else None
+
+    return delays, Zavg_dt, Zss_dt

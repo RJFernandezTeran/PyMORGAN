@@ -1,4 +1,4 @@
-# Form implementation generated from reading ui file 'C:\Users\ricar\Documents\GitHub\PyMORGAN\src\pymorgan\gui\main_window.ui'
+# Form implementation generated from reading ui file 'src/pymorgan/gui/main_window.ui'
 #
 # Created by: PyQt6 UI code generator 6.11.0
 #
@@ -1642,6 +1642,8 @@ class Ui_MainWindow(object):
         self.actionLoadSpectrum.setObjectName("actionLoadSpectrum")
         self.actionSubtractShockwave = QtGui.QAction(parent=MainWindow)
         self.actionSubtractShockwave.setObjectName("actionSubtractShockwave")
+        self.actionTimeDerivative = QtGui.QAction(parent=MainWindow)
+        self.actionTimeDerivative.setObjectName("actionTimeDerivative")
         self.actionLoadAbsorption = QtGui.QAction(parent=MainWindow)
         self.actionLoadAbsorption.setObjectName("actionLoadAbsorption")
         self.actionLoadEmission = QtGui.QAction(parent=MainWindow)
@@ -1678,6 +1680,7 @@ class Ui_MainWindow(object):
         self.menuView.addAction(self.actionRestoreWindowSize)
         self.menuSpectra.addAction(self.actionLoadSpectrum)
         self.menuSpectra.addAction(self.actionSubtractShockwave)
+        self.menuSpectra.addAction(self.actionTimeDerivative)
         self.menuSpectra.addSeparator()
         self.menuSpectra.addAction(self.actionLoadAbsorption)
         self.menuSpectra.addAction(self.actionLoadEmission)
@@ -2003,6 +2006,8 @@ class Ui_MainWindow(object):
         self.actionLoadSpectrum.setText(_translate("MainWindow", "&Load && Plot Spectrum…"))
         self.actionSubtractShockwave.setText(_translate("MainWindow", "Subtract &shock wave..."))
         self.actionSubtractShockwave.setToolTip(_translate("MainWindow", "Subtract an average kinetic trace calculated over selected pixels from all dataset pixels"))
+        self.actionTimeDerivative.setText(_translate("MainWindow", "&Time derivative of spectra..."))
+        self.actionTimeDerivative.setToolTip(_translate("MainWindow", "Calculate the time derivative d(ΔA)/dt of transient spectra along the delay axis with optional interpolation and smoothing"))
         self.actionLoadAbsorption.setText(_translate("MainWindow", "Load steady-state &absorption…"))
         self.actionLoadAbsorption.setToolTip(_translate("MainWindow", "Load a steady-state absorption spectrum, overlaid as a shaded area on transient spectra."))
         self.actionLoadEmission.setText(_translate("MainWindow", "Load steady-state &emission…"))

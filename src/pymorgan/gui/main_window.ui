@@ -3724,6 +3724,7 @@ The magnitude sets the smoothing window width.</string>
     </property>
     <addaction name="actionLoadSpectrum" />
     <addaction name="actionSubtractShockwave" />
+    <addaction name="actionTimeDerivative" />
     <addaction name="separator" />
     <addaction name="actionLoadAbsorption" />
     <addaction name="actionLoadEmission" />
@@ -3806,13 +3807,21 @@ The magnitude sets the smoothing window width.</string>
    </property>
   </action>
   <action name="actionSubtractShockwave">
-  <property name="text">
-   <string>Subtract &amp;shock wave...</string>
-  </property>
-  <property name="toolTip">
-   <string>Subtract an average kinetic trace calculated over selected pixels from all dataset pixels</string>
-  </property>
- </action>
+   <property name="text">
+    <string>Subtract &amp;shock wave...</string>
+   </property>
+   <property name="toolTip">
+    <string>Subtract an average kinetic trace calculated over selected pixels from all dataset pixels</string>
+   </property>
+  </action>
+  <action name="actionTimeDerivative">
+   <property name="text">
+    <string>&amp;Time derivative of spectra...</string>
+   </property>
+   <property name="toolTip">
+    <string>Calculate the time derivative d(ΔA)/dt of transient spectra along the delay axis with optional interpolation and smoothing</string>
+   </property>
+  </action>
   <action name="actionLoadAbsorption">
    <property name="text">
     <string>Load steady-state &amp;absorption…</string>
