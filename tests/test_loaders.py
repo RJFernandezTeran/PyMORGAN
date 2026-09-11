@@ -217,7 +217,11 @@ def test_unige_fsta_missing_file_raises():
 
 
 def test_unige_fsta_demo_directory_discovery():
-    demo_dir = Path(r"C:\Users\ricar\switchdrive\Ambizione UniGE\Scripts\testData\UniGE_TA\demo")
+    import os
+    env_dir = os.environ.get("PYMORGAN_TESTDATA_DIR")
+    if not env_dir:
+        pytest.skip("PYMORGAN_TESTDATA_DIR environment variable not set")
+    demo_dir = Path(env_dir) / "UniGE_TA" / "demo"
     if not demo_dir.is_dir():
         pytest.skip("Demo dataset directory not available on local path")
 
@@ -387,7 +391,11 @@ def test_harpia_invalid_file_raises(tmp_path):
 
 
 def test_harpia_demo_data_loading():
-    demo_dir = Path(r"D:\RicardoFiles\switchdrive\Ambizione UniGE\Scripts\testData\HARPIA\probe spectra for wl calibration\demo data")
+    import os
+    env_dir = os.environ.get("PYMORGAN_TESTDATA_DIR")
+    if not env_dir:
+        pytest.skip("PYMORGAN_TESTDATA_DIR environment variable not set")
+    demo_dir = Path(env_dir) / "HARPIA" / "probe spectra for wl calibration" / "demo data"
     if not demo_dir.is_dir():
         pytest.skip("Demo dataset directory not available on local path")
 
@@ -559,7 +567,11 @@ def test_load_unige_cal_synthetic(tmp_path):
 
 
 def test_load_unige_cal_demo_directory_discovery():
-    demo_calib = Path(r"C:\Users\ricar\switchdrive\Ambizione UniGE\Scripts\testData\UniGE_TA\demo\calib")
+    import os
+    env_dir = os.environ.get("PYMORGAN_TESTDATA_DIR")
+    if not env_dir:
+        pytest.skip("PYMORGAN_TESTDATA_DIR environment variable not set")
+    demo_calib = Path(env_dir) / "UniGE_TA" / "demo" / "calib"
     if not demo_calib.is_dir():
         pytest.skip("Demo calibration directory not available on local path")
 
@@ -597,7 +609,11 @@ def test_read_uos_irpp_synthetic_one_detector(tmp_path):
 
 
 def test_read_uos_irpp_real_dataset_discovery():
-    uos_root = Path(r"c:\Users\ricar\switchdrive\Ambizione UniGE\Scripts\testData\UoS")
+    import os
+    env_dir = os.environ.get("PYMORGAN_TESTDATA_DIR")
+    if not env_dir:
+        pytest.skip("PYMORGAN_TESTDATA_DIR environment variable not set")
+    uos_root = Path(env_dir) / "UoS"
     if not uos_root.is_dir():
         pytest.skip("UoS test directory not present")
 
@@ -657,7 +673,11 @@ def test_read_exported_txt_synthetic(tmp_path):
 
 
 def test_read_exported_txt_fig4_dataset():
-    fig4_path = Path(r"C:\Users\ricar\Downloads\DATA_FIG4\4CN")
+    import os
+    env_dir = os.environ.get("PYMORGAN_FIG4_DIR")
+    if not env_dir:
+        pytest.skip("PYMORGAN_FIG4_DIR environment variable not set")
+    fig4_path = Path(env_dir)
     if not fig4_path.is_dir():
         pytest.skip("FIG4 4CN dataset not found on disk")
 

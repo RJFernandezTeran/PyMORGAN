@@ -34,6 +34,7 @@ from PyQt6.QtWidgets import (
 )
 
 import pymorgan as pm
+from pymorgan import helpers as hlp
 from pymorgan.oneD.chirp import (
     default_chirp_filename,
     fit_chirp_automatic,
@@ -218,14 +219,23 @@ class OneDTabMixin:
         if not path:
             return
         try:
-            overlay = pm.load_spectrum(path, kind).as_overlay_dict()
+            spec = pm.load_spectrum(path, kind)
+            overlay = spec.as_overlay_dict()
         except Exception as exc:
             QMessageBox.warning(self, "Load failed", str(exc))
             return
         if kind == "absorption":
             self._ss_abs = overlay
+            self._ss_abs_spectrum = spec
+            led = getattr(self, "PP_led_SSabs", None)
+            if led is not None:
+                led.set_state("loaded")
         else:
             self._ss_em = overlay
+            self._ss_em_spectrum = spec
+            led = getattr(self, "PP_led_SSem", None)
+            if led is not None:
+                led.set_state("loaded")
         self.statusBar().showMessage(
             "Loaded steady-state %s (%s) — overlaid on new transient-spectra figures"
             % (kind, Path(path).name)
@@ -234,8 +244,72 @@ class OneDTabMixin:
     def _clear_steady_state(self):
         """Forget the loaded steady-state absorption / emission overlays."""
         self._ss_abs = None
+        self._ss_abs_spectrum = None
         self._ss_em = None
+        self._ss_em_spectrum = None
+        for led_name in ("PP_led_SSabs", "PP_led_SSem"):
+            led = getattr(self, led_name, None)
+            if led is not None:
+                led.set_state("off")
         self.statusBar().showMessage("Cleared steady-state overlays")
+
+    def _show_steady_state(self):
+        """Plot the loaded steady-state absorption and/or emission spectra in a new figure."""
+        has_abs = getattr(self, "_ss_abs_spectrum", None) is not None
+        has_em = getattr(self, "_ss_em_spectrum", None) is not None
+
+        if not has_abs and not has_em:
+            QMessageBox.information(
+                self,
+                "No Steady-State Data",
+                "No steady-state spectra have been loaded yet.\nPlease load an absorption or emission spectrum first.",
+            )
+            return
+
+        import matplotlib.pyplot as plt
+
+        pm.apply_style()
+        s = pm.get_settings()
+        normalise = self._norm()
+        fig, ax = plt.subplots(figsize=s.spectra_figsize)
+
+        if has_abs and has_em:
+            abs_spec = self._ss_abs_spectrum.normalised() if normalise else self._ss_abs_spectrum
+            em_spec = self._ss_em_spectrum.normalised() if normalise else self._ss_em_spectrum
+            ax.plot(abs_spec.x, abs_spec.y, color=getattr(s, "ss_abs_color", "b"), label=abs_spec.label or "Absorption")
+            ax.plot(em_spec.x, em_spec.y, color=getattr(s, "ss_em_color", "r"), label=em_spec.label or "Emission")
+            x_units, _ = abs_spec._xy_units()
+            y_units = {"lbl": "Absorbance / Intensity", "ltx": "a.u."}
+            hlp.setXYlabels(ax, s.label_style.value, x_units, y_units, normY=normalise)
+            ax.legend()
+        elif has_abs:
+            abs_spec = self._ss_abs_spectrum.normalised() if normalise else self._ss_abs_spectrum
+            ax.plot(abs_spec.x, abs_spec.y, color=getattr(s, "ss_abs_color", "b"), label=abs_spec.label or "Absorption")
+            x_units, y_units = abs_spec._xy_units()
+            hlp.setXYlabels(ax, s.label_style.value, x_units, y_units, normY=normalise)
+            if abs_spec.label:
+                ax.legend()
+        else:
+            em_spec = self._ss_em_spectrum.normalised() if normalise else self._ss_em_spectrum
+            ax.plot(em_spec.x, em_spec.y, color=getattr(s, "ss_em_color", "r"), label=em_spec.label or "Emission")
+            x_units, y_units = em_spec._xy_units()
+            hlp.setXYlabels(ax, s.label_style.value, x_units, y_units, normY=normalise)
+            if em_spec.label:
+                ax.legend()
+
+        ax.autoscale(enable=True, axis="x", tight=True)
+        title = "Steady-State Spectra"
+        if has_abs and has_em:
+            title = "Steady-State Absorption & Emission"
+        elif has_abs:
+            title = "Steady-State Absorption"
+        elif has_em:
+            title = "Steady-State Emission"
+        if normalise:
+            title += " (Normalised)"
+        ax.set_title(title)
+        fig.tight_layout()
+        plt.show(block=False)
 
     def _init_state_controls(self):
         """Create the spectrum/slow-mod spin boxes and the anisotropy menu.
@@ -650,6 +724,8 @@ class OneDTabMixin:
                     detector=det,
                 )
                 self._inherit_cut_limits("spectra", ax)
+                if self._save_traces_checked():
+                    self._export_traces_from_axes(ax, "spectra")
             elif kind == "kinetics":
                 if self._interactive():
                     self._pick_cut("kinetics")
@@ -668,6 +744,8 @@ class OneDTabMixin:
                 positions = self._probe_to_native(positions)
                 ax = self.dataset.plot_kinetics(positions, normY=self._norm(), detector=det)[0]
                 self._inherit_cut_limits("kinetics", ax)
+                if self._save_traces_checked():
+                    self._export_traces_from_axes(ax, "kinetics")
             plt.show(block=False)
         except Exception as exc:
             QMessageBox.warning(self, "Plot failed", str(exc))
@@ -721,6 +799,8 @@ class OneDTabMixin:
                     delays, binsize=binsize, doSmooth=self._smooth_value(), normY=self._norm()
                 )
                 self._inherit_cut_limits("spectra", ax)
+                if self._save_traces_checked():
+                    self._export_traces_from_axes(ax, "scan_spectra")
             elif kind == "kinetics":
                 if self._interactive():
                     self._pick_cut("kinetics", scans=True)
@@ -743,6 +823,8 @@ class OneDTabMixin:
                     positions, binsize=binsize, normY=self._norm()
                 )[0]
                 self._inherit_cut_limits("kinetics", ax)
+                if self._save_traces_checked():
+                    self._export_traces_from_axes(ax, "scan_kinetics")
             plt.show(block=False)
         except Exception as exc:
             QMessageBox.warning(self, "Plot failed", str(exc))
@@ -1350,6 +1432,109 @@ class OneDTabMixin:
         msg_box.finished.connect(on_finished)
         msg_box.show()
 
+    def _save_traces_checked(self) -> bool:
+        """Whether the 'Save traces?' tick box is checked."""
+        chk = getattr(self, "PP_SaveTraces_TickBox", None)
+        return bool(chk.isChecked()) if chk is not None else False
+
+    def _export_traces_from_axes(self, ax, cut_type: str) -> Path | None:
+        """Export plotted trace curves from ``ax`` to a CSV file.
+
+        Used when ``PP_SaveTraces_TickBox`` is checked. Automatically attempts to
+        save in the dataset's directory under a descriptive name.
+        If the directory is unavailable, unspecified, or read-only, prompts
+        with a file save dialog.
+        """
+        if ax is None or self.dataset is None:
+            return None
+
+        # Extract plotted lines (filtering out steady-state overlays and private helper lines)
+        valid_lines = []
+        for line in ax.get_lines():
+            lbl = line.get_label()
+            if not lbl or lbl.startswith("_") or lbl in ("Abs.", "Em."):
+                continue
+            x = np.asarray(line.get_xdata(), dtype=float)
+            y = np.asarray(line.get_ydata(), dtype=float)
+            if x.size > 0 and y.size == x.size:
+                valid_lines.append((lbl, x, y))
+
+        if not valid_lines:
+            return None
+
+        # Reference X axis and labels
+        ref_x = valid_lines[0][1]
+        x_label = ax.get_xlabel() or ("Probe" if "spectra" in cut_type else "Delay")
+        # Remove LaTeX math delimiters for header clarity if needed
+        clean_x_lbl = x_label.replace("$", "")
+        headers = [clean_x_lbl] + [lbl.replace("$", "") for lbl, _, _ in valid_lines]
+
+        cols = [ref_x]
+        for _, x, y in valid_lines:
+            if np.array_equal(x, ref_x):
+                cols.append(y)
+            else:
+                # Interpolate if on slightly different grid
+                interp_y = np.interp(ref_x, x, y, left=np.nan, right=np.nan)
+                cols.append(interp_y)
+
+        table = np.column_stack(cols)
+        csv_header = ",".join(headers)
+
+        # Determine target folder and default filename
+        dataset_stem = "dataset"
+        target_dir = None
+        if getattr(self, "_current_path", None):
+            cur_p = Path(self._current_path)
+            dataset_stem = cur_p.stem
+            target_dir = cur_p.parent if cur_p.is_file() else cur_p
+        elif getattr(self.dataset, "source", None):
+            src_p = Path(self.dataset.source)
+            dataset_stem = src_p.stem
+            target_dir = src_p.parent if src_p.is_file() else src_p
+        elif self._rootdir_text():
+            target_dir = Path(self._rootdir_text())
+
+        # Build clean filename
+        # Clean labels for filename: e.g. "1ps", "500fs", "2130"
+        labels_slug = "_".join(
+            re.sub(r"[^\w\.\-]", "", lbl) for lbl, _, _ in valid_lines[:5]
+        )
+        if len(valid_lines) > 5:
+            labels_slug += f"_and_{len(valid_lines)-5}_more"
+        filename = f"{dataset_stem}_{cut_type}_{labels_slug}.csv"
+
+        out_path = None
+        # Attempt to save directly in the dataset directory
+        if target_dir is not None and target_dir.is_dir():
+            candidate = target_dir / filename
+            try:
+                np.savetxt(candidate, table, delimiter=",", header=csv_header, comments="")
+                out_path = candidate
+            except (OSError, PermissionError):
+                out_path = None
+
+        # Fallback to save dialog if auto-save failed or directory was missing
+        if out_path is None:
+            default_str = str((target_dir or Path.home()) / filename)
+            chosen, _ = QFileDialog.getSaveFileName(
+                self,
+                "Save traces",
+                default_str,
+                "CSV files (*.csv);;All files (*)",
+            )
+            if not chosen:
+                return None
+            try:
+                np.savetxt(chosen, table, delimiter=",", header=csv_header, comments="")
+                out_path = Path(chosen)
+            except Exception as exc:
+                QMessageBox.warning(self, "Save traces failed", str(exc))
+                return None
+
+        self.statusBar().showMessage(f"Saved traces to: {out_path.name}")
+        return out_path
+
     def _interactive(self) -> bool:
         """Whether the Interactive tick box is checked (pick cuts on the map)."""
         chk = getattr(self, "PP_Interactive_TickBox", None)
@@ -1425,6 +1610,9 @@ class OneDTabMixin:
                     detector=det,
                 )
             self._inherit_cut_limits(kind, ax)
+            if self._save_traces_checked():
+                prefix = f"scan_{kind}" if scans else kind
+                self._export_traces_from_axes(ax, prefix)
             plt.show(block=False)
         except Exception as exc:
             QMessageBox.warning(self, "Plot failed", str(exc))

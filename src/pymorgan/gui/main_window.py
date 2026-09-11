@@ -122,7 +122,9 @@ class MainWindow(
         self._picker = None
 
         self._ss_abs = None
+        self._ss_abs_spectrum = None
         self._ss_em = None
+        self._ss_em_spectrum = None
 
         self._wire()
 
@@ -230,9 +232,10 @@ class MainWindow(
             "PP_ScanKinetics_btn": "Plot kinetics across individual dataset scans",
             "PP_ScanSpectra_btn": "Plot transient spectra across individual dataset scans",
             "PP_RecalcAvg_btn": "Recalculate dataset average excluding unselected scans",
-            "PP_LoadSSbutton": "Load steady-state FTIR spectrum from file",
-            "PP_ShowSSbutton": "Show or hide steady-state spectrum overlay",
-            "PP_ClearSSbutton": "Clear currently loaded steady-state overlay",
+            "PP_LoadSSabs_btn": "Load steady-state absorption spectrum from file",
+            "PP_LoadSSem_btn": "Load steady-state emission spectrum from file",
+            "PP_ShowSSbutton": "Plot loaded steady-state absorption and/or emission spectra",
+            "PP_ClearSSbutton": "Clear currently loaded steady-state spectra",
             "PC_restore": "Restore default zoom and axis limits for 1D plots",
             "twoD_reloadData_btn": "Reload current 2D dataset from file",
             "twoD_apply_changes_btn": "Apply phase and FT settings and reload 2D dataset",
@@ -305,6 +308,55 @@ class MainWindow(
                     f"QPushButton:disabled {{ color: {_DISABLED_LIGHT_FG}; background-color: {_DISABLED_LIGHT_BG}; border: 1px solid {_DISABLED_LIGHT_BORDER}; }}"
                 )
 
+        import colorsys
+        from matplotlib.colors import to_rgb, to_hex
+        s = pm.get_settings()
+
+        def ss_style(color_spec: str, font_size: str = "11px") -> str:
+            try:
+                r, g, b = to_rgb(color_spec)
+            except Exception:
+                r, g, b = (0.2, 0.4, 0.8)
+            alpha = float(getattr(s, "ss_fill_alpha", 0.05))
+            # Clip alpha to sensible bounds so tint is visible but soft
+            alpha = max(0.01, min(0.5, alpha))
+            h, l, s_val = colorsys.rgb_to_hls(r, g, b)
+
+            if dark:
+                base = (0.118, 0.161, 0.231)  # #1e293b
+                bg = tuple(c * alpha + base[i] * (1.0 - alpha) for i, c in enumerate((r, g, b)))
+                bdr_a = min(1.0, alpha + 0.30)
+                bdr = tuple(c * bdr_a + base[i] * (1.0 - bdr_a) for i, c in enumerate((r, g, b)))
+                hov_a = min(1.0, alpha + 0.12)
+                hov = tuple(c * hov_a + base[i] * (1.0 - hov_a) for i, c in enumerate((r, g, b)))
+                press_a = min(1.0, alpha + 0.20)
+                press = tuple(c * press_a + base[i] * (1.0 - press_a) for i, c in enumerate((r, g, b)))
+                text_color = to_hex(colorsys.hls_to_rgb(h, 0.80, min(1.0, max(0.4, s_val))))
+            else:
+                base = (1.0, 1.0, 1.0)
+                bg = tuple(c * alpha + 1.0 * (1.0 - alpha) for c in (r, g, b))
+                bdr_a = min(1.0, alpha + 0.20)
+                bdr = tuple(c * bdr_a + 1.0 * (1.0 - bdr_a) for c in (r, g, b))
+                hov_a = min(1.0, alpha + 0.10)
+                hov = tuple(c * hov_a + 1.0 * (1.0 - hov_a) for c in (r, g, b))
+                press_a = min(1.0, alpha + 0.18)
+                press = tuple(c * press_a + 1.0 * (1.0 - press_a) for c in (r, g, b))
+                text_color = to_hex(colorsys.hls_to_rgb(h, 0.25, min(1.0, max(0.4, s_val))))
+
+            hex_bg = to_hex(bg)
+            hex_border = to_hex(bdr)
+            hex_hover = to_hex(hov)
+            hex_pressed = to_hex(press)
+            dis_fg = _DISABLED_DARK_FG if dark else _DISABLED_LIGHT_FG
+            dis_bg = _DISABLED_DARK_BG if dark else _DISABLED_LIGHT_BG
+            dis_bdr = _DISABLED_DARK_BORDER if dark else _DISABLED_LIGHT_BORDER
+            return (
+                f"QPushButton {{ font-weight: bold; font-size: {font_size}; color: {text_color}; background-color: {hex_bg}; border: 1px solid {hex_border}; border-radius: 4px; padding: 4px 6px; }}"
+                f"QPushButton:hover:enabled {{ background-color: {hex_hover}; border-color: {hex_border}; }}"
+                f"QPushButton:pressed {{ background-color: {hex_pressed}; }}"
+                f"QPushButton:disabled {{ color: {dis_fg}; background-color: {dis_bg}; border: 1px solid {dis_bdr}; }}"
+            )
+
         # Signature distinct colour for every button function
         button_map = {
             # --- 2D Other Plots Mode Toggle Buttons ---
@@ -345,7 +397,8 @@ class MainWindow(
             "PP_ScanSpectra_btn": style("#e0f2fe", "#075985", "#bae6fd", "#bae6fd", "#0c4a6e", "#38bdf8", "#0284c7", "#0369a1"),
             "PP_RecalcAvg_btn": style("#d1fae5", "#065f46", "#a7f3d0", "#a7f3d0", "#064e3b", "#34d399", "#10b981", "#059669"),
 
-            "PP_LoadSSbutton": style("#ccfbf1", "#0f766e", "#99f6e4", "#99f6e4", "#134e4a", "#2dd4bf", "#14b8a6", "#0f766e"),
+            "PP_LoadSSabs_btn": ss_style(getattr(s, "ss_abs_color", "b")),
+            "PP_LoadSSem_btn": ss_style(getattr(s, "ss_em_color", "r")),
             "PP_ShowSSbutton": style("#dbeafe", "#1e40af", "#bfdbfe", "#bfdbfe", "#1e3a8a", "#60a5fa", "#3b82f6", "#1d4ed8"),
             "PP_ClearSSbutton": style("#ffe4e6", "#9f1239", "#fecdd3", "#fecdd3", "#4c0519", "#fda4af", "#f43f5e", "#e11d48"),
 
@@ -711,6 +764,10 @@ class MainWindow(
         self._connect("PP_subtractShockwave_btn", self._subtract_shockwave)
         self._connect("PP_maskProbe_btn", self._mask_probe_region)
         self._connect("PP_shiftT0_btn", self._shift_t0)
+        self._connect("PP_LoadSSabs_btn", lambda _=False: self._load_steady_state("absorption"))
+        self._connect("PP_LoadSSem_btn", lambda _=False: self._load_steady_state("emission"))
+        self._connect("PP_ShowSSbutton", self._show_steady_state)
+        self._connect("PP_ClearSSbutton", self._clear_steady_state)
 
         # Background-subtraction controls re-render the embedded preview. The
         # tmin/tmax limits recompute only on commit (Enter / focus-out), where the
@@ -1207,6 +1264,8 @@ class MainWindow(
 
     def _rerender_preview(self):
         """Re-draw the embedded contour (Z scale or a global setting changed)."""
+        if hasattr(self, "_apply_button_aesthetics"):
+            self._apply_button_aesthetics()
         current_tab_idx = self.MainTabs.currentIndex()
         if current_tab_idx == 0:
             if self.plot_controls is not None:

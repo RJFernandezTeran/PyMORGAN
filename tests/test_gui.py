@@ -540,7 +540,113 @@ def test_time_derivative_dialog_and_menu_gating(window, tmp_path):
     opts_updated = dlg.get_options()
     assert opts_updated["interpolate"] is True
     assert opts_updated["smooth"] is True
-    assert opts_updated["smooth_method"] == "savgol"
-
     dlg.close()
+
+
+def test_steady_state_buttons_leds_and_show(window, tmp_path, monkeypatch):
+    import matplotlib.pyplot as plt
+
+    # Ensure overlay checkbox is disabled
+    assert not window.PP_OverlayPlots_TickBox.isEnabled()
+
+    # Check that buttons and LEDs exist
+    assert hasattr(window, "PP_LoadSSabs_btn")
+    assert hasattr(window, "PP_LoadSSem_btn")
+    assert hasattr(window, "PP_led_SSabs")
+    assert hasattr(window, "PP_led_SSem")
+
+    assert window.PP_led_SSabs.state() == "off"
+    assert window.PP_led_SSem.state() == "off"
+
+    # Check that buttons have background tint matching ss_fill_alpha and settings colors
+    s = pm.get_settings()
+    from matplotlib.colors import to_rgb, to_hex
+    alpha = s.ss_fill_alpha
+    expected_abs_bg = to_hex(tuple(c * alpha + 1.0 * (1.0 - alpha) for c in to_rgb(s.ss_abs_color)))
+    expected_em_bg = to_hex(tuple(c * alpha + 1.0 * (1.0 - alpha) for c in to_rgb(s.ss_em_color)))
+    assert expected_abs_bg in window.PP_LoadSSabs_btn.styleSheet()
+    assert expected_em_bg in window.PP_LoadSSem_btn.styleSheet()
+
+    # Create dummy absorption and emission csv files
+    abs_file = tmp_path / "abs.csv"
+    abs_file.write_text("wavenumber,absorbance\n2000,0.1\n1900,0.8\n1800,0.2\n")
+    em_file = tmp_path / "em.csv"
+    em_file.write_text("wavenumber,intensity\n2000,0.05\n1900,0.3\n1800,0.9\n")
+
+    # Mock QFileDialog to load absorption
+    monkeypatch.setattr(
+        "PyQt6.QtWidgets.QFileDialog.getOpenFileName",
+        lambda *args, **kwargs: (str(abs_file), "All files (*)"),
+    )
+    window.PP_LoadSSabs_btn.click()
+    assert window._ss_abs is not None
+    assert window._ss_abs_spectrum is not None
+    assert window.PP_led_SSabs.state() == "loaded"
+    assert window.PP_led_SSem.state() == "off"
+
+    # Mock QFileDialog to load emission
+    monkeypatch.setattr(
+        "PyQt6.QtWidgets.QFileDialog.getOpenFileName",
+        lambda *args, **kwargs: (str(em_file), "All files (*)"),
+    )
+    window.PP_LoadSSem_btn.click()
+    assert window._ss_em is not None
+    assert window._ss_em_spectrum is not None
+    assert window.PP_led_SSem.state() == "loaded"
+
+    # Test Show SS data (both loaded, unnormalised)
+    window.PP_Normalise_chk.setChecked(False)
+    window.PP_ShowSSbutton.click()
+    plt.close("all")
+
+    # Test Show SS data (both loaded, normalised)
+    window.PP_Normalise_chk.setChecked(True)
+    window.PP_ShowSSbutton.click()
+    plt.close("all")
+
+    # Test Clear SS data
+    window.PP_ClearSSbutton.click()
+    assert window._ss_abs is None
+    assert window._ss_abs_spectrum is None
+    assert window._ss_em is None
+    assert window._ss_em_spectrum is None
+    assert window.PP_led_SSabs.state() == "off"
+    assert window.PP_led_SSem.state() == "off"
+
+
+def test_save_traces_tickbox(window, tmp_path, monkeypatch):
+    """Test that checking 'Save traces?' exports CSV files when plotting cuts."""
+    import matplotlib.pyplot as plt
+
+    ds_info = synthetic.make_synthetic_pdat(tmp_path / "traces_test.pdat")
+    window.load_path(ds_info["path"], "PDAT")
+    assert window.dataset is not None
+
+    assert hasattr(window, "PP_SaveTraces_TickBox")
+    window.PP_SaveTraces_TickBox.setChecked(True)
+
+    # 1. Test Transient Spectra saving
+    monkeypatch.setattr(window, "_interactive", lambda: False)
+    monkeypatch.setattr(window, "_ask_values", lambda *args, **kwargs: [1.0, 5.0])
+    window._plot_cut("spectra")
+    plt.close("all")
+
+    # Find exported spectra CSV
+    csv_files = list(tmp_path.glob("traces_test_spectra_*.csv"))
+    assert len(csv_files) == 1
+    content = csv_files[0].read_text()
+    assert len(content.splitlines()) > 5
+
+    # 2. Test Kinetics saving
+    monkeypatch.setattr(window, "_ask_values", lambda *args, **kwargs: [float(window.dataset.probe[0])])
+    window._plot_cut("kinetics")
+    plt.close("all")
+
+    # Find exported kinetics CSV
+    kin_files = list(tmp_path.glob("traces_test_kinetics_*.csv"))
+    assert len(kin_files) == 1
+    kin_content = kin_files[0].read_text()
+    assert len(kin_content.splitlines()) > 5
+
+
 

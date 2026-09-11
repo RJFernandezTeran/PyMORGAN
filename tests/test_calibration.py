@@ -213,8 +213,12 @@ def test_load_harpia_ta_calibration_spectrum(tmp_path):
 
 
 def test_load_harpia_ta_real_testdata():
+    import os
     from pathlib import Path
-    real_file = Path(r"C:\Users\ricar\switchdrive\Ambizione UniGE\Scripts\testData\HARPIA\probe spectra for wl calibration\260629_newWL_0ns_1_average (number of measured spectra 250).txt")
+    env_dir = os.environ.get("PYMORGAN_TESTDATA_DIR")
+    if not env_dir:
+        pytest.skip("PYMORGAN_TESTDATA_DIR environment variable not set")
+    real_file = Path(env_dir) / "HARPIA" / "probe spectra for wl calibration" / "260629_newWL_0ns_1_average (number of measured spectra 250).txt"
     if not real_file.is_file():
         pytest.skip("HARPIA test data file not present")
 

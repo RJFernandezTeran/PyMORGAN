@@ -608,13 +608,19 @@ def plot_contour(
     LCol = "k"
 
     if ProbeDir == "X":
+        grad = np.abs(np.gradient(X_l))
         mask2D = np.tile(
-            np.gradient(X_l) > 1.5 * np.nanmedian(np.gradient(X_l)), (Zavg_C.shape[0], 1)
+            grad > 1.5 * np.nanmedian(grad), (Zavg_C.shape[0], 1)
         )
     else:
+        grad = np.abs(np.gradient(Y_t))
         mask2D = np.tile(
-            np.gradient(Y_t) > 1.5 * np.nanmedian(np.gradient(Y_t)), (Zavg_C.shape[1], 1)
+            grad > 1.5 * np.nanmedian(grad), (Zavg_C.shape[1], 1)
         ).T
+    if np.ma.is_masked(Zavg_C):
+        mask2D = mask2D | np.ma.getmaskarray(Zavg_C)
+    if np.any(np.isnan(Zavg_C)):
+        mask2D = mask2D | np.isnan(np.asarray(Zavg_C))
     Zavg_C = np.ma.masked_where(mask2D, Zavg_C)
 
     # Convert the probe axis to the chosen display unit (X for ProbeDir 'X',
@@ -682,9 +688,17 @@ def plot_contour(
         # the filled background (contourf above) always uses the raw data.
         _smooth_pts = abs(int(smooth))
         if _smooth_pts > 1:
-            _Z_for_lines = uniform_filter(np.ma.filled(Zavg_C, np.nan), size=_smooth_pts)
             if np.ma.is_masked(Zavg_C):
-                _Z_for_lines = np.ma.masked_where(np.ma.getmaskarray(Zavg_C), _Z_for_lines)
+                _mask = np.ma.getmaskarray(Zavg_C)
+                _valid = (~_mask).astype(float)
+                _filled_Z = np.nan_to_num(np.ma.filled(Zavg_C, 0.0), nan=0.0)
+                _sum_val = uniform_filter(_filled_Z, size=_smooth_pts)
+                _sum_cnt = uniform_filter(_valid, size=_smooth_pts)
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    _Z_for_lines = np.where(_sum_cnt > 0, _sum_val / _sum_cnt, 0.0)
+                _Z_for_lines = np.ma.masked_where(_mask, _Z_for_lines)
+            else:
+                _Z_for_lines = uniform_filter(Zavg_C, size=_smooth_pts)
         else:
             _Z_for_lines = Zavg_C
         where.contour(
@@ -1000,7 +1014,12 @@ def plot_surface(
 
     [cm_obj, _] = hlp.CalcCMAP(cmap_ID, NctrF)
 
-    mask2D = np.tile(np.gradient(X_l) > 1.5 * np.nanmedian(np.gradient(X_l)), (Zavg_C.shape[0], 1))
+    grad = np.abs(np.gradient(X_l))
+    mask2D = np.tile(grad > 1.5 * np.nanmedian(grad), (Zavg_C.shape[0], 1))
+    if np.ma.is_masked(Zavg_C):
+        mask2D = mask2D | np.ma.getmaskarray(Zavg_C)
+    if np.any(np.isnan(Zavg_C)):
+        mask2D = mask2D | np.isnan(np.asarray(Zavg_C))
     Zavg_C = np.ma.masked_where(mask2D, Zavg_C)
 
     X_grid, Y_grid = np.meshgrid(X_l, Y_t)
@@ -1127,10 +1146,15 @@ def plot_noise_3d(
 
     # Mask out detector gaps (similar to plot_contour)
     probe_arr = _get_probe(data, detector)
+    grad = np.abs(np.gradient(probe_arr))
     mask2D = np.tile(
-        np.gradient(probe_arr) > 1.5 * np.nanmedian(np.gradient(probe_arr)),
+        grad > 1.5 * np.nanmedian(grad),
         (noise_2d.shape[0], 1),
     )
+    if np.ma.is_masked(noise_2d):
+        mask2D = mask2D | np.ma.getmaskarray(noise_2d)
+    if np.any(np.isnan(noise_2d)):
+        mask2D = mask2D | np.isnan(np.asarray(noise_2d))
     noise_2d = np.ma.masked_where(mask2D, noise_2d)
 
     # Construct 2D grid for plot_surface

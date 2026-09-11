@@ -262,5 +262,44 @@ def test_asinh_contour_and_ticks(dataset):
     plt.close(fig)
 
 
+def test_masked_probe_contour_plot_descending_and_ascending():
+    from pymorgan.oneD.dataset import Dataset1D
+
+    delays = np.linspace(-1, 10, 30)
+    # Descending probe (e.g. wavenumbers)
+    probe_desc = np.linspace(2000, 1000, 60)
+    Zavg_R = (np.sin(delays[:, None] / 2) * np.cos(probe_desc[None, :] / 100))[:, :, None]
+    units = {
+        "unitsL_lbl": "Wavenumber",
+        "unitsL_ltx": r"$\mathrm{cm^{-1}}$",
+        "unitsT_lbl": "Delay",
+        "unitsT_ltx": "ps",
+        "unitsZ_lbl": "Delta A",
+        "unitsZ_ltx": "mOD",
+    }
+    ds_desc = Dataset1D(Zavg_R.copy(), delays, probe_desc, units)
+    ds_desc.mask_probe_regions([(1400.0, 1600.0)])
+
+    fig, ax = plt.subplots()
+    ds_desc.plot_contour(ax=ax, ShowLines=True, smooth=2)
+    # Should render filled contours and contour lines covering both segments (below 1400 and above 1600)
+    n_paths = sum(len(c.get_paths()) for c in ax.collections)
+    assert n_paths > 20
+    plt.close(fig)
+
+    # Ascending probe (e.g. nm)
+    probe_asc = np.linspace(400, 700, 60)
+    Zavg_R_asc = (np.sin(delays[:, None] / 2) * np.cos(probe_asc[None, :] / 50))[:, :, None]
+    ds_asc = Dataset1D(Zavg_R_asc, delays, probe_asc, units)
+    ds_asc.mask_probe_regions([(500.0, 550.0)])
+
+    fig, ax = plt.subplots()
+    ds_asc.plot_contour(ax=ax, ShowLines=True, smooth=3)
+    n_paths_asc = sum(len(c.get_paths()) for c in ax.collections)
+    assert n_paths_asc > 20
+    plt.close(fig)
+
+
+
 
 

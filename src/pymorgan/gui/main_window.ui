@@ -1012,6 +1012,9 @@ font: bold</string>
                </item>
                <item>
                 <widget class="QCheckBox" name="PP_OverlayPlots_TickBox">
+                 <property name="enabled">
+                  <bool>false</bool>
+                 </property>
                  <property name="text">
                   <string>Overlay Plt.</string>
                  </property>
@@ -1031,14 +1034,38 @@ font: bold</string>
                 </spacer>
                </item>
                <item>
-                <widget class="QPushButton" name="PP_LoadSSbutton">
-                 <property name="toolTip">
-                  <string>Load a steady-state absorption or emission spectrum file</string>
-                 </property>
-                 <property name="text">
-                  <string>Load SS data</string>
-                 </property>
-                </widget>
+                <layout class="QHBoxLayout" name="PP_loadSSabs_layout">
+                 <item>
+                  <widget class="QPushButton" name="PP_LoadSSabs_btn">
+                   <property name="toolTip">
+                    <string>Load a steady-state absorption spectrum file</string>
+                   </property>
+                   <property name="text">
+                    <string>Load SS abs.</string>
+                   </property>
+                  </widget>
+                 </item>
+                 <item>
+                  <widget class="LEDIndicator" name="PP_led_SSabs" native="true"/>
+                 </item>
+                </layout>
+               </item>
+               <item>
+                <layout class="QHBoxLayout" name="PP_loadSSem_layout">
+                 <item>
+                  <widget class="QPushButton" name="PP_LoadSSem_btn">
+                   <property name="toolTip">
+                    <string>Load a steady-state emission spectrum file</string>
+                   </property>
+                   <property name="text">
+                    <string>Load SS em.</string>
+                   </property>
+                  </widget>
+                 </item>
+                 <item>
+                  <widget class="LEDIndicator" name="PP_led_SSem" native="true"/>
+                 </item>
+                </layout>
                </item>
                <item>
                 <widget class="QPushButton" name="PP_ShowSSbutton">
