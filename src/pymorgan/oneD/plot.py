@@ -13,9 +13,9 @@ from __future__ import annotations
 import pathlib
 import string
 
+import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import matplotlib.ticker as tkr
-import matplotlib.colors as mcolors
 import mpl_axes_aligner
 import numpy as np
 from matplotlib.legend_handler import HandlerLine2D
@@ -503,7 +503,7 @@ def plot_contour(
     cbarLbl : {"side", "top"}, default "side"
         Place the colorbar unit label beside or above the bar.
     cmap_ID : str, optional
-        Colourmap specification (e.g. ``"DkRd/Wh/DkBu"``). Defaults to
+        Colourmap specification (e.g. ``"DkRd/Wh/DkBu"``, ``"vik"``, ``"berlin"``). Defaults to
         ``Settings.cmap``.
     anisotropy : bool, default False
         Treat ``Z`` as an anisotropy map and fix the colour scale to +/-0.7.
@@ -599,7 +599,8 @@ def plot_contour(
         Zmin = -0.7
         Zmax = 0.7
 
-    cm_obj, _ = hlp.CalcCMAP(cmap_ID, NctrF)
+    nw = int(white_levels) if white_levels else 2
+    cm_obj, _ = hlp.CalcCMAP(cmap_ID, NctrF, Nwhite=nw)
     if white_levels:
         cm_obj = hlp.zero_center_cmap(cm_obj, NctrF, int(white_levels))
 
@@ -1011,8 +1012,8 @@ def plot_surface(
     Zmax = np.max(np.abs(Zavg_C))
     Zmin = -Zmax
     NctrF = 100
-
-    [cm_obj, _] = hlp.CalcCMAP(cmap_ID, NctrF)
+    nw = int(getattr(s, "white_levels", 2) or 2)
+    [cm_obj, _] = hlp.CalcCMAP(cmap_ID, NctrF, Nwhite=nw)
 
     grad = np.abs(np.gradient(X_l))
     mask2D = np.tile(grad > 1.5 * np.nanmedian(grad), (Zavg_C.shape[0], 1))

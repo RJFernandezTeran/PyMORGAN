@@ -7,7 +7,9 @@ import os
 
 os.environ.setdefault("QT_API", "pyqt6")
 
+import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QApplication,
@@ -23,15 +25,12 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QRadioButton,
-    QTabWidget,
     QTableWidget,
     QTableWidgetItem,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
-
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 
 import pymorgan as pm
 from pymorgan import helpers as hlp
@@ -1110,7 +1109,8 @@ class TwoDGaussianFitDialog(QDialog):
         from mpl_toolkits.axes_grid1 import make_axes_locatable
 
         s = pm.get_settings()
-        cm_obj, _ = hlp.CalcCMAP(s.cmap, 30)
+        nw = int(s.white_levels) if s.white_levels else 2
+        cm_obj, _ = hlp.CalcCMAP(s.cmap, 30, Nwhite=nw)
         cm_obj = hlp.zero_center_cmap(cm_obj, 30, int(s.white_levels))
         units_z = self.dataset.units.get("unitsZ", "mOD") if hasattr(self.dataset, "units") and isinstance(self.dataset.units, dict) else "mOD"
 

@@ -795,7 +795,8 @@ class KuboDialog(QDialog):
             Z_contour = Z.T
 
         NctrF = 30
-        cm_obj, _ = hlp.CalcCMAP(cmap_ID, NctrF)
+        nw = int(white_levels) if white_levels else 2
+        cm_obj, _ = hlp.CalcCMAP(cmap_ID, NctrF, Nwhite=nw)
         if white_levels:
             cm_obj = hlp.zero_center_cmap(cm_obj, NctrF, int(white_levels))
 

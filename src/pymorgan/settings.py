@@ -828,7 +828,7 @@ class Settings:
             "cmap": {
                 "label": "Colourmap",
                 "kind": "choice",
-                "choices": ["DkRd/Wh/DkBu", "Rd/Wh/Bu v2", "Seismic", "Jet"],
+                "choices": ["DkRd/Wh/DkBu", "Rd/Wh/Bu v2", "Seismic", "Jet", "vik", "berlin"],
                 "tab": "common",
             },
             "traces_cmap": {

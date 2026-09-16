@@ -1305,6 +1305,26 @@ font: bold</string>
                  <string>Rd/Wh/Bu v2</string>
                 </property>
                </item>
+               <item>
+                <property name="text">
+                 <string>Seismic</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string>Jet</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string>vik</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string>berlin</string>
+                </property>
+               </item>
               </widget>
              </item>
              <item row="4" column="6">
@@ -2724,12 +2744,32 @@ The magnitude sets the smoothing window width.</string>
               <widget class="QComboBox" name="twoD_PC_cmap">
                <item>
                 <property name="text">
-                 <string>DkRd/Wh/DkB</string>
+                 <string>DkRd/Wh/DkBu</string>
                 </property>
                </item>
                <item>
                 <property name="text">
                  <string>Rd/Wh/Bu v2</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string>Seismic</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string>Jet</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string>vik</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string>berlin</string>
                 </property>
                </item>
               <property name="maximumSize"><size><width>120</width><height>16777215</height></size></property></widget>

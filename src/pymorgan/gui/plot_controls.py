@@ -23,14 +23,15 @@ change emits :attr:`renderRequested` (a full re-plot is needed).
 from __future__ import annotations
 
 import numpy as np
-from PyQt6.QtCore import Qt, QObject, pyqtSignal
+from PyQt6.QtCore import QEvent, QObject, Qt, pyqtSignal
+from PyQt6.QtGui import QKeyEvent
 from PyQt6.QtWidgets import QLabel, QSpinBox
 
 import pymorgan as pm
 from pymorgan import helpers as hlp
 
 # Diverging colourmaps understood by helpers.CalcCMAP.
-_CMAPS = ["DkRd/Wh/DkBu", "Rd/Wh/Bu v2", "Seismic", "Jet"]
+_CMAPS = ["DkRd/Wh/DkBu", "Rd/Wh/Bu v2", "Seismic", "Jet", "vik", "berlin"]
 # Short probe-axis tokens for the X-limit labels, keyed by units2dic quantity.
 _X_TOKEN = {"Wavelength": "WL", "Wavenumber": "WN", "Energy": "E"}
 # Short axis tokens keyed by the (possibly converted) display unit.
@@ -85,6 +86,21 @@ def _configure_pct_spin(spin) -> None:
         pass  # an integer QSpinBox cannot take the float range
     finally:
         spin.blockSignals(False)
+
+
+class _EnterKeyFilter(QObject):
+    """Event filter intercepting Enter / Return key presses on spin boxes."""
+
+    def __init__(self, callback, parent: QObject | None = None):
+        super().__init__(parent)
+        self._callback = callback
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        if event.type() == QEvent.Type.KeyPress and isinstance(event, QKeyEvent):
+            if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                self._callback()
+                return True
+        return super().eventFilter(watched, event)
 
 
 # Controller-attribute -> objectName of the widget declared in main_window.ui.
@@ -167,6 +183,7 @@ class PlotControlsPanel(QObject):
             self.n_contours.setRange(2, 400)
             self.n_contours.setSingleStep(2)
             self.n_contours.setValue(default_n)
+            self.n_contours.setKeyboardTracking(False)
             self.n_contours.blockSignals(False)
             self._prev_n_contours = default_n
 
@@ -235,8 +252,16 @@ class PlotControlsPanel(QObject):
         self.z_max.valueChanged.connect(lambda *_: self._on_z_edited(self.z_max, self.z_min))
         self.z_slider.valueChanged.connect(self._on_slider)
         self.z_pct.valueChanged.connect(self._on_pct_spin)
-        for w in (self.n_contours, self.n_skip):
-            w.valueChanged.connect(lambda *_: self.renderRequested.emit())
+        if self.n_skip is not None:
+            self.n_skip.valueChanged.connect(lambda *_: self.renderRequested.emit())
+        if self.n_contours is not None:
+            self.n_contours.setKeyboardTracking(False)
+            self._n_contours_filter = _EnterKeyFilter(self._on_n_contours_return, parent=self.n_contours)
+            self.n_contours.installEventFilter(self._n_contours_filter)
+            line_edit = self.n_contours.lineEdit()
+            if line_edit is not None:
+                line_edit.installEventFilter(self._n_contours_filter)
+                line_edit.returnPressed.connect(self._on_n_contours_return)
         self.white_spin.valueChanged.connect(lambda v: self._on_setting("white_levels", float(v)))
         for chk in (self.filled_chk, self.showlines_chk):
             chk.toggled.connect(lambda *_: self.renderRequested.emit())
@@ -254,6 +279,11 @@ class PlotControlsPanel(QObject):
     # ------------------------------------------------------------------ #
     #                                Slots                               #
     # ------------------------------------------------------------------ #
+    def _on_n_contours_return(self):
+        if self.n_contours is not None:
+            self.n_contours.interpretText()
+            self.renderRequested.emit()
+
     def _on_arcsinh_toggled(self, checked: bool):
         if hasattr(self, "arcsinh_pct") and self.arcsinh_pct is not None:
             self.arcsinh_pct.setEnabled(checked)
@@ -313,7 +343,7 @@ class PlotControlsPanel(QObject):
         probe = np.asarray(self._dataset._detector_probe(self.detector), dtype=float)
         delays = np.asarray(self._dataset.delays, dtype=float)
         native = hlp.native_x_unit(self._dataset.units)
-        
+
         xlim_vals = list(self.xlim())
         if getattr(self, "_x_scaled", False):
             xlim_vals = [v * 1000.0 for v in xlim_vals]
@@ -428,7 +458,16 @@ class PlotControlsPanel(QObject):
             (self.cmb_xunit, s.x_axis_unit.value),
         ):
             cb.blockSignals(True)
-            cb.setCurrentText(str(val))
+            idx = cb.findText(str(val))
+            if idx < 0:
+                for i in range(cb.count()):
+                    if cb.itemText(i).lower() == str(val).lower():
+                        idx = i
+                        break
+            if idx >= 0:
+                cb.setCurrentIndex(idx)
+            else:
+                cb.setCurrentText(str(val))
             cb.blockSignals(False)
         self.secondary_chk.blockSignals(True)
         self.secondary_chk.setChecked(bool(s.secondary_axis))
@@ -723,7 +762,16 @@ class PlotControlsPanel2D(QObject):
         if self.cmb_cmap is not None:
             PlotControlsPanel._set_combo_items(self.cmb_cmap, _CMAPS)
             s = pm.get_settings()
-            self.cmb_cmap.setCurrentText(str(s.cmap))
+            idx = self.cmb_cmap.findText(str(s.cmap))
+            if idx < 0:
+                for i in range(self.cmb_cmap.count()):
+                    if self.cmb_cmap.itemText(i).lower() == str(s.cmap).lower():
+                        idx = i
+                        break
+            if idx >= 0:
+                self.cmb_cmap.setCurrentIndex(idx)
+            else:
+                self.cmb_cmap.setCurrentText(str(s.cmap))
             self.cmb_cmap.currentTextChanged.connect(self._on_cmap_changed)
 
         if self.white_spin is not None:
@@ -748,6 +796,7 @@ class PlotControlsPanel2D(QObject):
             self.n_contours.setRange(2, 400)
             self.n_contours.setSingleStep(2)
             self.n_contours.setValue(default_n)
+            self.n_contours.setKeyboardTracking(False)
             self.n_contours.blockSignals(False)
             self._prev_n_contours = default_n
 
@@ -815,9 +864,16 @@ class PlotControlsPanel2D(QObject):
         if self.z_pct is not None:
             self.z_pct.valueChanged.connect(self._on_pct_spin)
 
-        for w in (self.n_contours, self.lines_every):
-            if w is not None:
-                w.valueChanged.connect(lambda *_: self.renderRequested.emit())
+        if self.lines_every is not None:
+            self.lines_every.valueChanged.connect(lambda *_: self.renderRequested.emit())
+        if self.n_contours is not None:
+            self.n_contours.setKeyboardTracking(False)
+            self._twoD_n_contours_filter = _EnterKeyFilter(self._on_n_contours_return, parent=self.n_contours)
+            self.n_contours.installEventFilter(self._twoD_n_contours_filter)
+            line_edit = self.n_contours.lineEdit()
+            if line_edit is not None:
+                line_edit.installEventFilter(self._twoD_n_contours_filter)
+                line_edit.returnPressed.connect(self._on_n_contours_return)
 
         for chk in (self.filled_chk, self.showlines_chk, self.sym_chk, self.square_chk, self.text_white_bg_chk, self.cut_plot_chk):
             if chk is not None:
@@ -829,6 +885,11 @@ class PlotControlsPanel2D(QObject):
 
         if self.restore_btn is not None:
             self.restore_btn.clicked.connect(self.restore_limits)
+
+    def _on_n_contours_return(self):
+        if self.n_contours is not None:
+            self.n_contours.interpretText()
+            self.renderRequested.emit()
 
     def _on_cmap_changed(self, val):
         pm.update_settings(cmap=val)

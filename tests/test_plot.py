@@ -5,21 +5,21 @@ from __future__ import annotations
 import matplotlib
 
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
+import matplotlib.pyplot as plt
 import numpy as np
 import pytest
 import synthetic
 from matplotlib.axes import Axes
-from matplotlib.colors import to_rgba
 from matplotlib.collections import QuadMesh
+from matplotlib.colors import to_rgba
 from matplotlib.contour import QuadContourSet
 
 import pymorgan as pm
 from pymorgan import helpers as hlp
-from pymorgan.oneD import plot as P
 from pymorgan.gui.app import _resolve_theme
 from pymorgan.gui.theme import DARK_BG, DARK_FG, LIGHT_BG, style_figure
+from pymorgan.oneD import plot as P
 
 
 @pytest.fixture
@@ -298,8 +298,61 @@ def test_masked_probe_contour_plot_descending_and_ascending():
     n_paths_asc = sum(len(c.get_paths()) for c in ax.collections)
     assert n_paths_asc > 20
     plt.close(fig)
+def test_scientific_colormaps_calc_cmap():
+    import cmcrameri.cm as cmc
+
+    from pymorgan import helpers as hlp
+
+    for cmap_name in ("vik", "Vik", "cmc.vik"):
+        cm, arr = hlp.CalcCMAP(cmap_name, 40)
+        assert isinstance(cm, mcolors.ListedColormap)
+        assert arr.shape == (40, 4)
+        expected = cmc.vik(np.linspace(0, 1, 40))
+        assert np.allclose(arr, expected)
+
+    for cmap_name in ("berlin", "Berlin", "cmc.berlin"):
+        cm_b, arr_b = hlp.CalcCMAP(cmap_name, 40)
+        assert isinstance(cm_b, mcolors.ListedColormap)
+        assert arr_b.shape == (40, 4)
+        expected_b = cmc.berlin(np.linspace(0, 1, 40))
+        assert np.allclose(arr_b, expected_b)
+
+    for cmap_name in ("vik_r", "cmc.vik_r", "berlin_r", "cmc.berlin_r"):
+        cm_r, arr_r = hlp.CalcCMAP(cmap_name, 40)
+        assert isinstance(cm_r, mcolors.ListedColormap)
+        assert arr_r.shape == (40, 4)
+
+    # Check zero_center_cmap leaves scientific colormaps untouched
+    cm_zc = hlp.zero_center_cmap("vik", 40, 2)
+    assert isinstance(cm_zc, mcolors.ListedColormap)
+    expected_vik = cmc.vik(np.linspace(0, 1, 40))
+    assert np.allclose(cm_zc(np.linspace(0, 1, 40)), expected_vik)
+
+    cm_zc_berlin = hlp.zero_center_cmap("berlin", 40, 2)
+    assert isinstance(cm_zc_berlin, mcolors.ListedColormap)
+    expected_berlin = cmc.berlin(np.linspace(0, 1, 40))
+    assert np.allclose(cm_zc_berlin(np.linspace(0, 1, 40)), expected_berlin)
 
 
+def test_plot_contour_with_scientific_colormaps(dataset):
+    fig, ax = plt.subplots()
+    ax_vik = dataset.plot_contour(ax=ax, cmap_ID="vik")
+    assert isinstance(ax_vik, Axes)
+    plt.close(fig)
+
+    fig, ax = plt.subplots()
+    ax_berlin = dataset.plot_contour(ax=ax, cmap_ID="berlin")
+    assert isinstance(ax_berlin, Axes)
+    plt.close(fig)
 
 
+def test_plot_2D_with_scientific_colormaps(p2dat_dataset):
+    fig, ax = plt.subplots()
+    map_axes_vik = p2dat_dataset.plot_map(p2dat_dataset.delays[0], ax=ax, cmap_ID="vik")
+    assert isinstance(map_axes_vik.ax, Axes)
+    plt.close(fig)
 
+    fig, ax = plt.subplots()
+    map_axes_berlin = p2dat_dataset.plot_map(p2dat_dataset.delays[0], ax=ax, cmap_ID="berlin")
+    assert isinstance(map_axes_berlin.ax, Axes)
+    plt.close(fig)

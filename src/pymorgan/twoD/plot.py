@@ -162,7 +162,7 @@ def plot_map(
         Naming convention for the spectral axes (e.g. omega_1 / omega_3 vs
         pump / probe). Defaults to ``Settings.freq_label``.
     cmap_ID : str, optional
-        Colourmap specification (e.g. ``"DkRd/Wh/DkBu"``). Defaults to
+        Colourmap specification (e.g. ``"DkRd/Wh/DkBu"``, ``"vik"``, ``"berlin"``). Defaults to
         ``Settings.cmap``.
     ShowLines : bool, default True
         Overlay black contour lines on the filled map.
@@ -344,7 +344,8 @@ def plot_map(
     if NctrL % 2 != 0:
         NctrL += 1
 
-    cm_obj, _ = hlp.CalcCMAP(cmap_ID, NctrF)
+    nw = int(white_levels) if white_levels else 2
+    cm_obj, _ = hlp.CalcCMAP(cmap_ID, NctrF, Nwhite=nw)
     if white_levels:
         cm_obj = hlp.zero_center_cmap(cm_obj, NctrF, int(white_levels))
 
@@ -352,7 +353,17 @@ def plot_map(
     ctrLvl_L = np.linspace(Zmin, Zmax, NctrL)
 
     # Exclude white levels from black contour lines
-    if white_levels:
+    is_scientific = str(cmap_ID).lower() in (
+        "vik",
+        "cmc.vik",
+        "berlin",
+        "cmc.berlin",
+        "vik_r",
+        "cmc.vik_r",
+        "berlin_r",
+        "cmc.berlin_r",
+    )
+    if white_levels and not is_scientific:
         k = int(white_levels)
         if k > 0:
             mid = NctrL // 2
@@ -708,7 +719,8 @@ def plot_surface(
             vmax = vmax_abs
 
     NctrF = 100
-    [cm_obj, _] = hlp.CalcCMAP(cmap_ID, NctrF)
+    nw = int(getattr(s, "white_levels", 2) or 2)
+    [cm_obj, _] = hlp.CalcCMAP(cmap_ID, NctrF, Nwhite=nw)
 
     surf = ax.plot_surface(
         X,

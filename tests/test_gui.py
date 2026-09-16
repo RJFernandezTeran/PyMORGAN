@@ -1,15 +1,14 @@
 """Unit tests for MainWindow GUI, dataset browser, busy guard, movie dialog, and 2D GUI controls."""
 
-import os
 from pathlib import Path
 
 import numpy as np
 import pytest
+import synthetic
 from PyQt6.QtWidgets import QApplication
 
 import pymorgan as pm
-import synthetic
-from pymorgan.gui.busy import busy, busy_guard, is_busy
+from pymorgan.gui.busy import busy, is_busy
 from pymorgan.gui.main_window import MainWindow
 
 
@@ -112,8 +111,6 @@ def test_movie_dialog_constructs(qapp, tmp_path):
 
 
 def test_oneD_and_twoD_arrow_key_dataset_scrolling(qapp, tmp_path):
-    from PyQt6.QtCore import Qt
-    from PyQt6.QtGui import QKeyEvent
 
     # Setup 2 synthetic 1D datasets
     dir_1d = tmp_path / "1d"
@@ -560,7 +557,7 @@ def test_steady_state_buttons_leds_and_show(window, tmp_path, monkeypatch):
 
     # Check that buttons have background tint matching ss_fill_alpha and settings colors
     s = pm.get_settings()
-    from matplotlib.colors import to_rgb, to_hex
+    from matplotlib.colors import to_hex, to_rgb
     alpha = s.ss_fill_alpha
     expected_abs_bg = to_hex(tuple(c * alpha + 1.0 * (1.0 - alpha) for c in to_rgb(s.ss_abs_color)))
     expected_em_bg = to_hex(tuple(c * alpha + 1.0 * (1.0 - alpha) for c in to_rgb(s.ss_em_color)))
@@ -647,6 +644,53 @@ def test_save_traces_tickbox(window, tmp_path, monkeypatch):
     assert len(kin_files) == 1
     kin_content = kin_files[0].read_text()
     assert len(kin_content.splitlines()) > 5
+
+
+def test_n_contours_requires_enter_to_render(window):
+    from PyQt6.QtCore import QCoreApplication, Qt
+    from PyQt6.QtGui import QKeyEvent
+
+    # 1D Controls
+    pc_1d = window.plot_controls
+    assert pc_1d.n_contours is not None
+
+    calls_1d = []
+    pc_1d.renderRequested.connect(lambda: calls_1d.append(1))
+
+    # Typing or changing value without Enter must not emit renderRequested
+    pc_1d.n_contours.setValue(60)
+    assert len(calls_1d) == 0
+
+    pc_1d.n_contours.lineEdit().setText("80")
+    assert len(calls_1d) == 0
+
+    # Pressing Enter key triggers interpretation and emit
+    ev = QKeyEvent(QKeyEvent.Type.KeyPress, Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier)
+    QCoreApplication.sendEvent(pc_1d.n_contours.lineEdit(), ev)
+    assert len(calls_1d) == 1
+    assert pc_1d.n_contours.value() == 80
+    assert pc_1d.contour_kwargs()["Nlevels"] == 80
+
+    # 2D Controls
+    pc_2d = window.twoD_plot_controls
+    assert pc_2d.n_contours is not None
+
+    calls_2d = []
+    pc_2d.renderRequested.connect(lambda: calls_2d.append(1))
+
+    # Changing value directly does not emit renderRequested
+    pc_2d.n_contours.setValue(50)
+    assert len(calls_2d) == 0
+
+    pc_2d.n_contours.lineEdit().setText("70")
+    assert len(calls_2d) == 0
+
+    # Pressing Enter triggers renderRequested
+    ev2 = QKeyEvent(QKeyEvent.Type.KeyPress, Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier)
+    QCoreApplication.sendEvent(pc_2d.n_contours.lineEdit(), ev2)
+    assert len(calls_2d) == 1
+    assert pc_2d.n_contours.value() == 70
+    assert pc_2d.contour_kwargs()["Nlevels"] == 70
 
 
 

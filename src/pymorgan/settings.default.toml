@@ -33,7 +33,7 @@ label_style = "()"
 #   "x1E3" -> $\Delta$A $\times 10^{3}$
 delta_a_units = "x1E3"
 
-# Default colourmap for contour plots (see helpers.CalcCMAP).
+# Default colourmap for contour plots ("DkRd/Wh/DkBu", "Rd/Wh/Bu v2", "Seismic", "Jet", "vik", "berlin").
 cmap = "DkRd/Wh/DkBu"
 
 # Colourmap for kinetic and spectral trace plots ("rainbow", "rainbow reversed", "red-purple-blue").

@@ -393,6 +393,25 @@ def resolve_x_unit(x_axis_unit, native_unit):
     return x_axis_unit
 
 
+def _register_scientific_colormaps():
+    """Ensure Crameri scientific colour maps (vik, berlin) are registered in matplotlib."""
+    import cmcrameri  # noqa: F401
+    import cmcrameri.cm as cmc
+    import matplotlib.pyplot as plt
+
+    try:
+        if "vik" not in plt.colormaps():
+            plt.colormaps.register(cmap=cmc.vik, name="vik")
+        if "vik_r" not in plt.colormaps():
+            plt.colormaps.register(cmap=cmc.vik_r, name="vik_r")
+        if "berlin" not in plt.colormaps():
+            plt.colormaps.register(cmap=cmc.berlin, name="berlin")
+        if "berlin_r" not in plt.colormaps():
+            plt.colormaps.register(cmap=cmc.berlin_r, name="berlin_r")
+    except Exception:
+        pass
+
+
 def zero_center_cmap(cmap, n, k):
     """Sample ``cmap`` into ``n`` bands and force the central ``k`` to the midpoint/zero colour.
 
@@ -401,8 +420,27 @@ def zero_center_cmap(cmap, n, k):
     import matplotlib.colors as col
     import matplotlib.pyplot as plt
 
+    _register_scientific_colormaps()
+
+    _SCIENTIFIC = (
+        "vik",
+        "cmc.vik",
+        "berlin",
+        "cmc.berlin",
+        "vik_r",
+        "cmc.vik_r",
+        "berlin_r",
+        "cmc.berlin_r",
+    )
+
     if isinstance(cmap, str):
+        cmap_str = cmap.lower()
+        if cmap_str in _SCIENTIFIC:
+            cm, _ = CalcCMAP(cmap, n)
+            return cm
         cmap = plt.get_cmap(cmap)
+    elif hasattr(cmap, "name") and str(cmap.name).lower() in _SCIENTIFIC:
+        return cmap
 
     colours = cmap(np.linspace(0.0, 1.0, n))
     k = max(0, min(int(k), n))
@@ -416,18 +454,28 @@ def zero_center_cmap(cmap, n, k):
     return col.ListedColormap(colours)
 
 
-def CalcCMAP(cmap_str="DkRd/Wh/DkBu", Ntot=40):
+def CalcCMAP(cmap_str="DkRd/Wh/DkBu", Ntot=40, Nwhite=2):
+    import cmcrameri.cm as cmc
     import matplotlib.colors as col
     import matplotlib.pyplot as plt
 
+    _register_scientific_colormaps()
+
+    n_white = max(0, int(Nwhite)) if Nwhite is not None else 2
+
     match cmap_str.lower():
         case "rd/wh/bu v2":
-            blue_cm = plt.get_cmap("Blues", int(Ntot / 2))
-            red_cm = plt.get_cmap("Reds", int(Ntot / 2))
-            blue_a = blue_cm(np.linspace(1, 0, int(Ntot / 2)))
-            red_a = red_cm(np.linspace(0, 1, int(Ntot / 2)))
-
-            CArr = np.concatenate((blue_a, [[1.0, 1.0, 1.0, 1.0], [1.0, 1.0, 1.0, 1.0]], red_a))
+            n_half = int((Ntot - n_white) / 2) if n_white > 0 else int(Ntot / 2)
+            n_right = Ntot - n_white - n_half if n_white > 0 else n_half
+            blue_cm = plt.get_cmap("Blues", n_half)
+            red_cm = plt.get_cmap("Reds", n_right)
+            blue_a = blue_cm(np.linspace(1, 0, n_half))
+            red_a = red_cm(np.linspace(0, 1, n_right))
+            if n_white > 0:
+                white_a = np.ones((n_white, 4))
+                CArr = np.concatenate((blue_a, white_a, red_a))
+            else:
+                CArr = np.concatenate((blue_a, red_a))
 
         case "dkrd/wh/dkbu":
             # Given parameters
@@ -467,14 +515,30 @@ def CalcCMAP(cmap_str="DkRd/Wh/DkBu", Ntot=40):
             right_half = cmap_obj(np.linspace(0.5, 1.0, n_half))
             CArr = np.concatenate((left_half, right_half), axis=0)
 
+        case "vik" | "cmc.vik":
+            cmap_obj = cmc.vik
+            CArr = cmap_obj(np.linspace(0, 1, Ntot))
+
+        case "vik_r" | "cmc.vik_r":
+            cmap_obj = cmc.vik_r
+            CArr = cmap_obj(np.linspace(0, 1, Ntot))
+
+        case "berlin" | "cmc.berlin":
+            cmap_obj = cmc.berlin
+            CArr = cmap_obj(np.linspace(0, 1, Ntot))
+
+        case "berlin_r" | "cmc.berlin_r":
+            cmap_obj = cmc.berlin_r
+            CArr = cmap_obj(np.linspace(0, 1, Ntot))
+
         case _:
             try:
                 cmap_obj = plt.get_cmap(cmap_str)
                 CArr = cmap_obj(np.linspace(0, 1, Ntot))
             except ValueError:
-                return CalcCMAP("DkRd/Wh/DkBu", Ntot)
+                return CalcCMAP("DkRd/Wh/DkBu", Ntot, Nwhite=Nwhite)
 
-    CMAP = col.ListedColormap(CArr)
+    CMAP = col.ListedColormap(CArr, name=cmap_str)
     return CMAP, CArr
 
 
