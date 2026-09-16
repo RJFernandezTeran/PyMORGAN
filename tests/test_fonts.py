@@ -84,3 +84,111 @@ def test_available_preferred_fonts():
     """Test available_preferred_fonts returns a list."""
     res = available_preferred_fonts()
     assert isinstance(res, list)
+
+
+def test_are_fonts_installed_receipt_flag(tmp_path):
+    """Test are_fonts_installed returns True when receipt flag exists."""
+    from pymorgan.fonts import are_fonts_installed
+
+    cache_dir = tmp_path / "mpl_cache"
+    cache_dir.mkdir()
+    flag = cache_dir / "pymorgan_fonts_installed"
+    flag.touch()
+
+    with patch("matplotlib.get_cachedir", return_value=str(cache_dir)):
+        assert are_fonts_installed() is True
+
+
+def test_are_fonts_installed_filesystem_match(tmp_path):
+    """Test are_fonts_installed detects fonts on disk and writes receipt flag."""
+    from pymorgan.fonts import are_fonts_installed
+
+    cache_dir = tmp_path / "mpl_cache"
+    cache_dir.mkdir()
+    font_dir = tmp_path / "mpl_data" / "fonts" / "ttf"
+    font_dir.mkdir(parents=True)
+    (font_dir / "texgyreheros-regular.otf").touch()
+
+    with (
+        patch("matplotlib.get_cachedir", return_value=str(cache_dir)),
+        patch("matplotlib.get_data_path", return_value=str(tmp_path / "mpl_data")),
+    ):
+        assert are_fonts_installed() is True
+        assert (cache_dir / "pymorgan_fonts_installed").exists()
+
+
+def test_are_fonts_installed_not_found(tmp_path):
+    """Test are_fonts_installed returns False when fonts and flag are absent."""
+    from pymorgan.fonts import are_fonts_installed
+
+    cache_dir = tmp_path / "mpl_cache"
+    cache_dir.mkdir()
+    font_dir = tmp_path / "mpl_data" / "fonts" / "ttf"
+    font_dir.mkdir(parents=True)
+
+    mock_fm = MagicMock()
+    mock_fm.ttflist = []
+
+    with (
+        patch("matplotlib.get_cachedir", return_value=str(cache_dir)),
+        patch("matplotlib.get_data_path", return_value=str(tmp_path / "mpl_data")),
+        patch("matplotlib.font_manager.fontManager", mock_fm),
+    ):
+        assert are_fonts_installed() is False
+
+
+def test_ensure_fonts_installed_skips_when_installed():
+    """Test ensure_fonts_installed skips installation if already installed."""
+    from pymorgan.fonts import ensure_fonts_installed
+
+    with patch("pymorgan.fonts.are_fonts_installed", return_value=True), patch(
+        "pymorgan.fonts.install_fonts"
+    ) as mock_install:
+        result = ensure_fonts_installed()
+        assert result is True
+        mock_install.assert_not_called()
+
+
+def test_launcher_main_skips_install_when_fonts_present():
+    """Test launcher.main launches GUI directly without installing fonts if already present."""
+    from pymorgan.launcher import main as launcher_main
+
+    with (
+        patch("pymorgan.launcher.are_fonts_installed", return_value=True),
+        patch("pymorgan.launcher.install_fonts") as mock_install,
+        patch("pymorgan.gui.app.main", return_value=0) as mock_gui,
+    ):
+        code = launcher_main(["prog"])
+        assert code == 0
+        mock_install.assert_not_called()
+        mock_gui.assert_called_once_with(["prog"])
+
+
+def test_launcher_main_installs_on_first_run():
+    """Test launcher.main triggers font install on first run when fonts missing."""
+    from pymorgan.launcher import main as launcher_main
+
+    with (
+        patch("pymorgan.launcher.are_fonts_installed", return_value=False),
+        patch("pymorgan.launcher.install_fonts") as mock_install,
+        patch("pymorgan.gui.app.main", return_value=0) as mock_gui,
+    ):
+        code = launcher_main(["prog"])
+        assert code == 0
+        mock_install.assert_called_once_with(quiet=False)
+        mock_gui.assert_called_once_with(["prog"])
+
+
+def test_launcher_main_handles_install_error_gracefully():
+    """Test launcher.main continues to launch GUI even if font installation encounters an error."""
+    from pymorgan.launcher import main as launcher_main
+
+    with (
+        patch("pymorgan.launcher.are_fonts_installed", return_value=False),
+        patch("pymorgan.launcher.install_fonts", side_effect=OSError("Permission denied")),
+        patch("pymorgan.gui.app.main", return_value=0) as mock_gui,
+    ):
+        code = launcher_main(["prog"])
+        assert code == 0
+        mock_gui.assert_called_once_with(["prog"])
+

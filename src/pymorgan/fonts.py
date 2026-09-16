@@ -87,7 +87,7 @@ def find_heros_fonts() -> list[Path]:
     return _find_rinoh_heros()
 
 
-def install_fonts() -> None:
+def install_fonts(quiet: bool = False) -> None:
     """Copy TeX Gyre Heros fonts into Matplotlib's font directory and clear the cache."""
     import matplotlib
     import matplotlib.font_manager as fm
@@ -101,42 +101,132 @@ def install_fonts() -> None:
         source = "rinoh-typeface-texgyreheros package"
 
     if not fonts:
-        print(
-            "No TeX Gyre Heros fonts found.\n"
-            "Check that MiKTeX / TeX Live or `rinoh-typeface-texgyreheros` is installed, then re-run:\n"
-            "    pymorgan-install-fonts"
-        )
+        if not quiet:
+            print(
+                "No TeX Gyre Heros fonts found.\n"
+                "Check that MiKTeX / TeX Live or `rinoh-typeface-texgyreheros` is installed, then re-run:\n"
+                "    pymorgan-install-fonts"
+            )
         return
 
-    print(f"Found TeX Gyre Heros fonts from {source}.")
+    if not quiet:
+        print(f"Found TeX Gyre Heros fonts from {source}.")
     mpl_font_dir = Path(matplotlib.get_data_path()) / "fonts" / "ttf"
-    mpl_font_dir.mkdir(parents=True, exist_ok=True)
-    print(f"Installing to: {mpl_font_dir}")
+    try:
+        mpl_font_dir.mkdir(parents=True, exist_ok=True)
+        if not quiet:
+            print(f"Installing to: {mpl_font_dir}")
 
-    for src in fonts:
-        dst = mpl_font_dir / src.name
-        shutil.copy2(src, dst)
-        print(f"  Copied: {src.name}")
+        for src in fonts:
+            dst = mpl_font_dir / src.name
+            shutil.copy2(src, dst)
+            if not quiet:
+                print(f"  Copied: {src.name}")
+    except (OSError, PermissionError) as exc:
+        if not quiet:
+            print(f"Could not copy font files to {mpl_font_dir}: {exc}")
+
+    # Register directly with Matplotlib's font manager in this session
+    for font_file in fonts:
+        try:
+            fm.fontManager.addfont(str(font_file))
+        except Exception:
+            pass
 
     # Clear font cache so Matplotlib picks up the new files.
-    cache_dir = Path(matplotlib.get_cachedir())
-    for f in cache_dir.glob("fontlist-*.json"):
-        f.unlink()
-        print(f"  Deleted cache: {f.name}")
+    try:
+        cache_dir = Path(matplotlib.get_cachedir())
+        for f in cache_dir.glob("fontlist-*.json"):
+            try:
+                f.unlink()
+                if not quiet:
+                    print(f"  Deleted cache: {f.name}")
+            except OSError:
+                pass
+    except Exception:
+        pass
 
     # Rebuild in this session.
-    fm._load_fontmanager(try_read_cache=False)
+    try:
+        fm._load_fontmanager(try_read_cache=False)
+    except Exception:
+        pass
     available_preferred_fonts.cache_clear()
 
+    # Record receipt flag in cache dir for fast subsequent checks
+    try:
+        flag = Path(matplotlib.get_cachedir()) / "pymorgan_fonts_installed"
+        flag.touch()
+    except Exception:
+        pass
+
     found = [f.name for f in fm.fontManager.ttflist if "Heros" in f.name]
-    if found:
-        print(f"\nSuccess — Matplotlib now sees: {found}")
-    else:
-        print("\nFonts copied but not yet detected. Restart your Python session.")
+    if not quiet:
+        if found:
+            print(f"\nSuccess — Matplotlib now sees: {found}")
+        else:
+            print("\nFonts copied but not yet detected. Restart your Python session.")
+
+
+def are_fonts_installed() -> bool:
+    """Check whether TeX Gyre Heros fonts have already been installed for Matplotlib.
+
+    Performs a fast multi-stage check:
+    1. Checks for a receipt flag in Matplotlib's cache directory (< 0.1 ms).
+    2. Checks whether TeX Gyre Heros files exist in Matplotlib's fonts directory (< 1 ms).
+    3. Checks whether TeX Gyre Heros is loaded in Matplotlib's active font manager.
+    """
+    try:
+        import matplotlib
+
+        flag = Path(matplotlib.get_cachedir()) / "pymorgan_fonts_installed"
+        if flag.exists():
+            return True
+
+        mpl_font_dir = Path(matplotlib.get_data_path()) / "fonts" / "ttf"
+        if mpl_font_dir.exists():
+            if any(mpl_font_dir.glob("*heros*.otf")) or any(mpl_font_dir.glob("*heros*.ttf")):
+                try:
+                    flag.touch()
+                except Exception:
+                    pass
+                return True
+    except Exception:
+        pass
+
+    try:
+        import matplotlib.font_manager as fm
+
+        if any("Heros" in f.name for f in fm.fontManager.ttflist):
+            return True
+    except Exception:
+        pass
+
+    return False
+
+
+def ensure_fonts_installed(quiet: bool = True) -> bool:
+    """Ensure TeX Gyre Heros fonts are available in Matplotlib.
+
+    If fonts are already verified, does nothing. Otherwise, installs them from
+    the bundled `rinoh-typeface-texgyreheros` dependency or system TeX
+    installations.
+
+    Returns True if at least one preferred font is available, False otherwise.
+    """
+    if are_fonts_installed():
+        return True
+
+    try:
+        install_fonts(quiet=quiet)
+    except Exception:
+        pass
+
+    return are_fonts_installed()
 
 
 def main() -> None:
-    install_fonts()
+    install_fonts(quiet=False)
 
 
 if __name__ == "__main__":

@@ -184,6 +184,22 @@ def main(argv: list[str] | None = None) -> int:
     from .main_window import MainWindow
 
     window = MainWindow()
+
+    # Open initial directory or dataset if supplied on command line
+    cli_targets = [a for a in args[1:] if not a.startswith("-")]
+    if cli_targets:
+        target_path = Path(cli_targets[0]).resolve()
+        if target_path.is_dir():
+            window.RootDir_field.setText(str(target_path))
+            window._on_rootdir_changed()
+        elif target_path.is_file():
+            window.RootDir_field.setText(str(target_path.parent))
+            window._on_rootdir_changed()
+            try:
+                window.load_path(str(target_path))
+            except Exception:
+                logger.debug("Could not load initial file %s", target_path, exc_info=True)
+
     if splash is not None:
         from PyQt6.QtCore import QTimer
 

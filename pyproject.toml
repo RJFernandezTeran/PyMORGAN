@@ -33,6 +33,7 @@ dev = ["ruff>=0.16.2", "pytest>=9.1.1"]
 gui-dev = ["pytest-qt>=4"]
 
 [project.scripts]
+pymorgan = "pymorgan.launcher:main"
 pymorgan-gui = "pymorgan.gui.app:main"
 pymorgan-install-fonts = "pymorgan.fonts:main"
 pymorgan-edit-gui = "pymorgan.gui.designer:main"
