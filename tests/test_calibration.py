@@ -1,12 +1,12 @@
 """Unit tests for spectrometer calibration math models, optimisation backend, load utilities, and GUI controls."""
 
 import os
+
 import numpy as np
 import pytest
 from PyQt6.QtWidgets import QApplication
 
 from pymorgan.cal import (
-    fit_probe_spectrum,
     fit_wavelength_axis,
     linear_grating_pixel_mapping,
     load_experimental_spectrum,
@@ -213,7 +213,6 @@ def test_load_harpia_ta_calibration_spectrum(tmp_path):
 
 
 def test_load_harpia_ta_real_testdata():
-    import os
     from pathlib import Path
     env_dir = os.environ.get("PYMORGAN_TESTDATA_DIR")
     if not env_dir:

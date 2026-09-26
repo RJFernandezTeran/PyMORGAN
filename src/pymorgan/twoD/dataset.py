@@ -554,7 +554,7 @@ class Dataset2D:
         pump_match = np.array_equal(self.pump, ref_dataset.pump)
         probe_match = np.array_equal(self.probe, ref_dataset.probe)
 
-        Npump, Nprobe, Nt2 = sample_Z.shape
+        _, _, Nt2 = sample_Z.shape
         subtracted = np.zeros_like(sample_Z)
 
         for i_t2 in range(Nt2):

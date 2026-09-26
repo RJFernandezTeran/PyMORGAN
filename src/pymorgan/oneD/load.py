@@ -23,10 +23,10 @@ New instrument formats are added by decorating a reader with
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from os import PathLike
 from pathlib import Path
-import re
 from typing import Any
 
 import numpy as np
@@ -271,7 +271,7 @@ def _unige_nsta_is_file(path: Path) -> bool:
     if path.suffix.lower() != ".dat":
         return False
     try:
-        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+        with open(path, encoding="utf-8", errors="ignore") as f:
             header_sample = f.read(2048).lower()
         if not header_sample.startswith("%"):
             return False
@@ -308,49 +308,60 @@ def read_UniGE_nsTA(datafilename: str) -> LoaderResult:
     Zavg_R, delays, probe, Units, Nscans, Zss_R, Zstdv, scan_ids, counts
     """
     from collections import Counter
+
     import scipy.io as sio
 
     path = Path(datafilename)
     if not path.is_file():
         raise FileNotFoundError(f"UniGE nsTA file not found: {datafilename}")
 
-    with open(path, "r", encoding="utf-8", errors="ignore") as f:
-        text = f.read().replace("\x00", "")
+    import pandas as pd
 
-    lines = text.splitlines()
-    data_lines = [l for l in lines if not l.startswith("%") and l.strip()]
-    if not data_lines:
-        raise ValueError(f"No data rows found in UniGE nsTA file: {datafilename}")
+    try:
+        df = pd.read_csv(path, comment="%", sep=r"\s+", header=None, engine="c")
+        if df.empty or df.shape[1] < 6:
+            raise ValueError(f"Insufficient columns or empty data in UniGE nsTA file: {datafilename}")
+        alldata = df.to_numpy(dtype=float)
+    except Exception:
+        with open(path, encoding="utf-8", errors="ignore") as f:
+            text = f.read().replace("\x00", "")
 
-    parsed_rows = [[float(x) for x in l.split()] for l in data_lines]
-    col_counts = Counter(len(r) for r in parsed_rows)
-    expected_cols = col_counts.most_common(1)[0][0]
+        lines = text.splitlines()
+        data_lines = [l for l in lines if not l.startswith("%") and l.strip()]
+        if not data_lines:
+            raise ValueError(f"No data rows found in UniGE nsTA file: {datafilename}") from None
 
-    valid_rows = [r for r in parsed_rows if len(r) == expected_cols]
-    if not valid_rows:
-        raise ValueError(f"Could not parse valid data rows from UniGE nsTA file: {datafilename}")
+        parsed_rows = [[float(x) for x in l.split()] for l in data_lines]
+        col_counts = Counter(len(r) for r in parsed_rows)
+        expected_cols = col_counts.most_common(1)[0][0]
 
-    alldata = np.array(valid_rows, dtype=float)
+        valid_rows = [r for r in parsed_rows if len(r) == expected_cols]
+        if not valid_rows or expected_cols < 6:
+            raise ValueError(
+                f"Could not parse valid data rows from UniGE nsTA file: {datafilename}"
+            ) from None
+
+        alldata = np.array(valid_rows, dtype=float)
+
+    if alldata.ndim != 2 or alldata.shape[0] == 0:
+        raise ValueError(f"No valid data rows found in UniGE nsTA file: {datafilename}")
 
     # Delays in seconds -> convert to nanoseconds (x 1e9)
     delays_ns = alldata[:, 0] * 1e9
     delays, u_idx, dID = np.unique(delays_ns, return_index=True, return_inverse=True)
     Ndelays = len(delays)
+    if Ndelays == 0:
+        raise ValueError(f"No delay points found in UniGE nsTA file: {datafilename}")
 
     total_rows = alldata.shape[0]
     Npixels = total_rows // Ndelays
+    valid_len = Ndelays * Npixels
 
-    tmpsignal = np.zeros((Ndelays, Npixels), dtype=float)
-    tmprms = np.zeros((Ndelays, Npixels), dtype=float)
-    tmpnoise = np.zeros((Ndelays, Npixels), dtype=float)
-    cts = np.zeros(Ndelays, dtype=float)
-
-    for j in range(Ndelays):
-        idx_pix = slice(j * Npixels, (j + 1) * Npixels)
-        cts[j] = alldata[j * Npixels, 5]
-        tmpsignal[j, :] = alldata[idx_pix, 2]
-        tmprms[j, :] = alldata[idx_pix, 3]
-        tmpnoise[j, :] = alldata[idx_pix, 4]
+    # Fast vectorized extraction of signal, rms, noise, and accumulation counts
+    tmpsignal = alldata[:valid_len, 2].reshape(Ndelays, Npixels)
+    tmprms = alldata[:valid_len, 3].reshape(Ndelays, Npixels)
+    tmpnoise = alldata[:valid_len, 4].reshape(Ndelays, Npixels)
+    cts = alldata[:valid_len:Npixels, 5]
 
     # Filter out delays with zero counts (matching LoadData_nsTAUniGE.m)
     rmv_idx = cts == 0
@@ -476,7 +487,7 @@ def _unige_fsta_is_file(path: Path) -> bool:
     if path.suffix.lower() != ".dat":
         return False
     try:
-        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+        with open(path, encoding="utf-8", errors="ignore") as f:
             header_sample = f.read(2048)
         if not header_sample.startswith("%"):
             return False
@@ -504,34 +515,50 @@ def read_UniGE_fsTA(datafilename: str) -> LoaderResult:
     Zavg_R, delays, probe, Units, Nscans, Zss_R, Zstdv, scan_ids
     """
     from collections import Counter
+
     import scipy.io as sio
 
     path = Path(datafilename)
     if not path.is_file():
         raise FileNotFoundError(f"UniGE fsTA file not found: {datafilename}")
 
-    with open(path, "r", encoding="utf-8", errors="ignore") as f:
-        text = f.read().replace("\x00", "")
+    import pandas as pd
 
-    lines = text.splitlines()
-    data_lines = [l for l in lines if not l.startswith("%") and l.strip()]
-    if not data_lines:
-        raise ValueError(f"No data rows found in UniGE fsTA file: {datafilename}")
+    try:
+        df = pd.read_csv(path, comment="%", sep=r"\s+", header=None, engine="c")
+        if df.empty or df.shape[1] < 4:
+            raise ValueError(f"Insufficient columns or empty data in UniGE fsTA file: {datafilename}")
+        alldata = df.to_numpy(dtype=float)
+    except Exception:
+        with open(path, encoding="utf-8", errors="ignore") as f:
+            text = f.read().replace("\x00", "")
 
-    parsed_rows = [[float(x) for x in l.split()] for l in data_lines]
-    col_counts = Counter(len(r) for r in parsed_rows)
-    expected_cols = col_counts.most_common(1)[0][0]
+        lines = text.splitlines()
+        data_lines = [l for l in lines if not l.startswith("%") and l.strip()]
+        if not data_lines:
+            raise ValueError(f"No data rows found in UniGE fsTA file: {datafilename}") from None
 
-    valid_rows = [r for r in parsed_rows if len(r) == expected_cols]
-    if not valid_rows:
-        raise ValueError(f"Could not parse valid data rows from UniGE fsTA file: {datafilename}")
+        parsed_rows = [[float(x) for x in l.split()] for l in data_lines]
+        col_counts = Counter(len(r) for r in parsed_rows)
+        expected_cols = col_counts.most_common(1)[0][0]
 
-    alldata = np.array(valid_rows, dtype=float)
+        valid_rows = [r for r in parsed_rows if len(r) == expected_cols]
+        if not valid_rows or expected_cols < 4:
+            raise ValueError(
+                f"Could not parse valid data rows from UniGE fsTA file: {datafilename}"
+            ) from None
+
+        alldata = np.array(valid_rows, dtype=float)
+
+    if alldata.ndim != 2 or alldata.shape[0] == 0:
+        raise ValueError(f"No valid data rows found in UniGE fsTA file: {datafilename}")
 
     # Delays in seconds -> convert to picoseconds (x 1e12)
     delays_ps = alldata[:, 0] * 1e12
     delays, u_idx, dID = np.unique(delays_ps, return_index=True, return_inverse=True)
     Ndelays = len(delays)
+    if Ndelays == 0:
+        raise ValueError(f"No delay points found in UniGE fsTA file: {datafilename}")
 
     Ncols = alldata.shape[1]
     Npixels = (Ncols - 2) // 2
@@ -1355,7 +1382,7 @@ def _is_harpia_main_file(path: Path) -> bool:
     if re.search(r"(?:^|_)fludep(?:_\d+)?$", stem, re.IGNORECASE):
         return False
     try:
-        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+        with open(path, encoding="utf-8", errors="ignore") as f:
             header_sample = f.read(2048)
         if "Pump-probe" not in header_sample and "Wavelength" not in header_sample:
             return False
@@ -1703,8 +1730,10 @@ def parse_helios_csv(file_path: Path | str) -> tuple[np.ndarray, np.ndarray, np.
     """Parse a single Helios CSV file into delays, probe, and signal (in mOD, NaN-interpolated)."""
     import pandas as pd
 
-    df = pd.read_csv(file_path, header=None, on_bad_lines="skip")
-    num_df = df.apply(pd.to_numeric, errors="coerce")
+    df = pd.read_csv(file_path, header=None, on_bad_lines="skip", engine="c")
+    raw_arr = df.to_numpy()
+    num_arr = np.asarray(pd.to_numeric(raw_arr.ravel(), errors="coerce")).reshape(raw_arr.shape)
+    num_df = pd.DataFrame(num_arr)
     if num_df.empty or num_df.shape[0] < 2 or num_df.shape[1] < 2:
         raise ValueError(f"Invalid Helios TA data file format: {file_path}")
 
@@ -1854,7 +1883,7 @@ def read_Exported_TXT(datafilename: str) -> LoaderResult:
     def _parse_unit(filepath: Path, default: str) -> str:
         header_line = ""
         try:
-            with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+            with open(filepath, encoding="utf-8", errors="ignore") as f:
                 for line in f:
                     line_s = line.strip()
                     if line_s.startswith("#"):

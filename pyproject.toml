@@ -73,6 +73,7 @@ ignore = [
 "tests/test_gui.py" = ["E402"]          # Qt skip-guard before imports
 "pymorgan/gui/canvas.py" = ["E402"]     # QT_API set before matplotlib import
 "pymorgan/gui/main_window.py" = ["E402"]  # QT_API set before imports
+"*_ui.py" = ["E402", "UP004"]             # pyuic6 generated files
 
 [tool.ruff.format]
 quote-style = "double"

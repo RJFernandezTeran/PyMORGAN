@@ -373,7 +373,6 @@ class Dataset1D:
 
         probe = np.asarray(self.probe, dtype=float)
         res = float(np.median(np.abs(np.diff(probe)))) if probe.size > 1 else float("nan")
-        n_delays = int(np.asarray(self.delays).size)
         scans = f"Avg. of {int(self.nscans)} scans" if np.isfinite(self.nscans) else "Avg. Data"
 
         sig = np.asarray(self.Z, dtype=float)

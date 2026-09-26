@@ -6,8 +6,11 @@ import os
 
 os.environ.setdefault("QT_API", "pyqt6")
 
+import matplotlib.patches as patches
+import matplotlib.pyplot as plt
 import numpy as np
-from PyQt6.QtCore import Qt
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.widgets import RectangleSelector
 from PyQt6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -21,11 +24,6 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QVBoxLayout,
 )
-
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
-import matplotlib.patches as patches
-from matplotlib.widgets import RectangleSelector
 
 import pymorgan as pm
 from pymorgan import helpers as hlp
@@ -248,7 +246,7 @@ class TwoDIntegralDynamicsDialog(QDialog):
 
             self._update_plot_2d()
             self._update_plot_1d()
-        except Exception as exc:
+        except Exception:
             pass
 
     def _draw_diagonal(self, ax):

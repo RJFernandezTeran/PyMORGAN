@@ -5,17 +5,17 @@ third-party library calls, or keyword arguments.
 from __future__ import annotations
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
-import pytest
+import synthetic
 
 import pymorgan as pm
 from pymorgan import helpers as hlp
 from pymorgan.display import add_subplot_labels
-from pymorgan.oneD.chirp import _movmedian, fit_chirp_wavelet
+from pymorgan.oneD.chirp import _movmedian
 from pymorgan.steadyState.dataset import Spectrum, SpectrumKind, SpectrumSeries
-import synthetic
 
 
 def test_movmedian_pandas_rolling():

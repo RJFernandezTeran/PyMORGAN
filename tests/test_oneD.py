@@ -1,13 +1,9 @@
 """Unit tests for 1D dataset processing, background correction, chirp correction, shockwave subtraction, and steady-state loading."""
 
 import copy
-import numpy as np
-import pytest
-import synthetic
 
-import pymorgan as pm
-from pymorgan.oneD.dataset import Dataset1D
-from pymorgan.steadyState.dataset import load_spectrum
+import numpy as np
+
 from pymorgan.oneD.chirp import (
     ChirpFit,
     _bisquare_weights,
@@ -17,6 +13,8 @@ from pymorgan.oneD.chirp import (
     load_chirp_fit,
     save_chirp_fit,
 )
+from pymorgan.oneD.dataset import Dataset1D
+from pymorgan.steadyState.dataset import load_spectrum
 
 
 # --------------------------------------------------------------------------- #
@@ -154,6 +152,7 @@ def test_multi_detector_mask_probe_regions():
 
 def test_export_pdat_multi_detector(tmp_path, monkeypatch):
     from unittest.mock import MagicMock
+
     from pymorgan.gui.main_window import MainWindow
 
     delays = np.linspace(-1, 10, 5)
@@ -184,7 +183,7 @@ def test_export_pdat_multi_detector(tmp_path, monkeypatch):
 
 
 def test_multi_detector_chirp_apply():
-    from pymorgan.oneD.chirp import ChirpFit, default_chirp_filename, save_chirp_fit
+    from pymorgan.oneD.chirp import ChirpFit
 
     delays = np.linspace(-1, 10, 10)
     probe = np.column_stack([np.linspace(1000, 1500, 20), np.linspace(2000, 2500, 20)])

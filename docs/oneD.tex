@@ -74,12 +74,29 @@ data = pm.load_1D("scan.pdat", data_type="PDAT")
 print(pm.available_loaders())
 \end{lstlisting}
 
-The currently registered names are \code{PDAT} (implemented) together with the
-instrument-specific formats \code{UniGE\_fsTA}, \code{UniGE\_nsTA},
-\code{MESS\_TRIR}, \code{MESS\_TRUVIS}, \code{UniGE\_FLUPSold},
-\code{UniGE\_FLUPSnew}, \code{Helios\_TA} and \code{UoS\_IRpp}, which are
-recognised but raise \code{NotImplementedError} until their on-disk formats are
-defined. A new format is added by decorating a reader:
+\begin{table}[h]
+  \centering
+  \small
+  \begin{tabular}{lll}
+    \toprule
+    Format Token & Instrument / Origin & Description \\
+    \midrule
+    \code{PDAT} & PyMORGAN standard & Comma-separated averaged data (\code{.pdat}) + optional noise (\code{.pdatn}) \\
+    \code{UniGE\_fsTA} & UniGE fs-TA & Step-scan femtosecond TA (\code{.dat}) with C-engine vectorised parsing \\
+    \code{UniGE\_nsTA} & UniGE ns-TA & Nanosecond TA (\code{.dat}) with delay, pixel, and TA signal columns \\
+    \code{UoS\_IRpp} & Univ. of Sheffield & Transient IR (\code{.2D} and \code{.DT}), 96 or 192 pixels, single-scan detection \\
+    \code{MESS\_TRIR} & MESS TRIR & State-modulated TRIR directories with inverse-variance scan averaging \\
+    \code{MESS\_TRUVIS} & MESS TRUVIS & State-modulated transient UV-Vis directories \\
+    \code{HARPIA} & Light Conversion & Harpia ultrafast transient absorption files (\code{.dat}) \\
+    \code{Helios\_TA} & Ultrafast Systems & Helios TA files (\code{.csv}) with multi-scan discovery and interpolation \\
+    \code{Exported\_TXT} & Generic exports & Wavelength-vs-delay tabular text files (\code{.txt}) \\
+    \bottomrule
+  \end{tabular}
+  \caption{Supported one-dimensional data formats in PyMORGAN.}
+  \label{tab:1dloaders}
+\end{table}
+
+A new format is added by decorating a reader with \code{@pm.register\_loader("MyInstrument")}:
 
 \begin{lstlisting}
 @pm.register_loader("MyInstrument")
@@ -88,13 +105,17 @@ def read_my_instrument(path):
     return Zavg_R, delays, probe, Units, Nscans, Zss_R, Zstdv
 \end{lstlisting}
 
+\paragraph{High-performance file parsing.}
+Large experimental files (such as UniGE fsTA and Helios TA scans spanning tens of thousands of lines) are parsed using high-throughput C-accelerated engines (\code{pandas.read\_csv} with \code{engine="c"}) with automated fallbacks for non-standard whitespace or formatting anomalies. Probe wavelength calibration is automatically resolved from local directory structures (e.g.\ \code{CalibratedProbe.csv} or \code{pix2lam.mat}).
+
 \paragraph{The PDAT format.}
 A \code{.pdat} file is comma-separated. The first line carries the time and
 probe units separated by an asterisk (e.g.\ \code{ps*cm\textasciicircum\{-1\}}).
 The first data row holds the probe axis (with a leading $0$), and each
 subsequent row begins with a delay value followed by the signal at every probe
 coordinate. PDAT files store averaged data already in m\,OD, so no rescaling is
-applied on read.
+applied on read. Per-point standard deviations are optionally stored in a sibling
+\code{.pdatn} file with an identical layout.
 
 \subsection{Background correction}
 The pre-time-zero background is estimated by averaging the signal over a delay
@@ -228,11 +249,11 @@ The label style, colourmap, time-axis scale and \dA{} unit convention are taken
 from the active settings (\S\ref{sec:settings}); any of them can be overridden
 per figure through the corresponding keyword argument.
 
-For datasets with high dynamic range where weak features would otherwise be washed out by dominant bleach or ESA peaks, \code{plot_contour} provides non-linear $\operatorname{arcsinh}$ colour scaling via \code{Asinh=True} (also toggled in the GUI plot controls). Rather than modifying the underlying signal values, PyMORGAN applies an inverse hyperbolic sine colour normalization (\code{matplotlib.colors.AsinhNorm}) paired with non-linear $\sinh$-spaced contour levels:
+For datasets with high dynamic range where weak features would otherwise be washed out by dominant bleach or ESA peaks, \code{plot\_contour} provides non-linear $\operatorname{arcsinh}$ colour scaling via \code{Asinh=True} (also toggled in the GUI plot controls). Rather than modifying the underlying signal values, PyMORGAN applies an inverse hyperbolic sine colour normalization (\code{matplotlib.colors.AsinhNorm}) paired with non-linear $\sinh$-spaced contour levels:
 \begin{equation}
   z_k = s \cdot \sinh(u_k), \quad u_k \in \left[-\operatorname{arcsinh}\left(\frac{|Z_{\min}|}{s}\right), \operatorname{arcsinh}\left(\frac{Z_{\max}}{s}\right)\right],
 \end{equation}
-where $s = \frac{p}{100} \cdot \max(|Z_{\min}|, |Z_{\max}|)$ is the linear crossover threshold set by \code{asinh_pct} ($p$, default $5.0\%$). Signals within $\pm s$ behave linearly, while larger amplitudes are compressed logarithmically. Because the underlying data array is not mutated, coordinates and hover values retain their physical units ($\mathrm{mOD}$), and colorbar ticks remain linear and clean (centred at zero and rounded to sensible numbers).
+where $s = \frac{p}{100} \cdot \max(|Z_{\min}|, |Z_{\max}|)$ is the linear crossover threshold set by \code{asinh\_pct} ($p$, default $5.0\%$). Signals within $\pm s$ behave linearly, while larger amplitudes are compressed logarithmically. Because the underlying data array is not mutated, coordinates and hover values retain their physical units ($\mathrm{mOD}$), and colorbar ticks remain linear and clean (centred at zero and rounded to sensible numbers).
 
 \subsection{Composing figures and displaying}
 By default every plotter creates its own figure and axis. Passing an existing

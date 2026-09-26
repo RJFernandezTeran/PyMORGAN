@@ -6,7 +6,6 @@ actually called.
 
 from __future__ import annotations
 
-
 from collections.abc import Sequence
 
 import matplotlib.axes
@@ -54,13 +53,13 @@ def add_subplot_labels(
         returned by ``plt.subplots(...)``.
     fmt : str, default "(a)"
         Label format template. Recognized format tokens:
-        
+
         - ``"a"`` : lowercase letters ``(a)``, ``(b)``, ... ``(aa)``
         - ``"A"`` : uppercase letters ``(A)``, ``(B)``, ...
         - ``"1"`` : numbers ``1)``, ``2)``, ...
         - ``"I"`` : uppercase Roman numerals ``(I)``, ``(II)``, ...
         - ``"i"`` : lowercase Roman numerals ``(i)``, ``(ii)``, ...
-        
+
         Delimiters in ``fmt`` are preserved (e.g. ``"a)"``, ``"A."``, ``"[1]"``).
     position : str, default "top-left"
         Position of the label relative to the axes boundary. Allowed values:
@@ -77,7 +76,7 @@ def add_subplot_labels(
         (matching the current plot's axis label size setting).
     order : str, default "row-first"
         Order to traverse 2D arrays of axes:
-        
+
         - ``"row-first"`` / ``"C"`` : row by row (top to bottom, left to right)
         - ``"column-first"`` / ``"F"`` : column by column (top to bottom, left to right)
     bbox : dict, optional

@@ -21,23 +21,16 @@ from PyQt6.QtCore import QEvent, Qt, QTimer, QUrl
 from PyQt6.QtGui import (
     QDesktopServices,
     QKeySequence,
-    QPixmap,
-    QShortcut,
     QStandardItemModel,
 )
 from PyQt6.QtWidgets import (
-    QAbstractSpinBox,
     QApplication,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
-    QLabel,
-    QLineEdit,
     QMainWindow,
     QMessageBox,
-    QPlainTextEdit,
     QPushButton,
-    QTextEdit,
     QVBoxLayout,
 )
 
@@ -176,7 +169,6 @@ class MainWindow(
                 else:
                     logger.debug("main_window_ui.py recompiled from main_window.ui")
                     # Invalidate any cached import of the stale compiled module.
-                    import importlib
                     import sys as _sys
 
                     mod_name = f"{__package__}.main_window_ui"
@@ -309,7 +301,8 @@ class MainWindow(
                 )
 
         import colorsys
-        from matplotlib.colors import to_rgb, to_hex
+
+        from matplotlib.colors import to_hex, to_rgb
         s = pm.get_settings()
 
         def ss_style(color_spec: str, font_size: str = "11px") -> str:
@@ -502,7 +495,13 @@ class MainWindow(
                 key = event.key()
                 if key in (Qt.Key.Key_Up, Qt.Key.Key_Down):
                     focus_w = QApplication.focusWidget()
-                    from PyQt6.QtWidgets import QLineEdit, QTextEdit, QPlainTextEdit, QAbstractSpinBox, QComboBox
+                    from PyQt6.QtWidgets import (
+                        QAbstractSpinBox,
+                        QComboBox,
+                        QLineEdit,
+                        QPlainTextEdit,
+                        QTextEdit,
+                    )
                     if focus_w is not None and isinstance(focus_w, (QLineEdit, QTextEdit, QPlainTextEdit, QAbstractSpinBox, QComboBox)):
                         return False
 
@@ -522,7 +521,13 @@ class MainWindow(
         key = event.key()
         if key in (Qt.Key.Key_Up, Qt.Key.Key_Down):
             focus_w = QApplication.focusWidget()
-            from PyQt6.QtWidgets import QLineEdit, QTextEdit, QPlainTextEdit, QAbstractSpinBox, QComboBox
+            from PyQt6.QtWidgets import (
+                QAbstractSpinBox,
+                QComboBox,
+                QLineEdit,
+                QPlainTextEdit,
+                QTextEdit,
+            )
             if focus_w is not None and isinstance(focus_w, (QLineEdit, QTextEdit, QPlainTextEdit, QAbstractSpinBox, QComboBox)):
                 super().keyPressEvent(event)
                 return

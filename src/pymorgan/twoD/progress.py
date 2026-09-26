@@ -113,10 +113,24 @@ class ProgressTracker:
         percent = f"{100 * (current / float(self.total)):.1f}"
         length = 30
         filled_length = int(length * current // self.total)
-        bar = "█" * filled_length + '-' * (length - filled_length)
-        print(f"\r{lbl} |{bar}| {percent}%", end="")
-        if current >= self.total:
-            print()
+        import sys
+        enc = getattr(sys.stdout, "encoding", None) or "utf-8"
+        try:
+            "█".encode(enc)
+            fill_char = "█"
+        except (UnicodeEncodeError, LookupError):
+            fill_char = "#"
+        bar = fill_char * filled_length + '-' * (length - filled_length)
+        try:
+            print(f"\r{lbl} |{bar}| {percent}%", end="", flush=True)
+            if current >= self.total:
+                print()
+        except UnicodeEncodeError:
+            # Fallback for plain ASCII output
+            ascii_bar = "#" * filled_length + '-' * (length - filled_length)
+            print(f"\r{lbl} |{ascii_bar}| {percent}%", end="", flush=True)
+            if current >= self.total:
+                print()
 
     def close(self):
         if self.is_gui and self.dialog is not None:

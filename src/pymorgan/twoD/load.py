@@ -89,9 +89,7 @@ def read_P2DAT(datafilename: str) -> LoaderResult:
     probe = np.unique(data[1:, 1])
     Zflat = data[1:, 2:]
 
-    Z = np.zeros((len(pump), len(probe), len(delays)))
-    for i in range(len(delays)):
-        Z[:, :, i] = np.reshape(Zflat[:, i], (len(pump), len(probe)), order="F")
+    Z = Zflat.reshape((len(pump), len(probe), len(delays)), order="F")
 
     return Z, pump, probe, delays, _units_2d("ps", "cm-1"), "cm-1"
 

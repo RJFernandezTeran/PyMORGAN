@@ -309,26 +309,33 @@ def process(
         if dataset.datatype == "interferometer":
             bininterfmax = np.argmax(interf)
             fft_interf = np.fft.fft(interf)
-            binspecmax = np.argmax(np.abs(fft_interf[19:Nbins//2])) + 19
+            if Nbins >= 40:
+                binspecmax = int(np.argmax(np.abs(fft_interf[19:Nbins//2])) + 19)
+                # Rapid analytical binzero determination using the Fourier shift theorem:
+                # A time shift roll(x, -b) corresponds to a linear phase ramp in frequency:
+                # phase_b[k] = phase_0[k] + (2*pi*k/Nbins) * b
+                # The phase slope zero-crossing is obtained directly in closed form (0 extra FFTs).
+                k1 = max(0, binspecmax - 10)
+                k2 = min(Nbins - 1, binspecmax + 10)
+                delta_k = k2 - k1
+                if delta_k > 0:
+                    phase0 = np.unwrap(np.angle(fft_interf))
+                    dphi0 = phase0[k2] - phase0[k1]
+                    slope = 2 * np.pi * delta_k / Nbins
+                    m_target = np.round((dphi0 + slope * bininterfmax) / (2 * np.pi))
+                    b0_exact = (2 * np.pi * m_target - dphi0) / slope
+                    binzero = int(np.round(b0_exact))
+                else:
+                    binzero = bininterfmax
+            else:
+                binspecmax = 0
+                binzero = bininterfmax
             dataset.proc_binspecmax[m] = binspecmax
-
-            bins_arr = np.arange(1, 201) + bininterfmax - 100
-            diff_arr = np.zeros(200)
-            for idx_p, b_val in enumerate(bins_arr):
-                shifted = np.roll(interf, -b_val)
-                temp_phase = np.unwrap(np.angle(np.fft.fft(shifted)))
-                diff_arr[idx_p] = temp_phase[binspecmax + 10] - temp_phase[binspecmax - 10]
-
-            coeff = robust_polyfit(bins_arr, diff_arr, 1)
-            binzero = int(np.round(-coeff[1] / coeff[0]))
         else:
             binzero = 0
             binspecmax = 0
 
         q = np.arange(1, Nbins + 1)
-        cosine_sym = np.ones(Nbins)
-        cosine_onesided = np.ones(Nbins)
-
         V = q - (binzero + 1)
         box = np.zeros(Nbins)
         box[V > 0] = 1.0
@@ -338,24 +345,21 @@ def process(
         denom = float(M) if M > 0 else 1.0
 
         if apodise_method in ("Box", "Cos", "Cos^2", "Cos^3", "Hanning", "Hamming"):
-            for idx_q, q_val in enumerate(q):
-                v_val = abs(q_val - (binzero + 1))
-                if v_val <= M:
-                    if apodise_method == "Box":
-                        val = 1.0
-                    elif apodise_method == "Cos":
-                        val = np.cos(np.pi * v_val / (2.0 * denom))
-                    elif apodise_method == "Cos^2":
-                        val = (np.cos(np.pi * v_val / (2.0 * denom))) ** 2
-                    elif apodise_method == "Cos^3":
-                        val = (np.cos(np.pi * v_val / (2.0 * denom))) ** 3
-                    elif apodise_method == "Hanning":
-                        val = 0.5 + 0.5 * np.cos(np.pi * v_val / denom)
-                    elif apodise_method == "Hamming":
-                        val = 0.54 + 0.46 * np.cos(np.pi * v_val / denom)
-                else:
-                    val = 0.0
-                cosine_sym[idx_q] = val
+            v_vals = np.abs(q - (binzero + 1))
+            mask = v_vals <= M
+            cosine_sym = np.zeros(Nbins)
+            if apodise_method == "Box":
+                cosine_sym[mask] = 1.0
+            elif apodise_method == "Cos":
+                cosine_sym[mask] = np.cos(np.pi * v_vals[mask] / (2.0 * denom))
+            elif apodise_method == "Cos^2":
+                cosine_sym[mask] = (np.cos(np.pi * v_vals[mask] / (2.0 * denom))) ** 2
+            elif apodise_method == "Cos^3":
+                cosine_sym[mask] = (np.cos(np.pi * v_vals[mask] / (2.0 * denom))) ** 3
+            elif apodise_method == "Hanning":
+                cosine_sym[mask] = 0.5 + 0.5 * np.cos(np.pi * v_vals[mask] / denom)
+            elif apodise_method == "Hamming":
+                cosine_sym[mask] = 0.54 + 0.46 * np.cos(np.pi * v_vals[mask] / denom)
 
             cosine_onesided = cosine_sym * box
         else:

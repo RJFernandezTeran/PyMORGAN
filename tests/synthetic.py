@@ -420,6 +420,7 @@ def make_synthetic_unige_fsta(
 ):
     """Write a synthetic UniGE fsTA .dat dataset file and optional pix2lam.mat."""
     from pathlib import Path
+
     import scipy.io as sio
 
     path = Path(file_path)
@@ -437,7 +438,7 @@ def make_synthetic_unige_fsta(
     ]
 
     data_lines = []
-    for s in range(nscans):
+    for _ in range(nscans):
         for d in delays_s:
             row_tokens = [f"{d:.6e}", "200"]
             for _ in range(npixels):
@@ -518,7 +519,7 @@ def make_synthetic_uos_irpp(folder_path, *, n_detectors: int = 2, n_scans: int =
     pixels_per_det = 96
     total_pixels = pixels_per_det * n_detectors
     data_rows = []
-    for s in range(n_scans):
+    for _ in range(n_scans):
         for i in range(n_delays):
             row = rng.normal(loc=0.0, scale=0.05, size=total_pixels)
             if single_delays[i] > 0:

@@ -1,6 +1,5 @@
 """Unit tests for UniGE nsTA data loader and plot_counts functionality."""
 
-from pathlib import Path
 import numpy as np
 import pytest
 import scipy.io as sio
@@ -91,7 +90,7 @@ def test_unige_nsta_edge_trimming(tmp_path):
         "% format = dl-mach-xo-delay-1 Delay, pixel, TA signal, rms, error, n samples",
     ]
     npixels = 10
-    for i, t in enumerate(delays_sec):
+    for t in delays_sec:
         for p in range(npixels):
             if p == 0:
                 sig, err = 0.0, 0.0  # empty

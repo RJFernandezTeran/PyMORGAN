@@ -66,11 +66,113 @@ print(pm.available_map_loaders())
 A new format is registered with \code{@pm.register\_map\_loader("Name")}; the
 reader must return \code{(Z, pump, probe, delays, units, freq\_units)}.
 
+\begin{table}[h]
+  \centering
+  \small
+  \begin{tabular}{lll}
+    \toprule
+    Format Token & Instrument / Origin & Description \\
+    \midrule
+    \code{P2DAT} & PyMORGAN standard & Comma-separated processed signal cube (\code{.p2dat}) \\
+    \code{MESS\_2DIR} & MESS 2D-IR & Multi-file directory with raw/signal states, count, probe, and ref files \\
+    \code{UoS\_2DIR} & Univ. of Sheffield & Sheffield 2D-IR acquisition files \\
+    \code{RAL\_RAW} & STFC / Central Laser Facility & Raw Ultra 2D-IR interferograms \\
+    \code{RAL\_Proc} & STFC / Central Laser Facility & Processed Ultra 2D-IR cubes \\
+    \bottomrule
+  \end{tabular}
+  \caption{Supported two-dimensional data formats in PyMORGAN.}
+  \label{tab:2dloaders}
+\end{table}
+
 \paragraph{The P2DAT format.}
 The first row is \code{0, 0, $t_2^{(1)}$, $t_2^{(2)}$, \dots} (the population
 times); each subsequent row is \code{pump, probe, S($t_2^{(1)}$), \dots}. The
-flat pump/probe ordering is reshaped (Fortran order) into the
+flat pump/probe ordering is reshaped with zero-copy Fortran order directly into the
 \code{Z[pump, probe, $t_2$]} cube. Data is in m\,OD.
+
+\paragraph{The MESS 2DIR format.}
+A MESS 2DIR dataset is stored as a folder containing separate CSV files for each measurement component across all data states ($N_{\text{datastates}}$), spectral modulations ($N_{\text{spectra}}$), slow modulations ($N_{\text{slowmod}}$), interleaves, and population delay times ($t_2$). The reader automatically detects wobbler and chopper modulation modes, performs interferogram normalization ($I / \text{counts}$), calculates optical density $\Delta\mathrm{OD} = -1000 \log_{10}(I_{\text{probe}} / I_{\text{ref}})$, and reads the multi-file structure using parallelised, C-accelerated parsers.
+
+\subsection{Interferogram processing, phasing, and Fourier transformation}\label{sec:twoD:processing}
+
+For raw time-domain 2D-IR measurements (such as interferometer- or pulse-shaper-based acquisitions), the data must be baseline-corrected, windowed, Fourier-transformed along the excitation axis $t_1 \to \omega_1$, and phased to produce pure absorptive 2-D correlation maps. In PyMORGAN, this is handled through \code{Dataset2D.process()} or the \emph{Phasing/FT} GUI sub-tab.
+
+\subsubsection{Baseline correction and preprocessing}
+Optical scatter and low-frequency baseline drift are removed before spectral transformation:
+\begin{itemize}
+  \item \textbf{Pulse-shaper data:} Mean subtraction across the time-domain points removes DC offsets:
+    \begin{equation}
+      S_{\text{corr}}(t_1, \omega_3, t_2) = S(t_1, \omega_3, t_2) - \langle S(t_1, \omega_3, t_2) \rangle_{t_1}.
+    \end{equation}
+  \item \textbf{Interferometer data:} A running median filter with an odd kernel size of $101$ points is applied along $t_1$ to both the reference interferogram and the transient signal, isolating the oscillatory fringe signal from any slow baseline curvature.
+\end{itemize}
+
+\subsubsection{Rotating-frame parameters}
+In rotating-frame acquisitions (such as AOTF or pulse-shaper spectrometers), the experimental time step $\Delta t_1$ and rotating-frame carrier frequency $\omega_0$ (in cm$^{-1}$) define the spectral frequency axis:
+\begin{equation}
+  \omega_1(k) = k \cdot \Delta\nu + \omega_0, \qquad \Delta\nu = \frac{1}{N_{\text{FT}} \Delta t_1 c_0},
+\end{equation}
+where $c_0 = 2.99792458\times 10^{-5}$\,cm/fs is the speed of light and $N_{\text{FT}}$ is the total number of Fourier transform points. If not explicitly provided, $\omega_0$ and $\Delta t_1$ are read automatically from accompanying metadata (\code{w0.csv}). For interferometer systems, $\omega_0 = 0$ and $\Delta t_1 = 2.11079$\,fs (the HeNe laser interference fringe period).
+
+\subsubsection{Interferogram time-zero ($t_1=0$, binzero) via the Fourier Shift Theorem}
+In Fourier transform spectroscopy, determining the exact zero-path-difference position ($t_1=0$, or ``binzero'' $b_0$) is essential for obtaining pure absorptive spectra without phase distortion. Physically, placing the time origin at $t_1 = 0$ means that the phase spectrum $\phi(\omega) = \arg(\mathcal{F}\{I\})(\omega)$ has zero first derivative across the optical carrier frequency $\omega_0$:
+\begin{equation}
+  \left.\frac{\mathrm{d}\phi}{\mathrm{d}\omega}\right|_{\omega_0} = 0.
+\end{equation}
+Rather than iteratively rolling the time-domain signal and computing hundreds of redundant Fourier transforms, PyMORGAN determines $b_0$ analytically using the \textbf{Discrete Fourier Shift Theorem}. Circularly shifting a discrete sequence of length $N$ by $b$ bins, $I'(t_1) = \operatorname{roll}(I, -b)$, corresponds to an exact linear phase ramp in the frequency domain:
+\begin{equation}
+  \mathcal{F}\{\operatorname{roll}(I, -b)\}[k] = X[k] \cdot \exp\left(+i \frac{2\pi k}{N} b\right),
+\end{equation}
+where $X[k] = \mathcal{F}\{I\}[k]$ is the base Fourier transform computed once at the start. Consequently, the unwrapped phase at frequency bin $k$ for shift $b$ is:
+\begin{equation}
+  \phi_b[k] = \phi_0[k] + \left(\frac{2\pi k}{N}\right) b.
+\end{equation}
+Evaluating the phase difference across a symmetric window $[k_{\max} - \Delta k/2, k_{\max} + \Delta k/2]$ around the carrier peak gives:
+\begin{equation}
+  \Delta\phi(b) = \phi_b[k_2] - \phi_b[k_1] = \underbrace{(\phi_0[k_2] - \phi_0[k_1])}_{\Delta\phi_0} + \underbrace{\left(\frac{2\pi \Delta k}{N}\right)}_{m} \cdot b.
+\end{equation}
+Because $\Delta\phi(b)$ is strictly linear in $b$, the exact binzero position $b_0$ where $\Delta\phi(b_0) \equiv 0 \pmod{2\pi}$ is solved directly in closed form:
+\begin{equation}
+  b_0 = \operatorname{round}\left( \frac{2\pi m_{\text{wrap}} - \Delta\phi_0}{m} \right),
+\end{equation}
+where $m_{\text{wrap}} = \operatorname{round}((\Delta\phi_0 + m \cdot b_{\max}) / 2\pi)$ maps to the nearest integer phase wrap at the centerburst peak $b_{\max} = \operatorname{argmax}(I)$. This closed-form solution yields exact parity with traditional multi-pass grid searches while executing in under $1\,\mu$s per delay.
+
+\subsubsection{Apodisation (window functions)}
+To eliminate truncation ripples (sinc sidelobes) arising from the finite $t_1$ acquisition window, PyMORGAN applies an apodisation window $w(q)$ centred at binzero $b_0$. For $v = |q - (b_0 + 1)| \le M = N_{\text{bins}} - b_0 - 1$, the supported window functions are:
+\begin{itemize}
+  \item \textbf{Box:} $w(v) = 1.0$ (uniform Heaviside weighting).
+  \item \textbf{Cosine (Cos):} $w(v) = \cos\left(\frac{\pi v}{2 M}\right)$.
+  \item \textbf{Cos$^2$:} $w(v) = \cos^2\left(\frac{\pi v}{2 M}\right)$.
+  \item \textbf{Cos$^3$:} $w(v) = \cos^3\left(\frac{\pi v}{2 M}\right)$.
+  \item \textbf{Hanning:} $w(v) = 0.5 + 0.5 \cos\left(\frac{\pi v}{M}\right)$.
+  \item \textbf{Hamming:} $w(v) = 0.54 + 0.46 \cos\left(\frac{\pi v}{M}\right)$.
+\end{itemize}
+Points beyond $M$ are set to zero. For one-sided acquisition modes, the symmetric window is multiplied by a Heaviside step $H(q - b_0)$ so that negative times are excluded from the single-sided Fourier transformation.
+
+\subsubsection{Zero-padding and Fourier Transformation}
+To interpolate the frequency grid and avoid spectral picket-fence distortion, zero-padding appends zeros (or the asymptotic baseline value) to extend the length from $N_{\text{bins}}$ to $N_{\text{FT}}$. PyMORGAN supports integer multiplication factors ($1\times$, $2\times$, $4\times$) and automatic padding to the next power of two ($2^k$, which accelerates the Fast Fourier Transform). The complex FFT is then computed along $t_1$ for each probe pixel and population delay.
+
+\subsubsection{Phasing models}
+The frequency-dependent phase error $\phi(\omega_1)$ is modelled by extracting the unwrapped phase spectrum around the carrier peak over a window of $\pm N$ points and fitting a polynomial by iteratively reweighted least squares (IRLS):
+\begin{align}
+  \text{Constant:}  \quad \phi(\omega_1) &= c_0, \\
+  \text{Linear:}    \quad \phi(\omega_1) &= c_1 \omega_1 + c_0, \\
+  \text{Quadratic:} \quad \phi(\omega_1) &= c_2 \omega_1^2 + c_1 \omega_1 + c_0, \\
+  \text{Cubic:}     \quad \phi(\omega_1) &= c_3 \omega_1^3 + c_2 \omega_1^2 + c_1 \omega_1 + c_0.
+\end{align}
+The phased, purely absorptive transient signal is obtained by multiplying by the complex conjugate phase factor:
+\begin{equation}
+  S_{\text{phased}}(\omega_1, \omega_3, t_2) = \operatorname{Re}\left( S_{\text{raw}}(\omega_1, \omega_3, t_2) \cdot e^{-i \phi(\omega_1)} \right).
+\end{equation}
+
+\subsubsection{Pump correction and background subtraction}
+\begin{itemize}
+  \item \textbf{Pump correction:} When enabled, the signal at each excitation frequency $\omega_1$ is normalized by the real excitation intensity profile $|I_{\text{pump}}(\omega_1)|$, compensating for laser pulse spectral shape:
+    \begin{equation}
+      S_{\text{norm}}(\omega_1, \omega_3, t_2) = \frac{S_{\text{phased}}(\omega_1, \omega_3, t_2)}{|I_{\text{pump}}(\omega_1)| / \max |I_{\text{pump}}|}.
+    \end{equation}
+  \item \textbf{Scatter subtraction:} A selected population delay map $t_2^{\text{scat}}$ (typically an early or pre-zero delay containing pump scattering without sample dynamics) can be subtracted from all subsequent maps.
+\end{itemize}
 
 \subsection{Background correction}
 The 2-D background is a chosen $t_2$ map subtracted from the others,

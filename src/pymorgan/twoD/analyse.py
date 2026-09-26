@@ -991,6 +991,7 @@ def fit_2d_gaussian_map(
     residual_map : ndarray, shape (Npump, Nprobe)
     """
     from scipy.optimize import least_squares
+
     from .progress import ProgressTracker
 
     pump = np.asarray(pump)
@@ -1216,6 +1217,7 @@ def fit_2d_gaussian_global(
     residual_cube : ndarray, shape (Npump, Nprobe, Nt2)
     """
     from scipy.optimize import least_squares
+
     from .progress import ProgressTracker
 
     pump = np.asarray(pump)

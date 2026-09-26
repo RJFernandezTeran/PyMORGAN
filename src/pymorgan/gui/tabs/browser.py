@@ -26,7 +26,6 @@ from PyQt6.QtWidgets import (
 import pymorgan as pm
 from pymorgan.oneD.load import (
     dataset_glob,
-    is_dataset_dir,
     is_dataset_dir_status,
     is_dataset_file,
 )
@@ -172,7 +171,6 @@ class DatasetBrowserMixin:
             if hit is not None and hit[0] == stamp:
                 return hit[1], hit[2]
 
-        is_dataset = pm.twoD.is_map_dataset_dir if twoD else is_dataset_dir
         pattern = pm.twoD.map_dataset_glob(dt) if twoD else dataset_glob(dt)
 
         try:

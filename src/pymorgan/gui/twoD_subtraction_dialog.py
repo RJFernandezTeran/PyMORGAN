@@ -7,8 +7,9 @@ from pathlib import Path
 
 os.environ.setdefault("QT_API", "pyqt6")
 
+import matplotlib.pyplot as plt
 import numpy as np
-from PyQt6.QtCore import Qt
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from PyQt6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -23,8 +24,6 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
 )
 
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 import pymorgan as pm
 from pymorgan.twoD.dataset import Dataset2D
 

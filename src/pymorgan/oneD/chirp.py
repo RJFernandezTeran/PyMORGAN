@@ -43,6 +43,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 
 import numpy as np
 
@@ -315,7 +316,6 @@ def default_chirp_filename(detector: int | None = None, n_detectors: int = 1) ->
 def get_det_chirp_path(path, detector: int = 0) -> Path:
     """Ensure path has ``_DET<N>`` suffix for multi-detector chirp files."""
     import re
-    from pathlib import Path
     p = Path(path)
     det_num = int(detector) + 1
     stem = p.stem

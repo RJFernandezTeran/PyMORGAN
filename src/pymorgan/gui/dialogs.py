@@ -16,7 +16,6 @@ os.environ.setdefault("QT_API", "pyqt6")
 import numpy as np
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
-    QApplication,
     QCheckBox,
     QComboBox,
     QDialog,

@@ -8,7 +8,6 @@ from pymorgan.twoD.analyse import center_line_slope, subpixel_peak
 from pymorgan.twoD.dataset import Dataset2D
 from pymorgan.twoD.kubo_fit import g_function, run_kubo_fit, simulate_2d_spectrum
 
-
 STEP = 2.5
 SLOPE = 0.6
 WIDTH = 6.0
@@ -121,14 +120,13 @@ def test_run_kubo_fit():
     assert abs(res["params"][1] - 20.0) < 2.0
 
 
-from pymorgan.gui.picker import ContourPicker
-
-
 # --------------------------------------------------------------------------- #
 #                                 ROI Picker                                  #
 # --------------------------------------------------------------------------- #
 def test_contour_picker_instantiation():
     import matplotlib.pyplot as plt
+
+    from pymorgan.gui.picker import ContourPicker
 
     fig, ax = plt.subplots()
     picker = ContourPicker(fig.canvas, ax, axis="x", on_done=lambda *a: None)

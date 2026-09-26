@@ -2169,8 +2169,9 @@ class TwoDTabMixin:
             )
             dialog.exec()
         elif getattr(self, "_active_analysis_type", None) == "gaussian_fit":
-            from ..twoD_gaussian_dialog import TwoDGaussianFitDialog
             from pymorgan.twoD.dataset import Dataset2D
+
+            from ..twoD_gaussian_dialog import TwoDGaussianFitDialog
 
             ds = self.twoD_dataset
             t2_range = getattr(self, "_current_t2_range", None)

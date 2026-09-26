@@ -5,13 +5,11 @@ from __future__ import annotations
 import matplotlib
 
 matplotlib.use("Agg")
-import numpy as np
 import pytest
 import synthetic
 
 import pymorgan as pm
-from pymorgan.helpers import AxisUnit, DatasetUnits
-from pymorgan.twoD.dataset import Dataset2D
+from pymorgan.helpers import DatasetUnits
 
 
 @pytest.fixture
