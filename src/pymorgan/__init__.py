@@ -45,6 +45,7 @@ _EXPORTS: dict[str, str] = {
     "Dataset1D": ".oneD",
     "available_loaders": ".oneD",
     "load_1D": ".oneD",
+    "load_pymess_anisotropy": ".oneD",
     "register_loader": ".oneD",
     # 2-D pipeline
     "Dataset2D": ".twoD",
@@ -96,6 +97,7 @@ if TYPE_CHECKING:  # keeps type checkers and IDE completion fully informed
         Dataset1D,
         available_loaders,
         load_1D,
+        load_pymess_anisotropy,
         register_loader,
     )
     from .settings import (
@@ -157,6 +159,7 @@ __all__ = [
     # 1-D pipeline
     "Dataset1D",
     "load_1D",
+    "load_pymess_anisotropy",
     "register_loader",
     "available_loaders",
     # 2-D pipeline

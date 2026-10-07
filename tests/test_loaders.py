@@ -688,3 +688,188 @@ def test_read_exported_txt_fig4_dataset():
     assert ds.Zavg_R.shape == (425, 520, 1)
 
 
+# --------------------------------------------------------------------------- #
+#                             PyMESS Pump-Probe                               #
+# --------------------------------------------------------------------------- #
+def test_registry_lists_pymess_pp():
+    loaders = pm.available_loaders()
+    assert "PyMESS_PP" in loaders
+    assert "PyMESS" not in loaders
+    assert dataset_glob("PyMESS_PP") == "*.h5"
+
+
+def test_read_pymess_pp_synthetic_wavenumber(tmp_path):
+    info = synthetic.make_synthetic_pymess_pp(
+        tmp_path / "test_pymess.h5",
+        n_scans=3,
+        n_delays=20,
+        n_pixels=32,
+        probe_type="wavenumber",
+    )
+    ds = pm.load_1D(info["path"], data_type="PyMESS_PP")
+
+    assert ds.data_type == "PyMESS_PP"
+    assert ds.Zavg_R.shape == (20, 32, 1)
+    assert ds.delays.shape == (20,)
+    assert ds.probe.shape == (32,)
+    assert ds.nscans == 3
+    assert ds.Zss_R.shape == (20, 32, 1, 3)
+    assert ds.Zstdv.shape == (20, 32, 1)
+    assert ds.scan_ids == [0, 1, 2]
+
+    assert ds.units["unitsL_lbl"] == "Wavenumber"
+    assert ds.units["unitsL_ltx"] == r"cm$^{-1}$"
+    assert ds.units["unitsT_ltx"] == "ps"
+    assert ds.units["unitsZ"] == "x1E3"
+    assert ds.calibration_status() == "PyMESS spectral calibration (cm-1)"
+
+    sample_info = ds.sample_info()
+    assert "Sample: Synthetic Sample" in sample_info
+    assert "Solvent: DCM" in sample_info
+    assert "532.0 nm" in sample_info
+
+    # Test background correction on synthetic data
+    ds.background_correct(tmin=-5.0, tmax=-0.5)
+    assert ds.Zavg_C.shape == (20, 32, 1)
+
+
+def test_read_pymess_pp_synthetic_wavelength_and_intensity(tmp_path):
+    info = synthetic.make_synthetic_pymess_pp(
+        tmp_path / "test_pymess_vis.h5",
+        n_scans=2,
+        n_delays=15,
+        n_pixels=25,
+        probe_type="wavelength",
+        with_intensity=True,
+    )
+    ds = pm.load_1D(info["path"], data_type="PyMESS_PP")
+
+    assert ds.Zavg_R.shape == (15, 25, 1)
+    assert ds.probe.shape == (25,)
+    assert ds.units["unitsL_lbl"] == "Wavelength"
+    assert ds.units["unitsL_ltx"] == "nm"
+    assert ds.calibration_status() == "PyMESS spectral calibration (nm)"
+    assert ds.counts is not None
+    assert ds.counts.shape == (15, 25)
+
+
+def test_read_pymess_pp_synthetic_uncalibrated(tmp_path):
+    info = synthetic.make_synthetic_pymess_pp(
+        tmp_path / "test_uncal.h5",
+        n_scans=1,
+        n_delays=10,
+        n_pixels=16,
+        probe_type="uncalibrated",
+    )
+    ds = pm.load_1D(info["path"], data_type="PyMESS_PP")
+
+    assert ds.Zavg_R.shape == (10, 16, 1)
+    assert ds.probe.shape == (16,)
+    assert np.allclose(ds.probe, np.arange(16))
+    assert ds.units["unitsL_lbl"] == "Pixel"
+    assert ds.calibration_status() == "Uncalibrated pixel indices"
+
+
+def test_read_pymess_pp_synthetic_incomplete_scan(tmp_path):
+    info = synthetic.make_synthetic_pymess_pp(
+        tmp_path / "test_incomplete.h5",
+        n_scans=3,
+        n_delays=25,
+        n_pixels=20,
+        trailing_nan_delays=5,
+    )
+    ds = pm.load_1D(info["path"], data_type="PyMESS_PP")
+
+    # The 5 trailing NaN delay rows must be trimmed
+    assert ds.Zavg_R.shape == (20, 20, 1)
+    assert ds.delays.shape == (20,)
+    assert ds.Zss_R.shape == (20, 20, 1, 3)
+    assert ds.Zstdv.shape == (20, 20, 1)
+    assert np.isfinite(ds.Zavg_R).all()
+
+
+def test_read_pymess_pp_is_file_based_not_directory(tmp_path):
+    info = synthetic.make_synthetic_pymess_pp(
+        tmp_path / "valid_pp.h5",
+        measurement_type="pump_probe",
+    )
+    assert is_dataset_file("PyMESS_PP", info["path"]) is True
+    assert not is_directory_format("PyMESS_PP")
+    assert is_dataset_dir("PyMESS_PP", tmp_path) is False
+
+    # Test non-pump-probe modality rejection
+    non_pp = tmp_path / "magic_angle.h5"
+    synthetic.make_synthetic_pymess_pp(non_pp, measurement_type="magic_angle")
+    assert is_dataset_file("PyMESS_PP", non_pp) is False
+
+    # Plain text file rejection
+    dummy = tmp_path / "not_h5.h5"
+    dummy.write_text("not hdf5 content")
+    assert is_dataset_file("PyMESS_PP", dummy) is False
+
+
+def test_read_pymess_pp_real_dataset_reco_irpp():
+    real_path = Path(r"C:\Users\ricar\switchdrive\Ambizione UniGE\Scripts\testData\PyMESS\ReCO_DCM_IRpp_154555.h5")
+    if not real_path.is_file():
+        pytest.skip(f"Test dataset not found at {real_path}")
+
+    assert is_dataset_file("PyMESS_PP", real_path) is True
+
+    ds = pm.load_1D(real_path, data_type="PyMESS_PP")
+    assert ds.data_type == "PyMESS_PP"
+    assert ds.Zavg_R.shape == (68, 64, 1)
+    assert ds.delays.shape == (68,)
+    assert np.isclose(ds.delays[0], -20.0)
+    assert np.isclose(ds.delays[-1], 30.0)
+    assert ds.probe.shape == (64,)
+    assert ds.probe[0] > 1900.0
+    assert ds.nscans == 4
+    assert ds.Zss_R.shape == (68, 64, 1, 4)
+    assert ds.Zstdv.shape == (68, 64, 1)
+    assert ds.scan_ids == [0, 1, 2, 3]
+
+    assert ds.units["unitsL_lbl"] == "Wavenumber"
+    assert ds.units["unitsL_ltx"] == r"cm$^{-1}$"
+    assert ds.units["unitsT_ltx"] == "ps"
+    assert ds.units["unitsZ"] == "x1E3"
+    assert ds.calibration_status() == "PyMESS spectral calibration (cm-1)"
+
+    # Verify metadata extraction
+    sample_info = ds.sample_info()
+    assert "Sample: SRCN" in sample_info
+    assert "Solvent: THF and DBU 1mM" in sample_info
+    assert "550.0 nm" in sample_info
+
+    # Verify background correction works on real dataset
+    ds.background_correct(tmin=-20.0, tmax=-1.0)
+    assert ds.Zavg_C.shape == (68, 64, 1)
+    assert np.isfinite(ds.Zavg_C).all()
+
+
+def test_pymess_discriminator_rejects_magic_angle_real():
+    magic_path = Path(r"C:\Users\ricar\switchdrive\Ambizione UniGE\Scripts\testData\PyMESS\ReCO_PPagain_magic_160703.h5")
+    if not magic_path.is_file():
+        pytest.skip(f"Magic angle test file not found at {magic_path}")
+
+    assert is_dataset_file("PyMESS_PP", magic_path) is False
+
+
+def test_read_pymess_pp_folder_raises(tmp_path):
+    subfolder = tmp_path / "exp_folder"
+    synthetic.make_synthetic_pymess_pp(
+        subfolder / "exp_folder.h5",
+        n_scans=2,
+        n_delays=10,
+        n_pixels=16,
+    )
+    assert is_dataset_dir("PyMESS_PP", subfolder) is False
+    with pytest.raises(FileNotFoundError):
+        pm.load_1D(subfolder, data_type="PyMESS_PP")
+
+
+def test_read_pymess_pp_missing_file_raises():
+    with pytest.raises(FileNotFoundError):
+        pm.load_1D("non_existent_pymess.h5", data_type="PyMESS_PP")
+
+
+

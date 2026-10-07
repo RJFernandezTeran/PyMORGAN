@@ -580,5 +580,104 @@ def make_synthetic_unige_nsta(path, *, n_delays=10, npixels=20, zero_counts=Fals
     return {"path": path_obj, "delays_sec": delays_sec, "npixels": npixels}
 
 
+def make_synthetic_pymess_pp(
+    file_path,
+    *,
+    n_scans: int = 3,
+    n_delays: int = 20,
+    n_pixels: int = 32,
+    probe_type: str = "wavenumber",  # "wavenumber", "wavelength", or "uncalibrated"
+    measurement_type: str | None = "pump_probe",
+    with_noise: bool = True,
+    with_individual_scans: bool = True,
+    with_intensity: bool = False,
+    trailing_nan_delays: int = 0,
+    seed: int = 42,
+):
+    """Write a synthetic PyMESS pump-probe (.h5) dataset file."""
+    import h5py
+
+    path = Path(file_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rng = np.random.RandomState(seed)
+
+    delays_fs = np.linspace(-5000.0, 50000.0, n_delays)  # in fs (-5 ps to 50 ps)
+
+    if probe_type == "wavenumber":
+        wavelengths = np.linspace(1900.0, 2100.0, n_pixels)  # cm-1
+    elif probe_type == "wavelength":
+        wavelengths = np.linspace(400.0, 700.0, n_pixels)  # nm
+    else:
+        wavelengths = None
+
+    # Bi-exponential decay signal in mOD
+    T, W = np.meshgrid(delays_fs / 1000.0, np.arange(n_pixels), indexing="ij")
+    decay = np.zeros_like(T)
+    pos = T > 0
+    decay[pos] = -15.0 * np.exp(-T[pos] / 5.0) + 5.0 * np.exp(-T[pos] / 25.0)
+    spec = np.exp(-((W - n_pixels / 2) ** 2) / (2 * (n_pixels / 6) ** 2))
+    base_signal = decay * spec
+
+    if with_individual_scans and n_scans > 0:
+        indiv = np.zeros((n_scans, n_delays, n_pixels), dtype=np.float64)
+        for s in range(n_scans):
+            noise_pass = rng.normal(loc=0.0, scale=0.1, size=(n_delays, n_pixels))
+            indiv[s] = base_signal + noise_pass
+        delta_A = np.mean(indiv, axis=0)
+    else:
+        indiv = None
+        delta_A = base_signal.copy()
+
+    if with_noise:
+        delta_A_noise = rng.uniform(0.05, 0.15, size=(n_delays, n_pixels))
+    else:
+        delta_A_noise = None
+
+    if trailing_nan_delays > 0:
+        cut = n_delays - trailing_nan_delays
+        delta_A[cut:, :] = np.nan
+        if indiv is not None:
+            indiv[:, cut:, :] = np.nan
+        if delta_A_noise is not None:
+            delta_A_noise[cut:, :] = np.nan
+
+    with h5py.File(path, "w") as f:
+        data_grp = f.create_group("data")
+        data_grp.create_dataset("delta_A", data=delta_A)
+        data_grp.create_dataset("delays_fs", data=delays_fs)
+        if wavelengths is not None:
+            data_grp.create_dataset("wavelengths", data=wavelengths)
+        if indiv is not None:
+            data_grp.create_dataset("individual_scans", data=indiv)
+        if delta_A_noise is not None:
+            data_grp.create_dataset("delta_A_noise", data=delta_A_noise)
+        if with_intensity:
+            intensity = rng.uniform(1000.0, 5000.0, size=(n_delays, n_pixels))
+            data_grp.create_dataset("intensity", data=intensity)
+
+        meta_grp = f.create_group("metadata")
+        if measurement_type is not None:
+            meta_grp.attrs["measurement_type"] = measurement_type
+        meta_grp.attrs["sample_id"] = "Synthetic Sample"
+        meta_grp.attrs["solvent"] = "DCM"
+        meta_grp.attrs["pump_wl_nm"] = "532.0"
+        meta_grp.attrs["pump_power_mw"] = "1.5"
+        meta_grp.attrs["pump_polarization"] = "Magic Angle"
+        meta_grp.attrs["probe_polarization"] = "Horizontal"
+        meta_grp.attrs["comments"] = "Synthetic PyMESS test dataset"
+
+        cal_grp = f.create_group("calibration")
+        cal_grp.create_dataset("b_matrix", data=np.eye(n_pixels))
+
+    return {
+        "path": path,
+        "n_scans": n_scans,
+        "n_delays": n_delays,
+        "n_pixels": n_pixels,
+        "delays_ps": delays_fs / 1000.0,
+        "trailing_nan_delays": trailing_nan_delays,
+    }
+
+
 
 

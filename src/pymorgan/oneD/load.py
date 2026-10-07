@@ -29,6 +29,7 @@ from os import PathLike
 from pathlib import Path
 from typing import Any
 
+import h5py
 import numpy as np
 
 from pymorgan import helpers as hlp
@@ -1363,6 +1364,391 @@ def _mess_describe(folder: Path) -> dict:
         "n_spectra": n_spectra,
         "n_slowmod": n_slowmod,
         "anisotropy_modes": list(_MESS_ANISOTROPY_MODES),
+    }
+
+
+# --------------------------------------------------------------------------- #
+#                      PyMESS Pump-Probe HDF5 reader                          #
+# --------------------------------------------------------------------------- #
+register_dataset_glob("PyMESS_PP", "*.h5")
+
+
+def _pymess_attr_str(val: Any) -> str:
+    """Safely convert an HDF5 attribute value to a decoded string."""
+    if isinstance(val, (bytes, np.bytes_)):
+        return val.decode("utf-8", errors="replace")
+    return str(val)
+
+
+@register_dataset_file_filter("PyMESS_PP")
+def _pymess_pp_is_file(path: Path | str) -> bool:
+    """Verify if path is a valid PyMESS pump-probe HDF5 file."""
+    p = Path(path)
+    if p.suffix.lower() != ".h5":
+        return False
+    if not p.is_file():
+        return False
+    try:
+        if not h5py.is_hdf5(p):
+            return False
+        with h5py.File(p, "r") as f:
+            # 1. Authoritative explicit attribute check
+            if "metadata" in f and "measurement_type" in f["metadata"].attrs:
+                m_type = _pymess_attr_str(f["metadata"].attrs["measurement_type"])
+                return m_type == "pump_probe"
+            # 2. Structural heuristics fallback
+            if "data/delta_A" in f and "data/delays_fs" in f:
+                if (
+                    "2D_Spectra" not in f
+                    and "data/omega1_axis" not in f
+                    and "data/angles_deg" not in f
+                    and "data/interferogram" not in f
+                ):
+                    return True
+        return False
+    except Exception:
+        return False
+
+
+@register_loader("PyMESS_PP")
+def read_PyMESS_PP(
+    datafilename: str,
+    *,
+    load_single_scans: bool = True,
+    **kwargs,
+) -> LoaderResult:
+    """Read a PyMESS pump-probe (.h5) transient absorption file.
+
+    Handles standard single-condition scans as well as multi-state slow modulation
+    (e.g. polarization cycling, anisotropy, TOPAS stepping, mapped to Ndetectors).
+
+    Parameters
+    ----------
+    datafilename : str
+        Path to the PyMESS HDF5 (.h5) file.
+    load_single_scans : bool, optional
+        Whether to load individual scan passes (default: True).
+
+    Returns
+    -------
+    LoaderResult : tuple
+        (Zavg_R, delays, probe, Units, Nscans, Zss_R, Zstdv)
+    """
+    path = Path(datafilename)
+    if not path.is_file():
+        raise FileNotFoundError(f"PyMESS HDF5 file not found: {datafilename}")
+
+    try:
+        f = h5py.File(path, "r", swmr=True)
+    except Exception:
+        f = h5py.File(path, "r")
+
+    with f:
+        if "data" not in f or "data/delays_fs" not in f:
+            raise ValueError(
+                f"File {path.name} is not a valid PyMESS pump-probe dataset (missing /data/delays_fs)."
+            )
+        if "data/delta_A" not in f and "data/individual_scans" not in f:
+            raise ValueError(
+                f"File {path.name} is not a valid PyMESS pump-probe dataset (missing /data/delta_A)."
+            )
+
+        # 1. Delays: PyMESS stores in femtoseconds (fs) -> Convert to picoseconds (ps)
+        raw_delays = np.asarray(f["data/delays_fs"][:], dtype=np.float64)
+        delays = raw_delays / 1000.0
+        unitsT = "ps"
+
+        # 2. Probe / Spectral Axis
+        if "data/wavelengths" in f:
+            probe = np.asarray(f["data/wavelengths"][:], dtype=np.float64)
+        else:
+            if "data/delta_A" in f:
+                n_pix = f["data/delta_A"].shape[1]
+            elif "data/individual_scans" in f:
+                n_pix = f["data/individual_scans"].shape[2]
+            else:
+                n_pix = 0
+            probe = np.arange(n_pix, dtype=np.float64)
+
+        # Detect wavelength vs wavenumber units
+        probe_mean = float(np.nanmean(probe)) if probe.size > 0 else 0.0
+        if probe_mean > 1200.0:
+            unitsL = "cm^{-1}"
+            display_L = "cm-1"
+        elif probe_mean > 100.0:
+            unitsL = "nm"
+            display_L = "nm"
+        else:
+            unitsL = "px"
+            display_L = "px"
+
+        # 3. Check for Slow Modulation
+        meta_dict = {}
+        if "metadata" in f:
+            for k, v in f["metadata"].attrs.items():
+                meta_dict[str(k)] = _pymess_attr_str(v)
+
+        is_slow_mod = str(meta_dict.get("slow_modulation_enabled", "False")).lower() in ("true", "1")
+        k_slow = int(meta_dict.get("slow_modulation_num_states", 1)) if is_slow_mod else 1
+        raw_state_names = meta_dict.get("slow_modulation_state_names", "")
+        state_names = (
+            [s.strip() for s in str(raw_state_names).split(",")] if raw_state_names else []
+        )
+
+        indiv_scans = (
+            np.asarray(f["data/individual_scans"][:], dtype=np.float64)
+            if "data/individual_scans" in f and f["data/individual_scans"].ndim == 3
+            else None
+        )
+
+        if is_slow_mod and k_slow > 1 and indiv_scans is not None and indiv_scans.shape[0] >= k_slow:
+            n_total_scans = indiv_scans.shape[0]
+            n_repeats = n_total_scans // k_slow
+            Nscans = n_repeats
+
+            # Trim incomplete trailing delays if file is actively acquiring
+            valid_rows = ~np.all(np.isnan(indiv_scans[0]), axis=1)
+            if not np.all(valid_rows):
+                last_valid = np.where(valid_rows)[0]
+                if len(last_valid) > 0:
+                    cut_idx = int(last_valid[-1]) + 1
+                    indiv_scans = indiv_scans[:, :cut_idx, :]
+                    delays = delays[:cut_idx]
+
+            Ndelays, Npixels = indiv_scans.shape[1], indiv_scans.shape[2]
+
+            # Allocate Zavg_R: [Ndelays, Npixels, k_slow]
+            Zavg_R = np.zeros((Ndelays, Npixels, k_slow), dtype=np.float64)
+            # Allocate Zss_R: [Ndelays, Npixels, k_slow, n_repeats]
+            Zss_R = np.zeros((Ndelays, Npixels, k_slow, n_repeats), dtype=np.float64)
+
+            for s_idx in range(k_slow):
+                sweeps = indiv_scans[s_idx : n_repeats * k_slow : k_slow, :, :]
+                with np.errstate(all="ignore"):
+                    Zavg_R[:, :, s_idx] = np.nanmean(sweeps, axis=0) if n_repeats > 1 else sweeps[0]
+                Zss_R[:, :, s_idx, :] = np.transpose(sweeps, (1, 2, 0))
+
+            Zstdv = np.zeros_like(Zavg_R)
+            if not load_single_scans:
+                Nscans = 1
+                Zss_R = Zavg_R[:, :, :, np.newaxis]
+        else:
+            delta_A = np.asarray(f["data/delta_A"][:], dtype=np.float64)
+            valid_rows = ~np.all(np.isnan(delta_A), axis=1)
+            if not np.all(valid_rows):
+                last_valid = np.where(valid_rows)[0]
+                if len(last_valid) > 0:
+                    cut_idx = int(last_valid[-1]) + 1
+                    delta_A = delta_A[:cut_idx, :]
+                    delays = delays[:cut_idx]
+
+            Zavg_R = delta_A[:, :, np.newaxis]
+
+            if "data/delta_A_noise" in f:
+                noise_mat = np.asarray(f["data/delta_A_noise"][:], dtype=np.float64)
+                if not np.all(valid_rows):
+                    noise_mat = noise_mat[:len(delays), :]
+                Zstdv = noise_mat[:, :, np.newaxis]
+            else:
+                Zstdv = np.zeros_like(Zavg_R)
+
+            if load_single_scans and indiv_scans is not None:
+                if not np.all(valid_rows):
+                    indiv_scans = indiv_scans[:, :len(delays), :]
+                Nscans = int(indiv_scans.shape[0])
+                Zss_R = np.transpose(indiv_scans, (1, 2, 0))[:, :, np.newaxis, :]
+            else:
+                Nscans = 1
+                Zss_R = Zavg_R[:, :, :, np.newaxis]
+
+        # 4. Units Dictionary
+        Units = hlp.units2dic(unitsL, unitsT, "x1E3")
+        Units["cal_source"] = (
+            f"PyMESS spectral calibration ({display_L})"
+            if unitsL != "px"
+            else "Uncalibrated pixel indices"
+        )
+        if is_slow_mod and k_slow > 1:
+            if state_names and len(state_names) == k_slow:
+                Units["detectors"] = state_names
+            else:
+                Units["detectors"] = [f"State_{i}" for i in range(k_slow)]
+
+        Units["pymess_metadata"] = meta_dict
+        if "sample_id" in meta_dict and meta_dict["sample_id"]:
+            Units["sample"] = meta_dict["sample_id"]
+        if "pump_wl_nm" in meta_dict and meta_dict["pump_wl_nm"]:
+            Units["pump_wl"] = meta_dict["pump_wl_nm"]
+
+        # 5. Raw Intensity / Accumulation Counts (if present)
+        if "data/intensity" in f:
+            counts = np.asarray(f["data/intensity"][:], dtype=np.float64)
+            if not np.all(valid_rows):
+                counts = counts[:len(delays), :]
+            Units["counts"] = counts
+
+        # 6. Calibration metadata (B-matrix and dark noise backgrounds)
+        if "calibration" in f:
+            calib_dict = {}
+            for k in f["calibration"].keys():
+                calib_dict[k] = np.asarray(f["calibration"][k][:], dtype=np.float64)
+            Units["pymess_calibration"] = calib_dict
+
+        # 7. Format a human-readable sample info summary
+        info_lines = []
+        if "sample_id" in meta_dict and meta_dict["sample_id"]:
+            info_lines.append(f"Sample: {meta_dict['sample_id']}")
+        if "solvent" in meta_dict and meta_dict["solvent"]:
+            info_lines.append(f"Solvent: {meta_dict['solvent']}")
+        if "pump_wl_nm" in meta_dict and meta_dict["pump_wl_nm"]:
+            info_lines.append(f"Pump Wavelength: {meta_dict['pump_wl_nm']} nm")
+        if "pump_power_mw" in meta_dict and meta_dict["pump_power_mw"]:
+            info_lines.append(f"Pump Power: {meta_dict['pump_power_mw']} mW")
+        if "pump_polarization" in meta_dict and meta_dict["pump_polarization"]:
+            info_lines.append(f"Pump Polarization: {meta_dict['pump_polarization']}")
+        if "probe_polarization" in meta_dict and meta_dict["probe_polarization"]:
+            info_lines.append(f"Probe Polarization: {meta_dict['probe_polarization']}")
+        if is_slow_mod:
+            cadence = meta_dict.get("slow_modulation_cadence", "unknown cadence")
+            info_lines.append(f"Slow Modulation: {k_slow} states ({cadence})")
+        if "comments" in meta_dict and meta_dict["comments"]:
+            info_lines.append(f"Comments: {meta_dict['comments']}")
+        if info_lines:
+            Units["sample_info"] = "\n".join(info_lines)
+
+        if Nscans > 0:
+            Units["scan_ids"] = list(range(Nscans))
+
+    return Zavg_R, delays, probe, Units, Nscans, Zss_R, Zstdv
+
+
+def load_pymess_anisotropy(
+    datafilename: str | Path,
+    G_factor: float = 1.0,
+    threshold_mOD: float = 0.05,
+) -> dict[str, Any]:
+    """Load a slow-modulated polarization scan and unpack into Parallel, Perpendicular, Isotropic, and Anisotropy datasets.
+
+    Parameters
+    ----------
+    datafilename : str or Path
+        Path to the PyMESS HDF5 (.h5) file.
+    G_factor : float, optional
+        Instrumental G-factor (I_par / I_perp sensitivity ratio). Default is 1.0.
+    threshold_mOD : float, optional
+        Minimum isotropic signal in mOD below which anisotropy is clamped to NaN
+        to prevent noise divergence. Default is 0.05 mOD.
+
+    Returns
+    -------
+    dict of str -> Dataset1D
+        Dictionary containing:
+        - 'parallel': Dataset1D of Parallel transient absorption
+        - 'perpendicular': Dataset1D of Perpendicular transient absorption
+        - 'isotropic': Dataset1D of Isotropic transient absorption
+        - 'anisotropy': Dataset1D of Time-resolved polarization anisotropy r(t)
+    """
+    path = Path(datafilename)
+    if not path.is_file():
+        raise FileNotFoundError(f"PyMESS HDF5 file not found: {datafilename}")
+
+    with h5py.File(path, "r", swmr=True) as f:
+        meta = {str(k): _pymess_attr_str(v) for k, v in f.get("metadata", {}).attrs.items()}
+        raw_state_names = meta.get("slow_modulation_state_names", "")
+        state_names = (
+            [s.strip().lower() for s in str(raw_state_names).split(",")] if raw_state_names else []
+        )
+
+        par_idx, perp_idx = None, None
+        for idx, nm in enumerate(state_names):
+            if "par" in nm and par_idx is None:
+                par_idx = idx
+            elif "perp" in nm and perp_idx is None:
+                perp_idx = idx
+
+        # Default fallback to channels 0 and 1 if not explicitly named
+        if par_idx is None or perp_idx is None:
+            par_idx, perp_idx = 0, 1
+
+        # Check if pre-calculated surfaces exist in data/slow_modulation
+        if (
+            "data/slow_modulation/delta_A_parallel" in f
+            and "data/slow_modulation/delta_A_perpendicular" in f
+            and G_factor == 1.0
+        ):
+            d_par = np.asarray(f["data/slow_modulation/delta_A_parallel"][:], dtype=np.float64)
+            d_perp = np.asarray(f["data/slow_modulation/delta_A_perpendicular"][:], dtype=np.float64)
+            raw_delays = np.asarray(f["data/delays_fs"][:], dtype=np.float64)
+            delays = raw_delays / 1000.0
+            probe = (
+                np.asarray(f["data/wavelengths"][:], dtype=np.float64)
+                if "data/wavelengths" in f
+                else np.arange(d_par.shape[1], dtype=np.float64)
+            )
+            probe_mean = float(np.nanmean(probe)) if probe.size > 0 else 0.0
+            if probe_mean > 1200.0:
+                unitsL = "cm^{-1}"
+            elif probe_mean > 100.0:
+                unitsL = "nm"
+            else:
+                unitsL = "px"
+
+            d_iso = np.asarray(f["data/slow_modulation/isotropic"][:], dtype=np.float64)
+            aniso = np.asarray(f["data/slow_modulation/anisotropy"][:], dtype=np.float64)
+            if threshold_mOD > 0:
+                with np.errstate(invalid="ignore"):
+                    aniso = np.where(np.abs(d_iso) >= threshold_mOD, aniso, np.nan)
+        else:
+            Zavg_R, delays, probe, Units, Nscans, Zss_R, Zstdv = read_PyMESS_PP(str(path))
+            if Zavg_R.shape[2] < 2:
+                raise ValueError(
+                    f"File {path.name} does not contain at least 2 modulation states for anisotropy."
+                )
+
+            d_par = Zavg_R[:, :, par_idx]
+            d_perp = Zavg_R[:, :, perp_idx]
+            unitsL = Units.get("L", Units.get("unitsL_lbl", "nm"))
+            if unitsL in ("Wavenumber", "cm-1"):
+                unitsL = "cm^{-1}"
+            elif unitsL == "Wavelength":
+                unitsL = "nm"
+            elif unitsL == "Pixel":
+                unitsL = "px"
+
+            # Calculate Isotropic: (Par + 2 * G * Perp) / 3
+            d_iso = (d_par + 2.0 * G_factor * d_perp) / 3.0
+
+            # Calculate Anisotropy: (Par - G * Perp) / (Par + 2 * G * Perp)
+            denom = d_par + 2.0 * G_factor * d_perp
+            with np.errstate(divide="ignore", invalid="ignore"):
+                aniso = (d_par - G_factor * d_perp) / denom
+                if threshold_mOD > 0:
+                    aniso = np.where(np.abs(d_iso) >= threshold_mOD, aniso, np.nan)
+
+    from pymorgan.oneD.dataset import Dataset1D
+
+    def _make_ds(data_2d: np.ndarray, name: str, unit_z: str = "x1E3") -> Dataset1D:
+        u = hlp.units2dic(unitsL, "ps", unit_z)
+        u["cal_source"] = f"PyMESS {name}"
+        u["sample"] = str(meta.get("sample_id", "Unknown"))
+        z_3d = data_2d[:, :, np.newaxis]
+        z_ss = z_3d[:, :, :, np.newaxis]
+        return Dataset1D(
+            z_3d,
+            delays.copy(),
+            probe.copy(),
+            u,
+            1,
+            z_ss,
+            np.zeros_like(z_3d),
+            data_type="PyMESS_PP",
+        )
+
+    return {
+        "parallel": _make_ds(d_par, "Parallel ΔA (mOD)", "x1E3"),
+        "perpendicular": _make_ds(d_perp, "Perpendicular ΔA (mOD)", "x1E3"),
+        "isotropic": _make_ds(d_iso, "Isotropic ΔA (mOD)", "x1E3"),
+        "anisotropy": _make_ds(aniso, "Polarization Anisotropy r(t)", "dimensionless"),
     }
 
 

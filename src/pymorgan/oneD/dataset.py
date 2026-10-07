@@ -127,6 +127,15 @@ class Dataset1D:
         self.bkg_ss = None
         self.chirp_fit = None
 
+    @property
+    def Units(self) -> dict:
+        """Alias for :attr:`units` for compatibility with MATLAB and PyMESS specs."""
+        return self.units
+
+    @Units.setter
+    def Units(self, value: dict) -> None:
+        self.units = value
+
     # ----------------------------------------------------------------- #
     #                          Load (construction)                      #
     # ----------------------------------------------------------------- #
@@ -152,6 +161,8 @@ class Dataset1D:
         units = dict(units or {})
         if counts is not None:
             units["counts"] = counts
+        if scan_ids is None and "scan_ids" in units:
+            scan_ids = units["scan_ids"]
 
         if "sample_info" not in units:
             try:
@@ -468,6 +479,8 @@ class Dataset1D:
             return "Dataset probe axis (PDAT header)"
         if self.data_type == "Helios_TA":
             return "Dataset probe axis (CSV header)"
+        if self.data_type == "PyMESS_PP":
+            return "Embedded PyMESS probe axis"
         return "Dataset probe calibration"
 
     def print_sample_info(self) -> None:

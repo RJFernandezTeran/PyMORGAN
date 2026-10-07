@@ -141,7 +141,7 @@ def fmt2Dlabel(labelStyle, freqLabel, unitsF):
 
 def units2dic(unitsL, unitsT, unitsZ):
     match unitsL:
-        case "cm^{-1}":
+        case "cm^{-1}" | "cm-1":
             unitsL_lbl = "Wavenumber"
             unitsL_ltx = r"cm$^{-1}$"
         case "nm":
@@ -150,6 +150,12 @@ def units2dic(unitsL, unitsT, unitsZ):
         case "eV":
             unitsL_lbl = "Energy"
             unitsL_ltx = r"eV"
+        case "px" | "pixels" | "pixel":
+            unitsL_lbl = "Pixel"
+            unitsL_ltx = r"px"
+        case _:
+            unitsL_lbl = "Probe"
+            unitsL_ltx = str(unitsL)
 
     match unitsZ:
         case "mOD":
@@ -164,6 +170,12 @@ def units2dic(unitsL, unitsT, unitsZ):
         case "x1E3":
             unitsZ_lbl = r"$\Delta$A"
             unitsZ_ltx = r"$\times 10^{3}$"
+        case "dimensionless":
+            unitsZ_lbl = r"Anisotropy $r$"
+            unitsZ_ltx = r""
+        case _:
+            unitsZ_lbl = str(unitsZ)
+            unitsZ_ltx = str(unitsZ)
 
     Units = {
         "unitsL_lbl": unitsL_lbl,
@@ -172,6 +184,9 @@ def units2dic(unitsL, unitsT, unitsZ):
         "unitsZ_ltx": unitsZ_ltx,
         "unitsZ": unitsZ,
         "unitsT_ltx": unitsT,
+        "L": "cm-1" if unitsL == "cm^{-1}" else str(unitsL),
+        "T": str(unitsT),
+        "Z": str(unitsZ),
     }
 
     return Units
