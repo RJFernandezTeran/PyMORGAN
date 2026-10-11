@@ -693,4 +693,36 @@ def test_n_contours_requires_enter_to_render(window):
     assert pc_2d.contour_kwargs()["Nlevels"] == 70
 
 
+def test_gui_recalc_average_harpia(window, tmp_path, monkeypatch):
+    from PyQt6.QtWidgets import QInputDialog
+
+    info = synthetic.make_synthetic_harpia_dataset(tmp_path / "sample_harpia.dat", nscans=3)
+    window.load_path(info["path"], "HARPIA_TA")
+    assert window.dataset is not None
+    assert window.dataset.data_type == "HARPIA_TA"
+    assert window.dataset.nscans == 3
+
+    # Mock QInputDialog.getText to return scans 1-2
+    monkeypatch.setattr(
+        QInputDialog,
+        "getText",
+        lambda *args, **kwargs: ("1-2", True),
+    )
+
+    window.PP_RecalcAvg_btn.click()
+    assert window.dataset.nscans == 2
+    assert window.dataset.total_scans == 3
+    assert "Recalculated average over 2 scan(s)" in window.statusBar().currentMessage()
+
+    # Recalculate again with scan 1 only
+    monkeypatch.setattr(
+        QInputDialog,
+        "getText",
+        lambda *args, **kwargs: ("1", True),
+    )
+    window.PP_RecalcAvg_btn.click()
+    assert window.dataset.nscans == 1
+    assert window.dataset.total_scans == 3
+
+
 

@@ -267,37 +267,22 @@ class OneDTabMixin:
             return
 
         import matplotlib.pyplot as plt
+        from pymorgan.steadyState import plot_steady_state
+        from pymorgan.settings import SteadyStatePlotMode
 
         pm.apply_style()
         s = pm.get_settings()
         normalise = self._norm()
         fig, ax = plt.subplots(figsize=s.spectra_figsize)
 
-        if has_abs and has_em:
-            abs_spec = self._ss_abs_spectrum.normalised() if normalise else self._ss_abs_spectrum
-            em_spec = self._ss_em_spectrum.normalised() if normalise else self._ss_em_spectrum
-            ax.plot(abs_spec.x, abs_spec.y, color=getattr(s, "ss_abs_color", "b"), label=abs_spec.label or "Absorption")
-            ax.plot(em_spec.x, em_spec.y, color=getattr(s, "ss_em_color", "r"), label=em_spec.label or "Emission")
-            x_units, _ = abs_spec._xy_units()
-            y_units = {"lbl": "Absorbance / Intensity", "ltx": "a.u."}
-            hlp.setXYlabels(ax, s.label_style.value, x_units, y_units, normY=normalise)
-            ax.legend()
-        elif has_abs:
-            abs_spec = self._ss_abs_spectrum.normalised() if normalise else self._ss_abs_spectrum
-            ax.plot(abs_spec.x, abs_spec.y, color=getattr(s, "ss_abs_color", "b"), label=abs_spec.label or "Absorption")
-            x_units, y_units = abs_spec._xy_units()
-            hlp.setXYlabels(ax, s.label_style.value, x_units, y_units, normY=normalise)
-            if abs_spec.label:
-                ax.legend()
-        else:
-            em_spec = self._ss_em_spectrum.normalised() if normalise else self._ss_em_spectrum
-            ax.plot(em_spec.x, em_spec.y, color=getattr(s, "ss_em_color", "r"), label=em_spec.label or "Emission")
-            x_units, y_units = em_spec._xy_units()
-            hlp.setXYlabels(ax, s.label_style.value, x_units, y_units, normY=normalise)
-            if em_spec.label:
-                ax.legend()
+        plot_steady_state(
+            abs_spectrum=self._ss_abs_spectrum,
+            em_spectrum=self._ss_em_spectrum,
+            ax=ax,
+            settings=s,
+            normalise=normalise,
+        )
 
-        ax.autoscale(enable=True, axis="x", tight=True)
         title = "Steady-State Spectra"
         if has_abs and has_em:
             title = "Steady-State Absorption & Emission"
@@ -305,7 +290,7 @@ class OneDTabMixin:
             title = "Steady-State Absorption"
         elif has_em:
             title = "Steady-State Emission"
-        if normalise:
+        if normalise or (has_abs and has_em and s.ss_plot_mode == SteadyStatePlotMode.NORMALISED):
             title += " (Normalised)"
         ax.set_title(title)
         fig.tight_layout()
@@ -813,18 +798,20 @@ class OneDTabMixin:
                 positions = self._ask_values(
                     "Per-scan kinetics",
                     "Probe wavelengths / wavenumbers (comma-separated or MATLAB range e.g. 1:0.1:5, 'all'):",
-                    self._auto_wavelengths(),
+                    self._auto_wavelengths(central_only=True),
                     all_values=probe_disp,
                 )
                 if not positions:
                     return
                 positions = self._probe_to_native(positions)
-                ax = self.dataset.plot_scan_kinetics(
-                    positions, binsize=binsize, normY=self._norm()
+                res = self.dataset.plot_scan_kinetics(
+                    positions, binsize=binsize, normY=self._norm(), detector=det
                 )[0]
-                self._inherit_cut_limits("kinetics", ax)
-                if self._save_traces_checked():
-                    self._export_traces_from_axes(ax, "scan_kinetics")
+                axes = res if isinstance(res, list) else [res]
+                for ax in axes:
+                    self._inherit_cut_limits("kinetics", ax)
+                    if self._save_traces_checked():
+                        self._export_traces_from_axes(ax, "scan_kinetics")
             plt.show(block=False)
         except Exception as exc:
             QMessageBox.warning(self, "Plot failed", str(exc))
@@ -851,14 +838,20 @@ class OneDTabMixin:
                 "(set the anisotropy mode to NONE).",
             )
             return
-        source = getattr(self.dataset, "source", None)
-        nsc = getattr(self.dataset, "nscans", float("nan"))
-        if not source or not np.isfinite(nsc) or int(nsc) < 1:
+        total_sc = getattr(self.dataset, "total_scans", None)
+        if total_sc is None:
+            if getattr(self.dataset, "has_single_scans", False) and self.dataset.Zss_R.ndim == 4:
+                total_sc = int(self.dataset.Zss_R.shape[-1])
+            else:
+                nsc = getattr(self.dataset, "nscans", float("nan"))
+                total_sc = int(nsc) if np.isfinite(nsc) and int(nsc) >= 1 else None
+
+        if total_sc is None or total_sc < 1:
             QMessageBox.information(
                 self, "Recalc. average", "This dataset has no per-scan data to recombine."
             )
             return
-        n = int(nsc)
+        n = total_sc
         text, ok = QInputDialog.getText(
             self,
             "Recalc. average",
@@ -876,8 +869,7 @@ class OneDTabMixin:
             QMessageBox.warning(self, "Recalc. average", "No scans selected.")
             return
         try:
-            Zavg, Zstdv = mess_recalc_average(
-                source,
+            self.dataset.recalc_average(
                 idx,
                 spectrum=getattr(self, "_mess_spectrum", 0),
                 slowmod=getattr(self, "_mess_slowmod", 0),
@@ -885,10 +877,7 @@ class OneDTabMixin:
         except Exception as exc:
             QMessageBox.warning(self, "Recalc. average", str(exc))
             return
-        self.dataset.Zavg_R = Zavg
-        self.dataset.Zstdv = Zstdv
-        self.dataset.nscans = len(idx)
-        self.dataset.Zavg_C = None  # force the background correction to re-apply
+
         if getattr(self, "plot_controls", None) is not None:
             self.plot_controls.set_dataset(self.dataset)
         self._preview_contour()
@@ -896,8 +885,10 @@ class OneDTabMixin:
         btn_noise = getattr(self, "PP_plotNoise_btn", None)
         if btn_noise is not None:
             btn_noise.setEnabled(bool(self.dataset.has_noise))
+        is_mess = self.dataset.data_type in ("MESS_TRIR", "MESS_TRUVIS")
+        avg_type = "noise-weighted average" if is_mess else "average"
         self.statusBar().showMessage(
-            f"Recalculated noise-weighted average over {len(idx)} scan(s): {text.strip()}"
+            f"Recalculated {avg_type} over {len(idx)} scan(s): {text.strip()}"
         )
 
     @busy_guard("Masking probe region...")
@@ -1591,28 +1582,34 @@ class OneDTabMixin:
             if scans:
                 binsize = self._binscans_value()
                 if kind == "kinetics":
-                    ax = self.dataset.plot_scan_kinetics(
+                    res = self.dataset.plot_scan_kinetics(
                         values, binsize=binsize, normY=self._norm(), detector=det
                     )[0]
+                    axes = res if isinstance(res, list) else [res]
                 else:
-                    ax = self.dataset.plot_scan_spectra(
-                        values, binsize=binsize, doSmooth=self._smooth_value(), normY=self._norm(), detector=det
-                    )
+                    axes = [
+                        self.dataset.plot_scan_spectra(
+                            values, binsize=binsize, doSmooth=self._smooth_value(), normY=self._norm(), detector=det
+                        )
+                    ]
             elif kind == "kinetics":
-                ax = self.dataset.plot_kinetics(values, normY=self._norm(), detector=det)[0]
+                axes = [self.dataset.plot_kinetics(values, normY=self._norm(), detector=det)[0]]
             else:
-                ax = self.dataset.plot_spectra(
-                    values,
-                    doSmooth=self._smooth_value(),
-                    normY=self._norm(),
-                    Abs=self._ss_abs,
-                    Em=self._ss_em,
-                    detector=det,
-                )
-            self._inherit_cut_limits(kind, ax)
-            if self._save_traces_checked():
-                prefix = f"scan_{kind}" if scans else kind
-                self._export_traces_from_axes(ax, prefix)
+                axes = [
+                    self.dataset.plot_spectra(
+                        values,
+                        doSmooth=self._smooth_value(),
+                        normY=self._norm(),
+                        Abs=self._ss_abs,
+                        Em=self._ss_em,
+                        detector=det,
+                    )
+                ]
+            for ax in axes:
+                self._inherit_cut_limits(kind, ax)
+                if self._save_traces_checked():
+                    prefix = f"scan_{kind}" if scans else kind
+                    self._export_traces_from_axes(ax, prefix)
             plt.show(block=False)
         except Exception as exc:
             QMessageBox.warning(self, "Plot failed", str(exc))
@@ -1660,10 +1657,15 @@ class OneDTabMixin:
         pc = getattr(self, "plot_controls", None)
         return pc.probe_to_native(values) if pc is not None else values
 
-    def _auto_wavelengths(self, n: int = 3) -> list:
+    def _auto_wavelengths(self, n: int = 3, central_only: bool = False) -> list:
         det = getattr(self.plot_controls, "detector", 0) if hasattr(self, "plot_controls") else 0
         probe = self.dataset._detector_probe(det)
-        idx = np.unique(np.linspace(0, probe.size - 1, min(n, probe.size)).astype(int))
+        if probe.size == 0:
+            return []
+        if central_only or n == 1:
+            idx = [probe.size // 2]
+        else:
+            idx = np.unique(np.linspace(0, probe.size - 1, min(n, probe.size)).astype(int))
         vals = [float(probe[i]) for i in idx]
         pc = getattr(self, "plot_controls", None)
         if pc is not None:

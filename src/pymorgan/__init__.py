@@ -60,6 +60,7 @@ _EXPORTS: dict[str, str] = {
     "SpectrumSeries": ".steadyState",
     "available_spectrum_loaders": ".steadyState",
     "load_spectrum": ".steadyState",
+    "plot_steady_state": ".steadyState",
     "register_spectrum_loader": ".steadyState",
     # calibration
     "available_calibration_types": ".cal",
@@ -68,6 +69,7 @@ _EXPORTS: dict[str, str] = {
     "FreqLabel": ".settings",
     "LabelStyle": ".settings",
     "Settings": ".settings",
+    "SteadyStatePlotMode": ".settings",
     "StyleProfile": ".settings",
     "TimeAxisLabel": ".settings",
     "TimeAxisScale": ".settings",
@@ -105,6 +107,7 @@ if TYPE_CHECKING:  # keeps type checkers and IDE completion fully informed
         FreqLabel,
         LabelStyle,
         Settings,
+        SteadyStatePlotMode,
         StyleProfile,
         TimeAxisLabel,
         TimeAxisScale,
@@ -124,6 +127,7 @@ if TYPE_CHECKING:  # keeps type checkers and IDE completion fully informed
         SpectrumSeries,
         available_spectrum_loaders,
         load_spectrum,
+        plot_steady_state,
         register_spectrum_loader,
     )
     from .twoD import (

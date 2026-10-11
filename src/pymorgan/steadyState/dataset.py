@@ -15,7 +15,7 @@ from os import PathLike
 
 import numpy as np
 
-from ..settings import Settings, get_settings
+from ..settings import Settings, SteadyStatePlotMode, get_settings
 from .registry import get_spectrum_loader
 
 # Spectral-axis unit -> (label, mathtext units) for axis labelling.
@@ -271,3 +271,112 @@ def load_spectrum(
 ) -> Spectrum:
     """Convenience wrapper for :meth:`Spectrum.from_file`."""
     return Spectrum.from_file(path, kind, data_type=data_type, x_units=x_units, label=label)
+
+
+def plot_steady_state(
+    abs_spectrum: Spectrum | None = None,
+    em_spectrum: Spectrum | None = None,
+    ax=None,
+    *,
+    settings: Settings | None = None,
+    label_style: str | None = None,
+    plot_mode: SteadyStatePlotMode | str | None = None,
+    normalise: bool = False,
+    normalize: bool | None = None,
+    **kwargs,
+):
+    """Plot steady-state absorption and/or emission spectra.
+
+    When both absorption and emission are provided, `plot_mode` determines the layout:
+    - ``SteadyStatePlotMode.DOUBLE_Y`` (default): Absorption on the primary (left) Y-axis,
+      Emission on a twin (right) Y-axis (via ``ax.twinx()``) sharing the same X-axis.
+    - ``SteadyStatePlotMode.NORMALISED``: Both spectra normalised to their maximum (1.0)
+      on a single shared Y-axis.
+
+    If only one spectrum is provided, it is drawn on a single axis.
+
+    Returns
+    -------
+    matplotlib.axes.Axes or tuple[matplotlib.axes.Axes, matplotlib.axes.Axes]
+        The axis (or tuple of (primary_ax, twin_ax)) the spectra were drawn into.
+    """
+    import matplotlib.pyplot as plt
+
+    from pymorgan import helpers as hlp
+
+    if normalize is not None:
+        normalise = normalize
+    s = settings or get_settings()
+    style = label_style if label_style is not None else s.label_style.value
+    mode = SteadyStatePlotMode(plot_mode) if plot_mode is not None else s.ss_plot_mode
+
+    if ax is None:
+        _, ax = plt.subplots(figsize=s.spectra_figsize)
+
+    if abs_spectrum is not None and em_spectrum is not None:
+        if mode == SteadyStatePlotMode.DOUBLE_Y and not normalise:
+            color_abs = getattr(s, "ss_abs_color", "b")
+            color_em = getattr(s, "ss_em_color", "r")
+            lbl_abs = abs_spectrum.label or "Absorption"
+            lbl_em = em_spectrum.label or "Emission"
+
+            lines_abs = ax.plot(
+                abs_spectrum.x, abs_spectrum.y, color=color_abs, label=lbl_abs, **kwargs
+            )
+            x_units, y_units_abs = abs_spectrum._xy_units()
+            hlp.setXYlabels(ax, style, x_units, y_units_abs, normY=False)
+            ax.tick_params(axis="y", labelcolor=color_abs)
+            ax.yaxis.label.set_color(color_abs)
+
+            ax_em = ax.twinx()
+            lines_em = ax_em.plot(
+                em_spectrum.x, em_spectrum.y, color=color_em, label=lbl_em, **kwargs
+            )
+            _, y_units_em = em_spectrum._xy_units()
+            hlp.setXYlabels(ax_em, style, x_units, y_units_em, setXLabel=False, setYLabel=True)
+            ax_em.tick_params(axis="y", labelcolor=color_em)
+            ax_em.yaxis.label.set_color(color_em)
+
+            all_lines = lines_abs + lines_em
+            all_labels = [l.get_label() for l in all_lines]
+            ax.legend(all_lines, all_labels, loc="best")
+            ax.autoscale(enable=True, axis="x", tight=True)
+            return ax, ax_em
+        else:
+            abs_n = abs_spectrum.normalised()
+            em_n = em_spectrum.normalised()
+            color_abs = getattr(s, "ss_abs_color", "b")
+            color_em = getattr(s, "ss_em_color", "r")
+            lbl_abs = abs_spectrum.label or "Absorption"
+            lbl_em = em_spectrum.label or "Emission"
+
+            ax.plot(abs_n.x, abs_n.y, color=color_abs, label=lbl_abs, **kwargs)
+            ax.plot(em_n.x, em_n.y, color=color_em, label=lbl_em, **kwargs)
+            x_units, _ = abs_spectrum._xy_units()
+            y_units = {"lbl": "Absorbance / Intensity", "ltx": "a.u."}
+            hlp.setXYlabels(ax, style, x_units, y_units, normY=True)
+            ax.legend(loc="best")
+            ax.autoscale(enable=True, axis="x", tight=True)
+            return ax
+    elif abs_spectrum is not None:
+        spec = abs_spectrum.normalised() if normalise else abs_spectrum
+        color = getattr(s, "ss_abs_color", "b")
+        ax.plot(spec.x, spec.y, color=color, label=spec.label or "Absorption", **kwargs)
+        x_units, y_units = spec._xy_units()
+        hlp.setXYlabels(ax, style, x_units, y_units, normY=normalise)
+        if spec.label:
+            ax.legend(loc="best")
+        ax.autoscale(enable=True, axis="x", tight=True)
+        return ax
+    elif em_spectrum is not None:
+        spec = em_spectrum.normalised() if normalise else em_spectrum
+        color = getattr(s, "ss_em_color", "r")
+        ax.plot(spec.x, spec.y, color=color, label=spec.label or "Emission", **kwargs)
+        x_units, y_units = spec._xy_units()
+        hlp.setXYlabels(ax, style, x_units, y_units, normY=normalise)
+        if spec.label:
+            ax.legend(loc="best")
+        ax.autoscale(enable=True, axis="x", tight=True)
+        return ax
+    else:
+        raise ValueError("At least one of abs_spectrum or em_spectrum must be provided.")

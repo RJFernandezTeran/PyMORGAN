@@ -356,3 +356,82 @@ def test_plot_2D_with_scientific_colormaps(p2dat_dataset):
     map_axes_berlin = p2dat_dataset.plot_map(p2dat_dataset.delays[0], ax=ax, cmap_ID="berlin")
     assert isinstance(map_axes_berlin.ax, Axes)
     plt.close(fig)
+
+
+def test_plot_scan_kinetics_single_and_multiple_figures(tmp_path):
+    info = synthetic.make_synthetic_harpia_dataset(tmp_path / "sample_harpia.dat", nscans=3)
+    ds = pm.load_1D(info["path"], data_type="HARPIA_TA")
+
+    # Single wavelength -> returns (ax, delays, Zb)
+    plt.close("all")
+    w1 = float(ds.probe[len(ds.probe) // 2])
+    res_single = ds.plot_scan_kinetics([w1])
+    ax_single = res_single[0]
+    assert isinstance(ax_single, Axes)
+    fig_single = ax_single.figure
+    mgr_single = getattr(fig_single.canvas, "manager", None)
+    if mgr_single is not None:
+        title = mgr_single.get_window_title() if hasattr(mgr_single, "get_window_title") else ""
+        if title:
+            assert f"{round(w1)}" in title or f"{w1:g}" in title
+    plt.close("all")
+
+    # Multiple wavelengths -> returns (axes_list, delays, Zb)
+    w2 = float(ds.probe[len(ds.probe) // 4])
+    res_multi = ds.plot_scan_kinetics([w1, w2])
+    axes_multi = res_multi[0]
+    assert isinstance(axes_multi, list)
+    assert len(axes_multi) == 2
+    # Verify each has its own figure
+    assert axes_multi[0].figure is not axes_multi[1].figure
+    plt.close("all")
+
+
+def test_plot_scan_spectra_window_title(tmp_path):
+    info = synthetic.make_synthetic_harpia_dataset(tmp_path / "sample_harpia.dat", nscans=3)
+    ds = pm.load_1D(info["path"], data_type="HARPIA_TA")
+
+    plt.close("all")
+    d0 = float(ds.delays[0])
+    ax = ds.plot_scan_spectra([d0])
+    assert isinstance(ax, Axes)
+    fig = ax.figure
+    mgr = getattr(fig.canvas, "manager", None)
+    if mgr is not None:
+        title = mgr.get_window_title() if hasattr(mgr, "get_window_title") else ""
+        if title:
+            assert "ps" in title or "delay" in title.lower() or "traces" in title
+    plt.close("all")
+
+
+def test_plot_steady_state_modes():
+    from pymorgan.steadyState import Spectrum, SteadyStatePlotMode, plot_steady_state
+
+    x = np.linspace(400, 700, 60)
+    y_abs = 0.5 * np.exp(-((x - 500) ** 2) / (2 * 20**2))
+    y_em = 1000.0 * np.exp(-((x - 550) ** 2) / (2 * 25**2))
+
+    spec_abs = Spectrum(x, y_abs, kind="absorption", label="Absorbance")
+    spec_em = Spectrum(x, y_em, kind="emission", label="Fluorescence")
+
+    # Mode 1: Double Y axis (default)
+    plt.close("all")
+    res_double = plot_steady_state(spec_abs, spec_em, plot_mode=SteadyStatePlotMode.DOUBLE_Y)
+    assert isinstance(res_double, tuple)
+    ax_abs, ax_em = res_double
+    assert ax_abs is not ax_em
+    # Verify absorbance plotted on left axis and emission on twin axis
+    assert len(ax_abs.lines) == 1
+    assert len(ax_em.lines) == 1
+    assert np.allclose(ax_abs.lines[0].get_ydata(), y_abs)
+    assert np.allclose(ax_em.lines[0].get_ydata(), y_em)
+    plt.close("all")
+
+    # Mode 2: Normalise to maximum
+    res_norm = plot_steady_state(spec_abs, spec_em, plot_mode=SteadyStatePlotMode.NORMALISED)
+    assert isinstance(res_norm, Axes)
+    assert len(res_norm.lines) == 2
+    # Verify both curves normalised to 1.0 peak
+    assert np.isclose(np.nanmax(np.abs(res_norm.lines[0].get_ydata())), 1.0)
+    assert np.isclose(np.nanmax(np.abs(res_norm.lines[1].get_ydata())), 1.0)
+    plt.close("all")

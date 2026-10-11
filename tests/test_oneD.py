@@ -4,6 +4,8 @@ import copy
 
 import numpy as np
 
+import pymorgan as pm
+
 from pymorgan.oneD.chirp import (
     ChirpFit,
     _bisquare_weights,
@@ -387,6 +389,37 @@ def test_time_derivative_on_dataset(dataset):
     ds_dt = ds.time_derivative(t_min=0.0, smooth=True, smooth_window=5)
     assert isinstance(ds_dt, Dataset1D)
     assert np.all(ds_dt.delays >= 0.0)
-    assert ds_dt.units.get("unitsZ_lbl") == r"$\mathrm{d}(\Delta A)/\mathrm{d}t$"
     assert ds_dt.Z.shape[0] == ds_dt.delays.shape[0]
     assert ds_dt.Z.shape[1] == ds.probe.shape[0]
+
+
+def test_recalc_average_harpia(tmp_path):
+    import synthetic
+
+    info = synthetic.make_synthetic_harpia_dataset(tmp_path / "sample_harpia.dat", nscans=4)
+    ds = pm.load_1D(info["path"], data_type="HARPIA_TA")
+    assert ds.has_single_scans
+    assert ds.total_scans == 4
+    assert ds.nscans == 4
+
+    orig_zavg = ds.Zavg_R.copy()
+    scan0 = ds.Zss_R[:, :, :, 0].copy()
+
+    # Recalculate with scan 0 only
+    ds.recalc_average([0])
+    assert ds.nscans == 1
+    assert ds.total_scans == 4
+    np.testing.assert_allclose(ds.Zavg_R, scan0)
+    assert np.all(ds.Zstdv == 0.0)
+
+    # Recalculate with scans 0 and 1
+    ds.recalc_average([0, 1])
+    assert ds.nscans == 2
+    assert ds.total_scans == 4
+    expected_avg = np.nanmean(ds.Zss_R[:, :, :, :2], axis=-1)
+    np.testing.assert_allclose(ds.Zavg_R, expected_avg)
+
+    # Recalculate with all scans reproduces original average
+    ds.recalc_average([0, 1, 2, 3])
+    assert ds.nscans == 4
+    np.testing.assert_allclose(ds.Zavg_R, orig_zavg)

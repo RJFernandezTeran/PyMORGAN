@@ -249,3 +249,4 @@ ss_line_width = 1.5 # Steady-state overlay line width
 ss_line_alpha = 0.15 # Steady-state overlay line transparency (0.0 - 1.0)
 ss_fill_alpha = 0.05 # Steady-state overlay fill transparency (0.0 - 1.0)
 ss_line_dashes = [4.0, 3.0] # Steady-state overlay line dash pattern (on/off lengths in points)
+ss_plot_mode = "Double Y axis" # Steady-state dual plot: "Double Y axis" or "Normalise to maximum"

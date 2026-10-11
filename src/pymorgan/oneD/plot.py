@@ -353,10 +353,10 @@ _SYMLOG_SUBS = (
 )
 
 
-def _set_figure_window_title(fig, kind, data):
+def _set_figure_window_title(fig, kind, data, extra=None):
     """Name a plotter-created figure window.
 
-    Format: ``Figure N (<kind label>) [<dataset name>]`` -- N is the matplotlib
+    Format: ``Figure N (<kind label> [at <extra>]) [<dataset name>]`` -- N is the matplotlib
     figure number and the dataset name omits any file extension. No-op when the
     figure has no window manager (headless run / embedded GUI canvas).
     """
@@ -364,6 +364,8 @@ def _set_figure_window_title(fig, kind, data):
     if mgr is None or not hasattr(mgr, "set_window_title"):
         return
     label = _FIGURE_KIND_LABELS.get(kind, kind)
+    if extra:
+        label = f"{label} at {extra}"
     src = getattr(data, "source", None)
     name = pathlib.Path(src).stem if src else ""
     num = getattr(fig, "number", None)
@@ -2231,11 +2233,6 @@ def plot_scan_kinetics(
     # Pop pymorgan-specific kwargs that must not reach matplotlib.plot
     time_axis_label = kwargs.pop("time_axis_label", None)
 
-    created = ax is None
-    pFig, where = _new_axes(ax, fig, layout="constrained")
-    if created:
-        pFig.set_size_inches(*s.kinetics_figsize)
-
     Z = data.scan_signal(detector)  # [Ndelays x Npixels x Nscans]
     Y_t = data.delays
     X_l = _get_probe(data, detector)
@@ -2250,11 +2247,42 @@ def plot_scan_kinetics(
         traces_cmap = s.traces_cmap
     cm = hlp.get_trace_cmap(traces_cmap, n_bin, reverse=flipColor)
     YUnits = {"lbl": Units["unitsZ_lbl"], "ltx": Units["unitsZ_ltx"]}
+    XUnits = {"lbl": "Delay", "ltx": Units["unitsT_ltx"]}
 
     if "markersize" not in kwargs and "ms" not in kwargs:
         kwargs["markersize"] = s.kinetics_marker_size
     if "linewidth" not in kwargs and "lw" not in kwargs:
         kwargs["linewidth"] = s.kinetics_line_width
+
+    if ax is None and n_pos > 1:
+        axes_list = []
+        for p in range(n_pos):
+            sub_fig, sub_where = _new_axes(None, None, layout="constrained")
+            sub_fig.set_size_inches(*s.kinetics_figsize)
+            pos_val = round(Plt_val[p]) if round_labels else Plt_val[p]
+            pos_lbl = "%g %s" % (pos_val, Units["unitsL_ltx"])
+            for b in range(n_bin):
+                y = Zb[:, Plt_ID[p], b]
+                if normY:
+                    y = y / np.nanmax(np.abs(y))
+                lbl = labels[b]
+                sub_where.plot(Y_t, y, plotStyle, color=cm[b], label=lbl, **kwargs)
+
+            hlp.setXYlabels(
+                sub_where, labelStyle, XUnits, YUnits, normY=normY, setXLabel=show_xlabel, setYLabel=show_ylabel
+            )
+            sub_where.autoscale(enable=True, axis="x", tight=True)
+            sub_where.axhline(y=0, color="0.75", linewidth=0.75)
+            _scan_legend(sub_where, s)
+            _apply_time_xscale(sub_where, Xscale, Y_t, time_axis_label=time_axis_label, settings=s)
+            _set_figure_window_title(sub_fig, "scan kinetics", data, extra=pos_lbl)
+            axes_list.append(sub_where)
+        return axes_list, Y_t, Zb
+
+    created = ax is None
+    pFig, where = _new_axes(ax, fig, layout="constrained")
+    if created:
+        pFig.set_size_inches(*s.kinetics_figsize)
 
     for p in range(n_pos):
         pos_val = round(Plt_val[p]) if round_labels else Plt_val[p]
@@ -2266,7 +2294,6 @@ def plot_scan_kinetics(
             lbl = labels[b] if n_pos == 1 else "%s, %s" % (pos_lbl, labels[b])
             where.plot(Y_t, y, plotStyle, color=cm[b], label=lbl, **kwargs)
 
-    XUnits = {"lbl": "Delay", "ltx": Units["unitsT_ltx"]}
     hlp.setXYlabels(
         where, labelStyle, XUnits, YUnits, normY=normY, setXLabel=show_xlabel, setYLabel=show_ylabel
     )
@@ -2275,7 +2302,9 @@ def plot_scan_kinetics(
     _scan_legend(where, s)
     _apply_time_xscale(where, Xscale, Y_t, time_axis_label=time_axis_label, settings=s)
     if created:
-        _set_figure_window_title(pFig, "scan kinetics", data)
+        pos_val0 = round(Plt_val[0]) if round_labels else Plt_val[0]
+        pos_lbl0 = "%g %s" % (pos_val0, Units["unitsL_ltx"]) if n_pos == 1 else None
+        _set_figure_window_title(pFig, "scan kinetics", data, extra=pos_lbl0)
     return where, Y_t, Zb
 
 
@@ -2413,7 +2442,12 @@ def plot_scan_spectra(
     _scan_legend(where, s)
     where.set_xlim(xplot[0], xplot[-1])
     if created:
-        _set_figure_window_title(pFig, "scan spectra", data)
+        if n_pos == 1:
+            [t_lbl, str_lbl] = hlp.ConvertTimeUnits(Y_t[Plt_ID[0]], Units["unitsT_ltx"], roundT=roundT)
+            extra_delay = "%.3g %s" % (t_lbl, str_lbl)
+        else:
+            extra_delay = None
+        _set_figure_window_title(pFig, "scan spectra", data, extra=extra_delay)
     return where
 
 

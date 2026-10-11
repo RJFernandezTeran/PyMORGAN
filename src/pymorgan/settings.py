@@ -216,6 +216,17 @@ class TracesCmap(StrEnum):
     RED_PURPLE_BLUE = "red-purple-blue"
 
 
+class SteadyStatePlotMode(StrEnum):
+    """Plotting mode when both steady-state absorption and emission are displayed.
+
+    DOUBLE_Y   -> Twin X with separate Y axes (left absorbance, right emission intensity)
+    NORMALISED -> Both spectra normalised to their maximum (1.0) on a single shared Y axis
+    """
+
+    DOUBLE_Y = "Double Y axis"
+    NORMALISED = "Normalise to maximum"
+
+
 
 # Profile -> .mplstyle filename (relative to the styles directory).
 _PROFILE_FILES: dict[StyleProfile, str] = {
@@ -481,6 +492,7 @@ class Settings:
     ss_line_alpha: float = 0.15
     ss_fill_alpha: float = 0.05
     ss_line_dashes: tuple[float, float] = (4.0, 3.0)
+    ss_plot_mode: SteadyStatePlotMode = SteadyStatePlotMode.DOUBLE_Y
     # Qt style/theme for the GUI window (see settings.toml for the options).
     gui_theme: str = "Fusion"
     # GUI splash-screen duration in seconds (0 disables the splash).
@@ -787,6 +799,7 @@ class Settings:
             "ss_line_alpha": "steady_state",
             "ss_fill_alpha": "steady_state",
             "ss_line_dashes": "steady_state",
+            "ss_plot_mode": "steady_state",
         }
 
     @classmethod
@@ -1025,6 +1038,13 @@ class Settings:
                 "max": 1.0,
                 "step": 0.05,
                 "tab": "oneD",
+            },
+            "ss_plot_mode": {
+                "label": "Steady-state dual plot",
+                "kind": "choice",
+                "choices": [e.value for e in SteadyStatePlotMode],
+                "tab": "oneD",
+                "tooltip": "Dual absorption and emission plot mode: separate Y axes (double Y) or normalised to maximum.",
             },
             "inherit_cut_limits": {
                 "label": "Cuts inherit plot limits",

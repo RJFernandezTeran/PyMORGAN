@@ -120,6 +120,12 @@ class Dataset1D:
         self.counts = counts if counts is not None else self.units.get("counts")
         self.cal_source = self.units.get("cal_source")
         self.cal_level = self.units.get("cal_level")
+        if self.Zss_R is not None and getattr(self.Zss_R, "ndim", 0) == 4:
+            self.total_scans = int(self.Zss_R.shape[-1])
+        elif np.isfinite(nscans) and int(nscans) >= 1:
+            self.total_scans = int(nscans)
+        else:
+            self.total_scans = None
 
         self.Zavg_C = None
         self.Zss_C = None
@@ -512,6 +518,58 @@ class Dataset1D:
         self.Zavg_C, self.Zss_C, self.bkg_avg, self.bkg_ss = process.background_correct(
             self.Zavg_R, self.Zss_R, self.nscans, self.delays, tmin, tmax, do_correct=do_correct
         )
+        return self
+
+    def recalc_average(
+        self, scan_indices: Sequence[int], *, spectrum: int = 0, slowmod: int = 0
+    ) -> Dataset1D:
+        """Recompute the averaged signal and standard deviation over selected scans.
+
+        Parameters
+        ----------
+        scan_indices : sequence of int
+            0-based scan indices to combine.
+        spectrum : int, default 0
+            Spectrum index (for MESS datasets).
+        slowmod : int, default 0
+            Slow-modulation index (for MESS datasets).
+
+        Returns
+        -------
+        Dataset1D
+            Returns ``self`` for chaining.
+        """
+        scan_indices = [int(k) for k in scan_indices]
+        if not scan_indices:
+            raise ValueError("No scans selected.")
+
+        if self.data_type in ("MESS_TRIR", "MESS_TRUVIS"):
+            from .load import mess_recalc_average
+
+            Zavg, Zstdv = mess_recalc_average(
+                self.source, scan_indices, spectrum=spectrum, slowmod=slowmod
+            )
+        elif self.has_single_scans:
+            sub = self.Zss_R[:, :, :, scan_indices]
+            with np.errstate(divide="ignore", invalid="ignore"):
+                Zavg = np.nanmean(sub, axis=-1)
+                if len(scan_indices) > 1:
+                    import warnings
+
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore", category=RuntimeWarning)
+                        Zstdv = np.nanstd(sub, axis=-1, ddof=1)
+                    Zstdv = np.nan_to_num(Zstdv, nan=0.0)
+                else:
+                    Zstdv = np.zeros_like(Zavg)
+                Zavg = np.nan_to_num(Zavg, nan=0.0)
+        else:
+            raise ValueError(f"Dataset of type {self.data_type} has no per-scan data to recombine.")
+
+        self.Zavg_R = Zavg
+        self.Zstdv = Zstdv
+        self.nscans = len(scan_indices)
+        self.Zavg_C = None  # Invalidate background correction cache
         return self
 
     def mask_probe_regions(
