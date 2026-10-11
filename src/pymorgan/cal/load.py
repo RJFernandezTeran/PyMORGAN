@@ -171,7 +171,7 @@ def load_reference_spectrum(file_path: str | Path) -> ReferenceSpectrum:
 
 
 def read_numeric_matrix(file_path: str | Path, default_delimiter: str | None = None) -> np.ndarray:
-    """Read numeric array data from text file, automatically skipping header rows (matching MATLAB readmatrix)."""
+    """Read numeric array data from text file, automatically skipping header and metadata rows."""
     path = Path(file_path)
     lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
     numeric_lines = []

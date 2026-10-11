@@ -279,3 +279,27 @@ source .venv/bin/activate
 
 Once activated, commands can be run without the \code{uv run} prefix
 (e.g.\ \code{pymorgan-gui} instead of \code{uv run pymorgan-gui}).
+
+% ---------------------------------------------------------------------------
+\subsection{Windows Standalone Installer (PyMORGAN Suite)}\label{sec:installer}
+
+For lab workstations and end-users who prefer a self-contained installation without managing a Python environment, PyMORGAN provides a dedicated Windows installer package: \textbf{PyMORGAN Suite Setup} (\code{PyMORGAN\_Suite\_Setup\_*.exe}) and an accompanying portable archive (\code{PyMORGAN\_Suite\_*\_Portable.zip}).
+
+\begin{itemize}
+  \item \textbf{Zero external dependencies:} Bundles a standalone Python runtime, C-extensions, PyQt6, and all mathematical libraries. No external Python or command line is needed.
+  \item \textbf{Integrated Suite Launcher:} Includes the unified \code{PyMORGAN\_Suite.exe} launcher, allowing one-click startup of both PyMORGAN (processing and visualization) and PyRATE-TA (kinetic and target fitting).
+  \item \textbf{System integration:} Automatically registers Windows Start Menu shortcuts, desktop icons featuring official software emblems, and native file associations for 1D datasets (\code{.pdat}) and 2D-IR datasets (\code{.p2dat}). Double-clicking a \code{.pdat} or \code{.p2dat} file opens it directly in PyMORGAN.
+  \item \textbf{Silent execution:} Executables are compiled with \code{console=False}, launching directly into the graphical interface without exposing background terminal windows.
+\end{itemize}
+
+% ---------------------------------------------------------------------------
+\subsection{Software Updates}\label{sec:updates}
+
+PyMORGAN includes an integrated software update delivery system to ensure users always have access to the latest bug fixes, spectral analysis routines, and performance improvements:
+
+\begin{description}
+  \item[Automatic background checks] When the application launches, PyMORGAN performs a non-blocking GitHub API query to check for newer releases. To avoid unnecessary network traffic, checks are automatically throttled to occur at most once every 24~hours. When a new version is detected, an unobtrusive pill badge appears in the bottom status bar (e.g.\ \textsf{[PyMORGAN vX.Y.Z Available]}). Clicking the notification opens the update manager.
+  \item[On-demand check] Users can check for updates at any time by opening the \textbf{About} dialog (\textbf{Help $\to$ About PyMORGAN}) and clicking \textbf{Check for Updates\ldots}.
+  \item[In-app download and installation] When an update is confirmed, PyMORGAN displays the release notes and offers a direct \textbf{Download and Install} button. The updater streams the installer with a real-time progress bar and launches the setup wizard automatically upon completion.
+\end{description}
+

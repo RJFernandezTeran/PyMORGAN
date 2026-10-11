@@ -216,6 +216,9 @@ def main(argv: list[str] | None = None) -> int:
 
     elapsed = time.perf_counter() - t_start
     print(f"[PyMORGAN] GUI loaded in {elapsed:.2f} s")
+    from .console import hide_console
+
+    hide_console()
     return app.exec()
 
 

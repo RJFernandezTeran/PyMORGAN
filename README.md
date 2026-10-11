@@ -20,8 +20,8 @@
 [![Downloads](https://img.shields.io/pepy/dt/pymorgan?label=downloads)](https://pepy.tech/project/pymorgan)
 
 Plotting and analysis of ultrafast time-resolved spectroscopy data in **1D**
-(pump–probe, transient IR, FLUPS, …) and **2D** (2D-IR, 2D-ES, 2D-VE, 2D-EV), plus
-**steady-state** absorption / emission / excitation spectra.
+(pump–probe, transient IR, …) and **2D** (2D-IR, 2D-ES, 2D-VE, 2D-EV), plus
+steady-state absorption / emission / excitation spectra.
 
 ---
 
@@ -73,7 +73,7 @@ a dependency of this package.
   *Phasing/FT* sub-tab with live PH and TD diagnostic views.
 - **Pluggable loader registry** — register new instrument formats with a
   decorator.
-  - **1-D Time-Resolved**: `UniGE_fsTA` (with automatic non-transient `.dat` file filtering and `CalibratedProbe.csv` / `pix2lam.mat` detection), `UniGE_nsTA`, `HARPIA_TA`, `Helios_TA`, `MESS_TRIR`, `MESS_TRUVIS`, `PyMESS_PP` (PyMESS transient absorption HDF5 datasets), `PDAT`, `UniGE_FLUPSold`, `UniGE_FLUPSnew`, `UoS_IRpp`.
+  - **1-D Time-Resolved**: `UniGE_fsTA` (with automatic non-transient `.dat` file filtering and `CalibratedProbe.csv` / `pix2lam.mat` detection), `UniGE_nsTA`, `HARPIA_TA`, `Helios_TA`, `MESS_TRIR`, `MESS_TRUVIS`, `PyMESS_PP` (PyMESS transient absorption HDF5 datasets), `PDAT`, `UoS_IRpp`.
   - **2-D Spectroscopy**: `P2DAT`, `MESS_2DIR`, `UoS_2DIR`, `RAL_RAW`, `RAL_Proc`.
   - **Calibration Datasets**: UniGE fsTA / nsTA, UniGE TRIR Absorbance / ΔA, UniGE TRUVIS-II, UoS TRIR, UZH Lab 2, RAL LIFEtime.
   - **Steady-State**: FTIR / OPUS (`ftir`, `opus`), UV-Vis (`uvvis`), fluorimeter (`fluorimeter`), and generic delimited files (`csv`, `txt`, `xy`).
@@ -140,7 +140,6 @@ PyMORGAN includes built-in loaders for a wide range of ultrafast time-resolved s
 | | `MESS_TRUVIS` | MESS Transient UV-Vis / TRUVIS-II spectrometer datasets |
 | | `PyMESS_PP` | PyMESS Pump-Probe transient absorption HDF5 datasets (`.h5`) |
 | | `PDAT` | Standard PyMORGAN 1D binary/text transient dataset format |
-| | `UniGE_FLUPSold` / `UniGE_FLUPSnew` | UniGE Fluorescence Upconversion Spectroscopy datasets |
 | | `UoS_IRpp` | University of Sheffield IR pump–probe datasets |
 | **2D Spectroscopy** | `P2DAT` | Standard PyMORGAN 2D binary/text dataset format |
 | | `MESS_2DIR` | MESS 2D-IR spectrometer population-time maps |

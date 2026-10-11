@@ -86,6 +86,39 @@ class Spectrum:
             f"x_units={self.x_units!r}, label={self.label!r})"
         )
 
+    def _repr_html_(self) -> str:
+        """Rich HTML summary card for Jupyter notebook display."""
+        x_min = f"{float(np.nanmin(self.x)):.1f}" if self.x.size else "n/a"
+        x_max = f"{float(np.nanmax(self.x)):.1f}" if self.x.size else "n/a"
+        y_min = f"{float(np.nanmin(self.y)):.3g}" if self.y.size else "n/a"
+        y_max = f"{float(np.nanmax(self.y)):.3g}" if self.y.size else "n/a"
+        kind_name = self.kind.value.capitalize() if hasattr(self.kind, "value") else str(self.kind).capitalize()
+
+        source_row = (
+            f'<tr><td style="color:#64748b; padding: 3px 0;">Source</td>'
+            f'<td style="word-break:break-all; font-size:11px; color:#64748b;">{self.source}</td></tr>'
+            if self.source
+            else ""
+        )
+
+        return (
+            '<div style="font-family: -apple-system, BlinkMacSystemFont, \'Segoe UI\', Roboto, Helvetica, Arial, sans-serif; '
+            'border: 1px solid #cbd5e1; border-radius: 8px; padding: 14px 18px; max-width: 500px; '
+            'background: #ffffff; color: #1e293b; box-shadow: 0 1px 3px rgba(0,0,0,0.05); margin: 8px 0;">'
+            '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px;">'
+            '<span style="font-weight: 700; font-size: 15px; color: #0f172a;">PyMORGAN Spectrum</span>'
+            f'<span style="background:#0284c7;color:#fff;padding:2px 8px;border-radius:12px;font-size:11px;">{kind_name}</span>'
+            '</div>'
+            '<table style="width: 100%; border-collapse: collapse; font-size: 13px;">'
+            f'<tr><td style="color:#64748b; padding: 3px 0;">Label</td><td style="font-weight:600;">{self.label or "(unlabelled)"}</td></tr>'
+            f'<tr><td style="color:#64748b; padding: 3px 0;">Points</td><td style="font-weight:600;">{self.x.size}</td></tr>'
+            f'<tr><td style="color:#64748b; padding: 3px 0;">X range</td><td>[{x_min}, {x_max}] {self.x_units}</td></tr>'
+            f'<tr><td style="color:#64748b; padding: 3px 0;">Y range</td><td>[{y_min}, {y_max}]</td></tr>'
+            f'{source_row}'
+            '</table>'
+            '</div>'
+        )
+
     # ----------------------------------------------------------------- #
     #                           Transformations                         #
     # ----------------------------------------------------------------- #
@@ -213,6 +246,36 @@ class SpectrumSeries:
 
     def __getitem__(self, index) -> Spectrum:
         return self.spectra[index]
+
+    def __repr__(self) -> str:  # pragma: no cover - cosmetic
+        return f"SpectrumSeries(n={len(self.spectra)})"
+
+    def _repr_html_(self) -> str:
+        """Rich HTML summary card for Jupyter notebook display."""
+        n_spectra = len(self.spectra)
+        labels = [sp.label or f"#{i+1}" for i, sp in enumerate(self.spectra[:5])]
+        if n_spectra > 5:
+            labels_str = ", ".join(labels) + f", ... (+{n_spectra - 5} more)"
+        else:
+            labels_str = ", ".join(labels) if labels else "(empty)"
+
+        kinds = {sp.kind.value if hasattr(sp.kind, "value") else str(sp.kind) for sp in self.spectra}
+        kinds_str = ", ".join(k.capitalize() for k in kinds) if kinds else "n/a"
+
+        return (
+            '<div style="font-family: -apple-system, BlinkMacSystemFont, \'Segoe UI\', Roboto, Helvetica, Arial, sans-serif; '
+            'border: 1px solid #cbd5e1; border-radius: 8px; padding: 14px 18px; max-width: 500px; '
+            'background: #ffffff; color: #1e293b; box-shadow: 0 1px 3px rgba(0,0,0,0.05); margin: 8px 0;">'
+            '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px;">'
+            '<span style="font-weight: 700; font-size: 15px; color: #0f172a;">PyMORGAN SpectrumSeries</span>'
+            f'<span style="background:#6366f1;color:#fff;padding:2px 8px;border-radius:12px;font-size:11px;">{n_spectra} spectra</span>'
+            '</div>'
+            '<table style="width: 100%; border-collapse: collapse; font-size: 13px;">'
+            f'<tr><td style="color:#64748b; padding: 3px 0;">Kind(s)</td><td style="font-weight:600;">{kinds_str}</td></tr>'
+            f'<tr><td style="color:#64748b; padding: 3px 0;">Spectra</td><td style="font-size:12px;">{labels_str}</td></tr>'
+            '</table>'
+            '</div>'
+        )
 
     def normalised(self) -> SpectrumSeries:
         """Return a copy in which every spectrum is normalised."""

@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from os import PathLike
+from pathlib import Path
+from typing import Literal
 
 import numpy as np
 
@@ -132,10 +134,11 @@ class Dataset1D:
         self.bkg_avg = None
         self.bkg_ss = None
         self.chirp_fit = None
+        self.mask_ranges = None
 
     @property
     def Units(self) -> dict:
-        """Alias for :attr:`units` for compatibility with MATLAB and PyMESS specs."""
+        """Alias for :attr:`units` for backward compatibility with legacy specs."""
         return self.units
 
     @Units.setter
@@ -256,11 +259,242 @@ class Dataset1D:
             f"detectors={self.n_detectors}, corrected={self.is_corrected})"
         )
 
+    def copy(self, deep: bool = True) -> Dataset1D:
+        """Return a copy of the dataset.
+
+        When ``deep=True`` (default), all internal arrays are cloned independently.
+        """
+        import copy as _copy
+
+        def _dup(arr):
+            if arr is None:
+                return None
+            return np.copy(arr) if deep else arr
+
+        new_ds = Dataset1D(
+            _dup(self.Zavg_R),
+            _dup(self.delays),
+            _dup(self.probe),
+            _copy.deepcopy(self.units) if deep else self.units.copy(),
+            nscans=self.nscans,
+            Zss_R=_dup(self.Zss_R),
+            Zstdv=_dup(self.Zstdv),
+            source=self.source,
+            data_type=self.data_type,
+            scan_ids=_copy.deepcopy(self.scan_ids) if deep else self.scan_ids,
+            counts=_dup(self.counts),
+        )
+        new_ds.Zavg_C = _dup(self.Zavg_C)
+        new_ds.Zss_C = _dup(self.Zss_C)
+        new_ds.bkg_avg = _dup(self.bkg_avg)
+        new_ds.bkg_ss = _dup(self.bkg_ss)
+        mask_r = getattr(self, "mask_ranges", None)
+        new_ds.mask_ranges = _copy.deepcopy(mask_r) if deep else mask_r
+        new_ds.cal_level = getattr(self, "cal_level", None)
+        new_ds.cal_source = getattr(self, "cal_source", None)
+        return new_ds
+
+    def crop(
+        self,
+        tmin: float | None = None,
+        tmax: float | None = None,
+        probe_min: float | None = None,
+        probe_max: float | None = None,
+    ) -> Dataset1D:
+        """Crop the dataset along the delay and/or probe axes.
+
+        Mutates the dataset in-place and returns ``self`` for chaining.
+        To keep the original dataset intact, call ``dataset.copy().crop(...)``.
+        """
+        if tmin is not None or tmax is not None:
+            t_low = -np.inf if tmin is None else float(tmin)
+            t_high = np.inf if tmax is None else float(tmax)
+            t_mask = (self.delays >= t_low) & (self.delays <= t_high)
+            if not np.any(t_mask):
+                raise ValueError(f"No delay points fall in range [{t_low}, {t_high}]")
+
+            self.delays = self.delays[t_mask]
+            if self.Zavg_R is not None:
+                self.Zavg_R = self.Zavg_R[t_mask]
+            if self.Zavg_C is not None:
+                self.Zavg_C = self.Zavg_C[t_mask]
+            if self.Zss_R is not None:
+                self.Zss_R = self.Zss_R[t_mask]
+            if self.Zss_C is not None:
+                self.Zss_C = self.Zss_C[t_mask]
+            if self.Zstdv is not None:
+                self.Zstdv = self.Zstdv[t_mask]
+
+        if probe_min is not None or probe_max is not None:
+            p_low = -np.inf if probe_min is None else float(probe_min)
+            p_high = np.inf if probe_max is None else float(probe_max)
+
+            p_probe = self.probe[:, 0] if self.probe.ndim > 1 else self.probe
+            p_mask = (p_probe >= p_low) & (p_probe <= p_high)
+            if not np.any(p_mask):
+                raise ValueError(f"No probe points fall in range [{p_low}, {p_high}]")
+
+            self.probe = self.probe[p_mask] if self.probe.ndim == 1 else self.probe[p_mask, :]
+            if self.Zavg_R is not None:
+                self.Zavg_R = self.Zavg_R[:, p_mask] if self.Zavg_R.ndim == 2 else self.Zavg_R[:, p_mask, :]
+            if self.Zavg_C is not None:
+                self.Zavg_C = self.Zavg_C[:, p_mask] if self.Zavg_C.ndim == 2 else self.Zavg_C[:, p_mask, :]
+            if self.Zss_R is not None:
+                if self.Zss_R.ndim == 4:
+                    self.Zss_R = self.Zss_R[:, p_mask, :, :]
+                elif self.Zss_R.ndim == 3:
+                    self.Zss_R = self.Zss_R[:, p_mask, :]
+            if self.Zss_C is not None:
+                if self.Zss_C.ndim == 4:
+                    self.Zss_C = self.Zss_C[:, p_mask, :, :]
+                elif self.Zss_C.ndim == 3:
+                    self.Zss_C = self.Zss_C[:, p_mask, :]
+            if self.Zstdv is not None:
+                self.Zstdv = self.Zstdv[:, p_mask] if self.Zstdv.ndim == 2 else self.Zstdv[:, p_mask, :]
+            if self.bkg_avg is not None:
+                self.bkg_avg = self.bkg_avg[p_mask] if self.bkg_avg.ndim == 1 else self.bkg_avg[p_mask, :]
+            if self.bkg_ss is not None:
+                self.bkg_ss = self.bkg_ss[p_mask] if self.bkg_ss.ndim == 1 else self.bkg_ss[p_mask, :]
+
+        return self
+
+    def to_pdat(
+        self,
+        path: str | PathLike,
+        *,
+        detector: int | None = None,
+        use_corrected: bool = True,
+        write_noise: bool = True,
+    ) -> list[Path]:
+        """Export dataset to ``.pdat`` (and optional ``.pdatn``) file(s).
+
+        Parameters
+        ----------
+        path : str or Path
+            Output file path.
+        detector : int, optional
+            Specific detector to export. If None and dataset has multiple detectors,
+            writes separate ``_DET1.pdat``, ``_DET2.pdat``, etc.
+        use_corrected : bool, default True
+            Whether to write background-corrected data.
+        write_noise : bool, default True
+            Whether to also write sibling ``.pdatn`` noise files.
+
+        Returns
+        -------
+        list[Path]
+            Paths of written .pdat files.
+        """
+        from .load import export_pdat
+
+        return export_pdat(
+            self,
+            path,
+            detector=detector,
+            use_corrected=use_corrected,
+            write_noise=write_noise,
+        )
+
+    def to_dataframe(
+        self,
+        format: str = "tidy",
+        detector: int = 0,
+        use_corrected: bool = True,
+    ):
+        """Export dataset as a pandas DataFrame.
+
+        Parameters
+        ----------
+        format : {"tidy", "wide"}, default "tidy"
+            If "tidy", returns columns ``['delay', 'probe', 'signal']`` (and ``'noise'`` if present).
+            If "wide", returns a DataFrame with index=delays and columns=probe.
+        detector : int, default 0
+            Detector index to export.
+        use_corrected : bool, default True
+            Whether to export the background-corrected signal (falls back to raw if uncorrected).
+        """
+        import pandas as pd
+
+        det = int(np.clip(detector, 0, self.n_detectors - 1))
+        delays = np.asarray(self.delays, dtype=float)
+        probe = np.asarray(self._detector_probe(det), dtype=float)
+        z = np.asarray(self.Z if use_corrected else self.Zavg_R, dtype=float)
+        if z.ndim == 3:
+            z = z[:, :, det]
+
+        if format == "wide":
+            return pd.DataFrame(z, index=delays, columns=probe)
+        elif format == "tidy":
+            T, W = np.meshgrid(delays, probe, indexing="ij")
+            data_dict = {
+                "delay": T.ravel(),
+                "probe": W.ravel(),
+                "signal": z.ravel(),
+            }
+            noise = self.noise_array()
+            if noise is not None:
+                n_mat = np.asarray(noise, dtype=float)
+                if n_mat.ndim == 3:
+                    n_mat = n_mat[:, :, det]
+                data_dict["noise"] = n_mat.ravel()
+            return pd.DataFrame(data_dict)
+        else:
+            raise ValueError(f"Unknown format {format!r}. Choose 'tidy' or 'wide'.")
+
+    def to_hdf5(self, path: str | PathLike) -> Path:
+        """Save dataset to a self-contained HDF5 file."""
+        from .load import save_1D_hdf5
+
+        return save_1D_hdf5(self, path)
+
+    def save_hdf5(self, path: str | PathLike) -> Path:
+        """Alias of :meth:`to_hdf5`."""
+        return self.to_hdf5(path)
+
+    def _repr_html_(self) -> str:
+        """Rich HTML summary card for Jupyter notebook display."""
+        time_unit = self.units.get("unitsT_ltx", "ps").replace("$", "")
+        probe_unit = self.units.get("unitsL_lbl", "Wavenumber")
+        probe_sym = self.units.get("unitsL_ltx", "cm^{-1}").replace("$", "")
+        z_unit = self.units.get("unitsZ_lbl", "\u0394A")
+
+        d_min = f"{float(np.nanmin(self.delays)):.2f}" if self.delays.size else "n/a"
+        d_max = f"{float(np.nanmax(self.delays)):.2f}" if self.delays.size else "n/a"
+        p_min = f"{float(np.nanmin(self.probe)):.1f}" if self.probe.size else "n/a"
+        p_max = f"{float(np.nanmax(self.probe)):.1f}" if self.probe.size else "n/a"
+
+        corr_badge = (
+            '<span style="background:#10b981;color:#fff;padding:2px 8px;border-radius:12px;font-size:11px;">Corrected</span>'
+            if self.is_corrected
+            else '<span style="background:#64748b;color:#fff;padding:2px 8px;border-radius:12px;font-size:11px;">Raw</span>'
+        )
+
+        return (
+            '<div style="font-family: -apple-system, BlinkMacSystemFont, \'Segoe UI\', Roboto, Helvetica, Arial, sans-serif; '
+            'border: 1px solid #cbd5e1; border-radius: 8px; padding: 14px 18px; max-width: 540px; '
+            'background: #ffffff; color: #1e293b; box-shadow: 0 1px 3px rgba(0,0,0,0.05); margin: 8px 0;">'
+            '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px;">'
+            f'<span style="font-weight: 700; font-size: 15px; color: #0f172a;">PyMORGAN Dataset1D</span>'
+            f'<div>{corr_badge}</div>'
+            '</div>'
+            '<table style="width: 100%; border-collapse: collapse; font-size: 13px;">'
+            f'<tr><td style="color:#64748b; padding: 3px 0;">Data Type</td><td style="font-weight:600;">{self.data_type or "Unknown"}</td></tr>'
+            f'<tr><td style="color:#64748b; padding: 3px 0;">Dimensions</td><td style="font-weight:600;">{len(self.delays)} delays &times; {self.probe.shape[0]} pixels &times; {self.n_detectors} det</td></tr>'
+            f'<tr><td style="color:#64748b; padding: 3px 0;">Delay range</td><td>[{d_min}, {d_max}] {time_unit}</td></tr>'
+            f'<tr><td style="color:#64748b; padding: 3px 0;">Probe range ({probe_unit})</td><td>[{p_min}, {p_max}] {probe_sym}</td></tr>'
+            f'<tr><td style="color:#64748b; padding: 3px 0;">Signal unit</td><td>{z_unit}</td></tr>'
+            f'<tr><td style="color:#64748b; padding: 3px 0;">Calibration</td><td style="color:#0369a1;">{self.calibration_status()}</td></tr>'
+            '</table>'
+            '</div>'
+        )
+
     # ----------------------------------------------------------------- #
     #                          Shared resolution                        #
     # ----------------------------------------------------------------- #
-    def _detector_slice(self, detector: int):
+    def _detector_slice(self, detector: int = 0):
         """Return the 2-D ``[Ndelays x Npixels]`` slice for ``detector``."""
+        if self.Z.ndim == 2:
+            return self.Z
         return self.Z[:, :, detector]
 
     def _detector_probe(self, detector: int = 0) -> np.ndarray:
@@ -739,19 +973,17 @@ class Dataset1D:
         Z_solvent = solvent.Zavg_C if solvent.Zavg_C is not None else solvent.Zavg_R
 
         if not np.array_equal(solvent.probe, self.probe):
-            from scipy.interpolate import interp1d
+            from scipy.interpolate import make_interp_spline
 
-            f = interp1d(
-                solvent.probe,
-                Z_solvent,
-                axis=1,
-                kind="linear",
-                bounds_error=False,
-                fill_value="extrapolate",
-            )
-            Z_solvent_aligned = f(self.probe)
+            sol_probe = np.asarray(solvent.probe, dtype=float)
+            s_idx = np.argsort(sol_probe)
+            xp = sol_probe[s_idx]
+            Z_sol_sorted = Z_solvent[:, s_idx, :] if Z_solvent.ndim == 3 else Z_solvent[:, s_idx]
+            spl = make_interp_spline(xp, Z_sol_sorted, k=1, axis=1)
+            Z_solvent_aligned = spl(self.probe)
         else:
             Z_solvent_aligned = Z_solvent
+
 
         self.Zavg_C = process.subtract_solvent(
             self.Z,
@@ -884,19 +1116,17 @@ class Dataset1D:
         Z_solvent = solvent.Zavg_C if solvent.Zavg_C is not None else solvent.Zavg_R
 
         if not np.array_equal(solvent.probe, self.probe):
-            from scipy.interpolate import interp1d
+            from scipy.interpolate import make_interp_spline
 
-            f = interp1d(
-                solvent.probe,
-                Z_solvent,
-                axis=1,
-                kind="linear",
-                bounds_error=False,
-                fill_value="extrapolate",
-            )
-            Z_solvent_aligned = f(self.probe)
+            sol_probe = np.asarray(solvent.probe, dtype=float)
+            s_idx = np.argsort(sol_probe)
+            xp = sol_probe[s_idx]
+            Z_sol_sorted = Z_solvent[:, s_idx, :] if Z_solvent.ndim == 3 else Z_solvent[:, s_idx]
+            spl = make_interp_spline(xp, Z_sol_sorted, k=1, axis=1)
+            Z_solvent_aligned = spl(self.probe)
         else:
             Z_solvent_aligned = Z_solvent
+
 
         return process.fit_solvent_auto(
             self.Z,
@@ -972,6 +1202,191 @@ class Dataset1D:
             counts=self.counts,
         )
         return new_ds
+
+    def calculate_anisotropy(
+        self,
+        perpendicular=None,
+        *,
+        g_factor: float | np.ndarray = 1.0,
+        threshold: float | None = None,
+        return_components: bool = False,
+        detector_par: int = 0,
+        detector_perp: int = 1,
+        use_corrected: bool = True,
+    ):
+        """Calculate time-resolved polarization anisotropy from parallel and perpendicular signals.
+
+        Parameters
+        ----------
+        perpendicular : Dataset1D, optional
+            Perpendicular polarization dataset. If omitted, ``self`` must
+            have at least 2 detectors.
+        g_factor : float or ndarray, default 1.0
+            Sensitivity correction factor G.
+        threshold : float, optional
+            Minimum value of isotropic signal below which anisotropy is set to NaN.
+        return_components : bool, default False
+            If True, returns a dict with keys ``'anisotropy'``, ``'magic_angle'``,
+            ``'difference'``, ``'parallel'``, and ``'perpendicular'``.
+        detector_par : int, default 0
+            Channel index for parallel polarization when unpacking a single multi-detector dataset.
+        detector_perp : int, default 1
+            Channel index for perpendicular polarization when unpacking a single multi-detector dataset.
+        use_corrected : bool, default True
+            Whether to use background-corrected signal (``Dataset1D.Z``) or raw (``Dataset1D.Zavg_R``).
+
+        Returns
+        -------
+        Dataset1D or dict[str, Dataset1D]
+            Anisotropy dataset or dictionary of component datasets.
+        """
+        return process.calculate_anisotropy(
+            self,
+            perpendicular,
+            g_factor=g_factor,
+            threshold=threshold,
+            return_components=return_components,
+            detector_par=detector_par,
+            detector_perp=detector_perp,
+            use_corrected=use_corrected,
+        )
+
+    anisotropy = calculate_anisotropy
+
+    def svd(
+        self,
+        k: int = 2,
+        detector: int = 0,
+        array: str = "auto",
+        tmin: float | None = None,
+        tmax: float | None = None,
+        probe_min: float | None = None,
+        probe_max: float | None = None,
+        centering: str = "none",
+        handle_nan: str = "interpolate",
+    ):
+        """Singular Value Decomposition (SVD) of the 1D dataset.
+
+        Parameters
+        ----------
+        k : int, default 2
+            Number of components to use for recomposition.
+        detector : int, default 0
+            Detector channel index if multi-detector dataset.
+        array : {'auto', 'corrected', 'raw'}, default 'auto'
+            Which data array to decompose ('auto' uses Zavg_C if available, else Zavg_R).
+        tmin, tmax : float, optional
+            Delay range limits for cropping prior to SVD.
+        probe_min, probe_max : float, optional
+            Probe range limits for cropping prior to SVD.
+        centering : {'none', 'spectrum', 'probe', 'kinetic', 'time', 'both'}, default 'none'
+            Centering method applied before factorization.
+        handle_nan : {'interpolate', 'drop', 'raise'}, default 'interpolate'
+            Strategy for handling NaN values in the selected region.
+
+        Returns
+        -------
+        SVDResult
+            Result container with components, scree analysis, and recomposition tools.
+        """
+        from .svd import compute_svd
+
+        if array == "raw":
+            data = self.Zavg_R
+        elif array == "corrected":
+            data = self.Zavg_C if self.Zavg_C is not None else self.Zavg_R
+        else:
+            data = self.Z
+
+        # Extract 2D slice for detector if 3D
+        if data.ndim == 3:
+            det = int(np.clip(detector, 0, data.shape[2] - 1))
+            mat = data[:, :, det]
+        else:
+            mat = data
+
+        probe_det = self._detector_probe(detector)
+
+        return compute_svd(
+            data=mat,
+            delays=self.delays,
+            probe=probe_det,
+            k=k,
+            tmin=tmin,
+            tmax=tmax,
+            probe_min=probe_min,
+            probe_max=probe_max,
+            centering=centering,
+            handle_nan=handle_nan,
+            units=self.units,
+        )
+
+    def stitch_wavelength(
+        self,
+        other: Dataset1D,
+        stitch_region: tuple[float, float] | None = None,
+        mode: Literal["blend", "cutover"] = "blend",
+        blend_window: tuple[float, float] | None = None,
+        cutover_wl: float | None = None,
+        time_threshold: float = -0.1,
+        scale_override: float | None = None,
+        target_delays: Literal["ds2", "ds1"] | np.ndarray = "ds2",
+        detector1: int = 0,
+        detector2: int = 0,
+    ):
+        """Stitch this dataset with another spectral window (e.g. UV/Vis + NIR).
+
+        See :func:`pymorgan.oneD.stitch.stitch_wavelength` for parameter details.
+        """
+        from .stitch import stitch_wavelength
+
+        return stitch_wavelength(
+            self,
+            other,
+            stitch_region=stitch_region,
+            mode=mode,
+            blend_window=blend_window,
+            cutover_wl=cutover_wl,
+            time_threshold=time_threshold,
+            scale_override=scale_override,
+            target_delays=target_delays,
+            detector1=detector1,
+            detector2=detector2,
+        )
+
+    def stitch_time(
+        self,
+        other_ns: Dataset1D,
+        time_overlap: tuple[float, float] = (0.5, 2.0),
+        blend_window: tuple[float, float] = (1.0, 1.7),
+        scale_model: Literal["quadratic", "scalar"] = "quadratic",
+        scale_override: float | None = None,
+        align_wl: bool = True,
+        cut_scatter: bool = False,
+        scatter_region: tuple[float, float] = (500.0, 550.0),
+        detector_fs: int = 0,
+        detector_ns: int = 0,
+    ):
+        """Stitch this ultrafast (fs) dataset with a long-delay (ns) dataset.
+
+        See :func:`pymorgan.oneD.stitch.stitch_time` for parameter details.
+        """
+        from .stitch import stitch_time
+
+        return stitch_time(
+            self,
+            other_ns,
+            time_overlap=time_overlap,
+            blend_window=blend_window,
+            scale_model=scale_model,
+            scale_override=scale_override,
+            align_wl=align_wl,
+            cut_scatter=cut_scatter,
+            scatter_region=scatter_region,
+            detector_fs=detector_fs,
+            detector_ns=detector_ns,
+        )
+
 
     # ----------------------------------------------------------------- #
     #                              Plot                                 #
@@ -1316,8 +1731,6 @@ class Dataset1D:
         - "crop"        -> Option 2: Slices/crops the delays axis to keep only fully finite regions where all pixels are defined.
         - "extrapolate" -> Option 1: Fills out-of-bound values with the nearest valid boundary endpoint value (no NaNs).
         """
-        import scipy.interpolate as interp
-
         import pymorgan.settings as settings_mod
 
         if boundary_handling is None:
@@ -1329,6 +1742,7 @@ class Dataset1D:
         probe_det = self._detector_probe(detector)
         t0fit = fit(probe_det)  # shape: [Npixels]
         Npixels = probe_det.size
+        extrapolate = boundary_handling == "extrapolate"
 
         def interpolate_array_3d(arr):
             if arr is None:
@@ -1336,42 +1750,18 @@ class Dataset1D:
             arr_new = arr.copy()
             if arr.ndim == 2:
                 for i in range(Npixels):
-                    if boundary_handling == "extrapolate":
-                        f = interp.interp1d(
-                            self.delays - t0fit[i],
-                            arr[:, i],
-                            kind="linear",
-                            bounds_error=False,
-                            fill_value=(arr[0, i], arr[-1, i]),
-                        )
-                    else:
-                        f = interp.interp1d(
-                            self.delays - t0fit[i],
-                            arr[:, i],
-                            kind="linear",
-                            bounds_error=False,
-                            fill_value=np.nan,
-                        )
-                    arr_new[:, i] = f(self.delays)
+                    lv = arr[0, i] if extrapolate else np.nan
+                    rv = arr[-1, i] if extrapolate else np.nan
+                    arr_new[:, i] = np.interp(
+                        self.delays, self.delays - t0fit[i], arr[:, i], left=lv, right=rv
+                    )
             elif arr.ndim == 3:
                 for i in range(Npixels):
-                    if boundary_handling == "extrapolate":
-                        f = interp.interp1d(
-                            self.delays - t0fit[i],
-                            arr[:, i, detector],
-                            kind="linear",
-                            bounds_error=False,
-                            fill_value=(arr[0, i, detector], arr[-1, i, detector]),
-                        )
-                    else:
-                        f = interp.interp1d(
-                            self.delays - t0fit[i],
-                            arr[:, i, detector],
-                            kind="linear",
-                            bounds_error=False,
-                            fill_value=np.nan,
-                        )
-                    arr_new[:, i, detector] = f(self.delays)
+                    lv = arr[0, i, detector] if extrapolate else np.nan
+                    rv = arr[-1, i, detector] if extrapolate else np.nan
+                    arr_new[:, i, detector] = np.interp(
+                        self.delays, self.delays - t0fit[i], arr[:, i, detector], left=lv, right=rv
+                    )
             return arr_new
 
         def interpolate_array_4d(arr):
@@ -1382,44 +1772,21 @@ class Dataset1D:
             if arr.ndim == 3:
                 for s in range(Nscans):
                     for i in range(Npixels):
-                        if boundary_handling == "extrapolate":
-                            f = interp.interp1d(
-                                self.delays - t0fit[i],
-                                arr[:, i, s],
-                                kind="linear",
-                                bounds_error=False,
-                                fill_value=(arr[0, i, s], arr[-1, i, s]),
-                            )
-                        else:
-                            f = interp.interp1d(
-                                self.delays - t0fit[i],
-                                arr[:, i, s],
-                                kind="linear",
-                                bounds_error=False,
-                                fill_value=np.nan,
-                            )
-                        arr_new[:, i, s] = f(self.delays)
+                        lv = arr[0, i, s] if extrapolate else np.nan
+                        rv = arr[-1, i, s] if extrapolate else np.nan
+                        arr_new[:, i, s] = np.interp(
+                            self.delays, self.delays - t0fit[i], arr[:, i, s], left=lv, right=rv
+                        )
             elif arr.ndim == 4:
                 for s in range(Nscans):
                     for i in range(Npixels):
-                        if boundary_handling == "extrapolate":
-                            f = interp.interp1d(
-                                self.delays - t0fit[i],
-                                arr[:, i, detector, s],
-                                kind="linear",
-                                bounds_error=False,
-                                fill_value=(arr[0, i, detector, s], arr[-1, i, detector, s]),
-                            )
-                        else:
-                            f = interp.interp1d(
-                                self.delays - t0fit[i],
-                                arr[:, i, detector, s],
-                                kind="linear",
-                                bounds_error=False,
-                                fill_value=np.nan,
-                            )
-                        arr_new[:, i, detector, s] = f(self.delays)
+                        lv = arr[0, i, detector, s] if extrapolate else np.nan
+                        rv = arr[-1, i, detector, s] if extrapolate else np.nan
+                        arr_new[:, i, detector, s] = np.interp(
+                            self.delays, self.delays - t0fit[i], arr[:, i, detector, s], left=lv, right=rv
+                        )
             return arr_new
+
 
         self.Zavg_R = interpolate_array_3d(self.Zavg_R)
         if self.Zavg_C is not None:

@@ -155,8 +155,8 @@ class ChirpFit:
         Uses compatible variable names (``Cfit``, ``fitPixels``, ``fitWL``, ``Pfit``,
         ``Dfit``) and 1-based indexing for ``fitPixels`` to maintain compatibility
         with downstream analysis scripts. Since ``savemat`` cannot embed a Python callable,
-        ``chirpFun_str`` carries the equivalent MATLAB anonymous-function source, and
-        ``matlab_usage`` provides instructions on how to evaluate the curve.
+        ``chirpFun_str`` carries the equivalent anonymous-function source, and
+        ``usage`` provides instructions on how to evaluate the curve.
         """
         coeffs = np.atleast_1d(np.asarray(self.coeffs, dtype=float))
         fit_pixels = np.atleast_1d(np.asarray(self.fit_pixels, dtype=float))
@@ -167,8 +167,8 @@ class ChirpFit:
             "n_cauchy_terms": int(self.n_cauchy_terms),
             "lambda_ref": float(self.lambda_ref),
             "Cfit": coeffs,
-            "chirpFun_str": _matlab_chirp_fun_str(coeffs.size, self.lambda_ref),
-            "matlab_usage": (
+            "chirpFun_str": _dispersion_chirp_fun_str(coeffs.size, self.lambda_ref),
+            "usage": (
                 "S = load(thisfile);  chirpFun = eval(S.chirpFun_str);  "
                 "t0 = chirpFun(S.Cfit, probeAxis);"
             ),
@@ -205,12 +205,11 @@ class ChirpFit:
         ``fitWL``, 1-based pixels) and the alternative key names
         (``coeffs``/``fit_pixels``/``fit_wl``, 0-based) for backward compatibility.
 
-        Also handles MAT files saved by MATLAB's ``FitChirpCorr.m``, which do not
-        store ``mode``, ``lambda_ref`` or ``n_cauchy_terms``.  These are inferred
-        automatically:
+        Also handles legacy MAT files, which do not store ``mode``, ``lambda_ref``
+        or ``n_cauchy_terms``. These are inferred automatically:
 
-        * ``lambda_ref`` is reconstructed from ``mean(fitWL)`` -- MATLAB always
-          uses this value as the reference wavelength for the Cauchy dispersion
+        * ``lambda_ref`` is reconstructed from ``mean(fitWL)`` -- standard dispersion
+          analysis uses this value as the reference wavelength for the Cauchy dispersion
           formula, and it can be verified from the ``scaleVec`` closure embedded
           in the saved function handle.
         * ``n_cauchy_terms`` is inferred from ``len(Cfit)``.
@@ -247,7 +246,7 @@ class ChirpFit:
         else:
             Pfit = np.atleast_2d(Pfit_raw)
 
-        # --- Infer fields that MATLAB's FitChirpCorr.m does not save ----------
+        # --- Infer fields that legacy chirp correction files do not save ----------
         # n_cauchy_terms: fall back to len(Cfit) if not stored.
         stored_n = _get("n_cauchy_terms")
         if stored_n is None:
@@ -255,8 +254,8 @@ class ChirpFit:
         else:
             n_cauchy_terms = int(stored_n)
 
-        # lambda_ref: MATLAB always uses mean(fitWL) as the reference wavelength
-        # for the scaleVec in the anonymous chirpFun.  Recover it from fitWL
+        # lambda_ref: Uses mean(fitWL) as the reference wavelength
+        # for the scaleVec in the anonymous chirpFun. Recover it from fitWL
         # when not present or NaN in the file.
         stored_lref = _get("lambda_ref")
         if stored_lref is None or (
@@ -392,9 +391,9 @@ def save_chirp_fit(fit: ChirpFit, path, n_detectors: int = 1) -> None:
 def load_chirp_fit(path) -> ChirpFit:
     """Load a :class:`ChirpFit` previously written by :func:`save_chirp_fit`.
 
-    Also accepts MAT files saved by MATLAB's ``FitChirpCorr.m``.  The MATLAB
+    Also accepts legacy MAT chirp correction files. The legacy MAT
     format stores ``Cfit``, ``fitWL``, ``fitPixels``, ``Pfit`` and a
-    ``chirpFun`` function-handle object.  The function handle cannot be
+    ``chirpFun`` function-handle object. The function handle cannot be
     evaluated by scipy, but it is not needed: the Cauchy dispersion curve is
     fully reconstructed from ``Cfit`` and the inferred reference wavelength
     (see :meth:`ChirpFit.from_dict`).
@@ -467,12 +466,11 @@ def _cauchy_design(probe: np.ndarray, n_terms: int, lambda_ref: float) -> np.nda
     return scale[None, :] / (L.reshape(-1, 1) ** exps[None, :])
 
 
-def _matlab_chirp_fun_str(n_terms: int, lambda_ref: float) -> str:
-    """Generate MATLAB-syntax anonymous-function source for the dispersion curve.
+def _dispersion_chirp_fun_str(n_terms: int, lambda_ref: float) -> str:
+    """Generate anonymous-function source for the dispersion curve.
 
     Generates self-contained anonymous-function text with ``lambda_ref`` and the
-    per-term scaling substituted in as literals. Evaluating this string in MATLAB
-    recreates a callable: ``chirpFun(S.Cfit, probeAxis)``.
+    per-term scaling substituted in as literals: ``chirpFun(S.Cfit, probeAxis)``.
     """
     exps = 2 * np.arange(max(1, int(n_terms)))
     scale = lambda_ref**exps

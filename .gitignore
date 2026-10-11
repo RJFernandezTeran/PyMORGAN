@@ -252,3 +252,9 @@ src/pymorgan/cal/ref_spectra/*
 settings.toml
 /settings.toml
 
+# Scratch files, standalone distributions and local data
+scratch/
+dist_installer/
+*.m
+*.pdat
+*.p2dat

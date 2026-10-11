@@ -9,7 +9,7 @@
 from PyQt6 import QtCore, QtGui, QtWidgets
 
 
-class Ui_MainWindow:
+class Ui_MainWindow(object):
     def setupUi(self, MainWindow):
         MainWindow.setObjectName("MainWindow")
         MainWindow.resize(1100, 880)
@@ -1668,6 +1668,14 @@ class Ui_MainWindow:
         self.actionSubtractShockwave.setObjectName("actionSubtractShockwave")
         self.actionTimeDerivative = QtGui.QAction(parent=MainWindow)
         self.actionTimeDerivative.setObjectName("actionTimeDerivative")
+        self.actionSVD = QtGui.QAction(parent=MainWindow)
+        self.actionSVD.setObjectName("actionSVD")
+        self.actionAnisotropy = QtGui.QAction(parent=MainWindow)
+        self.actionAnisotropy.setObjectName("actionAnisotropy")
+        self.actionStitchWavelength = QtGui.QAction(parent=MainWindow)
+        self.actionStitchWavelength.setObjectName("actionStitchWavelength")
+        self.actionStitchTimescale = QtGui.QAction(parent=MainWindow)
+        self.actionStitchTimescale.setObjectName("actionStitchTimescale")
         self.actionLoadAbsorption = QtGui.QAction(parent=MainWindow)
         self.actionLoadAbsorption.setObjectName("actionLoadAbsorption")
         self.actionLoadEmission = QtGui.QAction(parent=MainWindow)
@@ -1705,6 +1713,10 @@ class Ui_MainWindow:
         self.menuSpectra.addAction(self.actionLoadSpectrum)
         self.menuSpectra.addAction(self.actionSubtractShockwave)
         self.menuSpectra.addAction(self.actionTimeDerivative)
+        self.menuSpectra.addAction(self.actionSVD)
+        self.menuSpectra.addAction(self.actionAnisotropy)
+        self.menuSpectra.addAction(self.actionStitchWavelength)
+        self.menuSpectra.addAction(self.actionStitchTimescale)
         self.menuSpectra.addSeparator()
         self.menuSpectra.addAction(self.actionLoadAbsorption)
         self.menuSpectra.addAction(self.actionLoadEmission)
@@ -1741,8 +1753,6 @@ class Ui_MainWindow:
         self.PP_datatype_cbx.setItemText(2, _translate("MainWindow", "UniGE nsTA"))
         self.PP_datatype_cbx.setItemText(3, _translate("MainWindow", "UniGE Transient IR (MESS)"))
         self.PP_datatype_cbx.setItemText(4, _translate("MainWindow", "UniGE Transient UV-Vis (MESS)"))
-        self.PP_datatype_cbx.setItemText(5, _translate("MainWindow", "UniGE FLUPS (Legacy)"))
-        self.PP_datatype_cbx.setItemText(6, _translate("MainWindow", "UniGE FLUPS (Modern)"))
         self.PP_datatype_cbx.setItemText(7, _translate("MainWindow", "Helios TA (Ultrafast Systems)"))
         self.PP_datatype_cbx.setItemText(8, _translate("MainWindow", "U. of Sheffield IR Pump-Probe"))
         self.PP_reloadData_btn.setToolTip(_translate("MainWindow", "Reload the current dataset from disk"))
@@ -2042,6 +2052,14 @@ class Ui_MainWindow:
         self.actionSubtractShockwave.setToolTip(_translate("MainWindow", "Subtract an average kinetic trace calculated over selected pixels from all dataset pixels"))
         self.actionTimeDerivative.setText(_translate("MainWindow", "&Time derivative of spectra..."))
         self.actionTimeDerivative.setToolTip(_translate("MainWindow", "Calculate the time derivative d(ΔA)/dt of transient spectra along the delay axis with optional interpolation and smoothing"))
+        self.actionSVD.setText(_translate("MainWindow", "&Singular value decomposition (SVD)..."))
+        self.actionSVD.setToolTip(_translate("MainWindow", "Compute SVD factorization, component extraction, scree analysis, and rank-k recomposition"))
+        self.actionAnisotropy.setText(_translate("MainWindow", "Calculate polarization &anisotropy..."))
+        self.actionAnisotropy.setToolTip(_translate("MainWindow", "Calculate transient polarization anisotropy r(t) from parallel and perpendicular signals"))
+        self.actionStitchWavelength.setText(_translate("MainWindow", "Stitch &wavelength regions (UV/Vis + NIR)..."))
+        self.actionStitchWavelength.setToolTip(_translate("MainWindow", "Stitch spectra from different wavelength/wavenumber windows with overlap scaling and blending"))
+        self.actionStitchTimescale.setText(_translate("MainWindow", "Stitch &timescales (fs + ns)..."))
+        self.actionStitchTimescale.setToolTip(_translate("MainWindow", "Stitch transient absorption datasets across different timescales with wavelength alignment and quadratic scaling"))
         self.actionLoadAbsorption.setText(_translate("MainWindow", "Load steady-state &absorption…"))
         self.actionLoadAbsorption.setToolTip(_translate("MainWindow", "Load a steady-state absorption spectrum, overlaid as a shaded area on transient spectra."))
         self.actionLoadEmission.setText(_translate("MainWindow", "Load steady-state &emission…"))

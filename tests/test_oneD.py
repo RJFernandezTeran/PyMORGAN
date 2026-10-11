@@ -3,9 +3,9 @@
 import copy
 
 import numpy as np
+import pytest
 
 import pymorgan as pm
-
 from pymorgan.oneD.chirp import (
     ChirpFit,
     _bisquare_weights,
@@ -16,7 +16,13 @@ from pymorgan.oneD.chirp import (
     save_chirp_fit,
 )
 from pymorgan.oneD.dataset import Dataset1D
-from pymorgan.steadyState.dataset import load_spectrum
+from pymorgan.oneD.load import load_1D_hdf5, save_1D_hdf5
+from pymorgan.steadyState.dataset import (
+    Spectrum,
+    SpectrumKind,
+    SpectrumSeries,
+    load_spectrum,
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -423,3 +429,111 @@ def test_recalc_average_harpia(tmp_path):
     ds.recalc_average([0, 1, 2, 3])
     assert ds.nscans == 4
     np.testing.assert_allclose(ds.Zavg_R, orig_zavg)
+
+
+# --------------------------------------------------------------------------- #
+# Dataset1D Copy & Crop                                                       #
+# --------------------------------------------------------------------------- #
+def test_dataset1d_copy(dataset):
+    cp = dataset.copy(deep=True)
+    assert cp is not dataset
+    assert np.array_equal(cp.delays, dataset.delays)
+    assert np.array_equal(cp.probe, dataset.probe)
+    assert np.array_equal(cp.Z, dataset.Z)
+    assert cp.is_corrected == dataset.is_corrected
+
+    # Mutate copy and verify original is unaffected
+    cp.delays[0] = 999.0
+    cp.Zavg_R[0, 0, 0] = -123.0
+    cp.units["test_key"] = "test_val"
+
+    assert dataset.delays[0] != 999.0
+    assert dataset.Zavg_R[0, 0, 0] != -123.0
+    assert "test_key" not in dataset.units
+
+
+def test_dataset1d_crop(dataset):
+    t_mid = float(dataset.delays[len(dataset.delays) // 2])
+    p_mid = float(dataset.probe[len(dataset.probe) // 2])
+    cropped = dataset.copy().crop(tmin=0.0, tmax=t_mid, probe_min=dataset.probe[0], probe_max=p_mid)
+    assert cropped.delays[0] >= 0.0
+    assert cropped.delays[-1] <= t_mid
+    assert cropped.probe[0] >= dataset.probe[0]
+    assert cropped.probe[-1] <= p_mid
+    assert cropped.Zavg_R.shape[0] == len(cropped.delays)
+    assert cropped.Zavg_R.shape[1] == len(cropped.probe)
+
+    # Out of range crop raises ValueError
+    with pytest.raises(ValueError, match="No delay points fall in range"):
+        dataset.copy().crop(tmin=1e6, tmax=2e6)
+
+    with pytest.raises(ValueError, match="No probe points fall in range"):
+        dataset.copy().crop(probe_min=1e6, probe_max=2e6)
+
+
+# --------------------------------------------------------------------------- #
+# Dataset1D PDAT Export & Dataframe                                           #
+# --------------------------------------------------------------------------- #
+def test_write_pdat_and_to_pdat(tmp_path, dataset):
+    out_file = tmp_path / "test_out.pdat"
+    paths = dataset.to_pdat(out_file, use_corrected=True)
+    reloaded = pm.load_1D(paths[0], data_type="PDAT")
+    assert np.allclose(reloaded.delays, dataset.delays)
+    assert np.allclose(reloaded.probe, dataset.probe)
+
+    direct_pdat = tmp_path / "direct.pdat"
+    pm.write_pdat(direct_pdat, dataset.delays, dataset.probe, dataset.Z[:, :, 0])
+    assert direct_pdat.is_file()
+
+
+def test_to_dataframe(dataset):
+    df_tidy = dataset.to_dataframe(format="tidy")
+    assert "delay" in df_tidy.columns
+    assert "probe" in df_tidy.columns
+    assert "signal" in df_tidy.columns
+    assert len(df_tidy) == len(dataset.delays) * len(dataset.probe)
+
+    df_wide = dataset.to_dataframe(format="wide")
+    assert df_wide.shape == (len(dataset.delays), len(dataset.probe))
+    assert np.allclose(df_wide.index.values, dataset.delays)
+
+    with pytest.raises(ValueError, match="Unknown format"):
+        dataset.to_dataframe(format="invalid")
+
+
+# --------------------------------------------------------------------------- #
+# HDF5 Serialization                                                          #
+# --------------------------------------------------------------------------- #
+def test_hdf5_roundtrip(tmp_path, dataset):
+    h5_file = tmp_path / "dataset.h5"
+    save_1D_hdf5(dataset, h5_file)
+    assert h5_file.is_file()
+
+    reloaded = load_1D_hdf5(h5_file)
+    assert isinstance(reloaded, Dataset1D)
+    assert np.allclose(reloaded.delays, dataset.delays)
+    assert np.allclose(reloaded.probe, dataset.probe)
+    assert np.allclose(reloaded.Zavg_R, dataset.Zavg_R)
+
+
+# --------------------------------------------------------------------------- #
+# Jupyter Notebook _repr_html_                                                #
+# --------------------------------------------------------------------------- #
+def test_repr_html(dataset):
+    h1 = dataset._repr_html_()
+    assert "PyMORGAN Dataset1D" in h1
+    assert "delays" in h1
+
+    # Spectrum
+    x = np.linspace(400, 700, 50)
+    y = np.exp(-((x - 550) ** 2) / (2 * 30**2))
+    spec = Spectrum(x, y, kind=SpectrumKind.ABSORPTION, label="Q-band")
+    h_spec = spec._repr_html_()
+    assert "PyMORGAN Spectrum" in h_spec
+    assert "Absorption" in h_spec
+
+    # SpectrumSeries
+    series = SpectrumSeries([spec, Spectrum(x, y * 0.8, kind=SpectrumKind.EMISSION, label="PL")])
+    h_series = series._repr_html_()
+    assert "PyMORGAN SpectrumSeries" in h_series
+    assert "2 spectra" in h_series

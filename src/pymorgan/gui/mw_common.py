@@ -56,11 +56,11 @@ DATA_TYPE_DISPLAY_NAMES: dict[str, str] = {
     "UniGE_nsTA": "UniGE nsTA",
     "MESS_TRIR": "UniGE Transient IR (MESS)",
     "MESS_TRUVIS": "UniGE Transient UV-Vis (MESS)",
-    "UniGE_FLUPSold": "UniGE FLUPS (Legacy)",
-    "UniGE_FLUPSnew": "UniGE FLUPS (Modern)",
     "Helios_TA": "Helios TA (Ultrafast Systems)",
     "UoS_IRpp": "U. of Sheffield IR Pump-Probe",
-    "PyMESS_PP": "PyMESS Pump-Probe",
+    "PyMESS_PP": "PyMESS Pump-Probe (.h5)",
+    "HDF5": "PyMORGAN Dataset (.h5)",
+    "RAL_IRpp": "RAL IR Pump-Probe / LIFEtime (.csv)",
     "Exported_TXT": "Exported TXT",
     # 2D Datatypes
     "P2DAT": "Processed 2D Spectrum (.p2dat)",
@@ -68,6 +68,12 @@ DATA_TYPE_DISPLAY_NAMES: dict[str, str] = {
     "UoS_2DIR": "U. of Sheffield 2D-IR",
     "RAL_RAW": "RAL 2D-IR (Raw)",
     "RAL_Proc": "RAL 2D-IR (Processed)",
+}
+
+# Alias mapping for consolidated loader entries
+_DATATYPE_ALIASES: dict[str, str] = {
+    "RAL_TRIR": "RAL_IRpp",
+    "RAL_LIFEtime": "RAL_IRpp",
 }
 
 
@@ -82,19 +88,20 @@ def get_combo_datatype(combo: QComboBox | None, default: str) -> str:
     for short_name, disp_name in DATA_TYPE_DISPLAY_NAMES.items():
         if text in (short_name, disp_name):
             return short_name
-    return text
+    return _DATATYPE_ALIASES.get(text, text)
 
 
 def set_combo_datatype(combo: QComboBox | None, datatype: str) -> None:
     """Set the QComboBox selection using the internal short data_type string or display text."""
     if combo is None or not datatype:
         return
-    idx = combo.findData(datatype)
+    resolved_type = _DATATYPE_ALIASES.get(datatype, datatype)
+    idx = combo.findData(resolved_type)
     if idx < 0:
-        disp = DATA_TYPE_DISPLAY_NAMES.get(datatype, datatype)
+        disp = DATA_TYPE_DISPLAY_NAMES.get(resolved_type, resolved_type)
         idx = combo.findText(disp)
     if idx < 0:
-        idx = combo.findText(datatype)
+        idx = combo.findText(resolved_type)
     if idx >= 0:
         if combo.currentIndex() == idx:
             combo.currentTextChanged.emit(combo.itemText(idx))
@@ -106,9 +113,14 @@ def populate_datatype_combo(combo: QComboBox, loaders: list[str], default_type: 
     """Populate a QComboBox with friendly display names and userData=short_name pairs."""
     combo.blockSignals(True)
     combo.clear()
+    seen = set()
     for short_name in loaders:
-        disp_name = DATA_TYPE_DISPLAY_NAMES.get(short_name, short_name)
-        combo.addItem(disp_name, userData=short_name)
+        canonical = _DATATYPE_ALIASES.get(short_name, short_name)
+        if canonical in seen:
+            continue
+        seen.add(canonical)
+        disp_name = DATA_TYPE_DISPLAY_NAMES.get(canonical, canonical)
+        combo.addItem(disp_name, userData=canonical)
     combo.blockSignals(False)
     set_combo_datatype(combo, default_type)
 

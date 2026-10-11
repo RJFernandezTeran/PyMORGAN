@@ -1,0 +1,14 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=PyMORGAN
+GenericName=Ultrafast Spectroscopy Processing
+Comment=Process and visualize 1D pump-probe and 2D spectroscopy data
+Exec=DIR_PLACEHOLDER/PyMORGAN %F
+Icon=ICON_PYMORGAN
+Terminal=false
+Categories=Science;Physics;DataVisualization;
+MimeType=application/x-pdat;application/x-p2dat;
+Keywords=spectroscopy;transient;absorption;2dir;
+StartupNotify=true
+StartupWMClass=PyMORGAN

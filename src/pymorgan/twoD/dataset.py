@@ -44,7 +44,7 @@ class Dataset2D:
         probe,
         delays,
         units: dict,
-        freq_units: str,
+        freq_units: str = "cm-1",
         *,
         source: str | None = None,
         data_type: str | None = None,
@@ -83,6 +83,7 @@ class Dataset2D:
 
         self.Z_C = None  # populated by background_correct()
         self._is_corrected = False
+        self.subtracted_spectrum = None
 
     # ----------------------------------------------------------------- #
     #                          Load (construction)                      #
@@ -450,6 +451,131 @@ class Dataset2D:
             f"probe={self.probe.shape}, t2={self.delays.shape}, corrected={self.is_corrected})"
         )
 
+    def copy(self, deep: bool = True) -> Dataset2D:
+        """Return a copy of the 2-D dataset.
+
+        When ``deep=True`` (default), all signal and coordinate arrays are cloned independently.
+        """
+        import copy as _copy
+
+        def _dup(arr):
+            if arr is None:
+                return None
+            return np.copy(arr) if deep else arr
+
+        new_ds = Dataset2D(
+            _dup(self.Z_R),
+            _dup(self.pump),
+            _dup(self.probe),
+            _dup(self.delays),
+            _copy.deepcopy(self.units) if deep else self.units.copy(),
+            freq_units=self.freq_units,
+            source=self.source,
+            data_type=self.data_type,
+            datatype=self.datatype,
+            in_progress=self.in_progress,
+            raw_signal=_dup(self.raw_signal),
+            raw_interferogram=_dup(self.raw_interferogram),
+            raw_t1delays=_dup(self.raw_t1delays),
+            cal_level=getattr(self, "cal_level", None),
+            cal_source=getattr(self, "cal_source", None),
+        )
+        new_ds.Z_C = _dup(self.Z_C)
+        sub_spec = getattr(self, "subtracted_spectrum", None)
+        new_ds.subtracted_spectrum = (
+            _copy.deepcopy(sub_spec) if deep else sub_spec
+        )
+        return new_ds
+
+    def crop(
+        self,
+        t2_min: float | None = None,
+        t2_max: float | None = None,
+        pump_min: float | None = None,
+        pump_max: float | None = None,
+        probe_min: float | None = None,
+        probe_max: float | None = None,
+    ) -> Dataset2D:
+        """Crop the 2-D dataset along t2, pump, and/or probe axes.
+
+        Mutates the dataset in-place and returns ``self`` for chaining.
+        To keep the original dataset intact, call ``dataset.copy().crop(...)``.
+        """
+        if t2_min is not None or t2_max is not None:
+            t_low = -np.inf if t2_min is None else float(t2_min)
+            t_high = np.inf if t2_max is None else float(t2_max)
+            t_mask = (self.delays >= t_low) & (self.delays <= t_high)
+            if not np.any(t_mask):
+                raise ValueError(f"No t2 delays fall in range [{t_low}, {t_high}]")
+            self.delays = self.delays[t_mask]
+            self.Z_R = self.Z_R[:, :, t_mask]
+            if self.Z_C is not None:
+                self.Z_C = self.Z_C[:, :, t_mask]
+
+        if pump_min is not None or pump_max is not None:
+            p_low = -np.inf if pump_min is None else float(pump_min)
+            p_high = np.inf if pump_max is None else float(pump_max)
+            pu_mask = (self.pump >= p_low) & (self.pump <= p_high)
+            if not np.any(pu_mask):
+                raise ValueError(f"No pump frequencies fall in range [{p_low}, {p_high}]")
+            self.pump = self.pump[pu_mask]
+            self.Z_R = self.Z_R[pu_mask, :, :]
+            if self.Z_C is not None:
+                self.Z_C = self.Z_C[pu_mask, :, :]
+
+        if probe_min is not None or probe_max is not None:
+            pr_low = -np.inf if probe_min is None else float(probe_min)
+            pr_high = np.inf if probe_max is None else float(probe_max)
+            pr_probe = self.probe[:, 0] if self.probe.ndim > 1 else self.probe
+            pr_mask = (pr_probe >= pr_low) & (pr_probe <= pr_high)
+            if not np.any(pr_mask):
+                raise ValueError(f"No probe frequencies fall in range [{pr_low}, {pr_high}]")
+            self.probe = self.probe[pr_mask] if self.probe.ndim == 1 else self.probe[pr_mask, :]
+            self.Z_R = self.Z_R[:, pr_mask, :]
+            if self.Z_C is not None:
+                self.Z_C = self.Z_C[:, pr_mask, :]
+
+        return self
+
+    def _repr_html_(self) -> str:
+        """Rich HTML summary card for Jupyter notebook display."""
+        time_unit = self.units.get("unitsT_ltx", "ps").replace("$", "")
+        freq_unit = self.freq_units or self.units.get("unitsL_lbl", "cm-1")
+        z_unit = self.units.get("unitsZ_lbl", "\u0394A")
+
+        t2_min = f"{float(np.nanmin(self.delays)):.2f}" if self.delays.size else "n/a"
+        t2_max = f"{float(np.nanmax(self.delays)):.2f}" if self.delays.size else "n/a"
+        pu_min = f"{float(np.nanmin(self.pump)):.1f}" if self.pump.size else "n/a"
+        pu_max = f"{float(np.nanmax(self.pump)):.1f}" if self.pump.size else "n/a"
+        pr_min = f"{float(np.nanmin(self.probe)):.1f}" if self.probe.size else "n/a"
+        pr_max = f"{float(np.nanmax(self.probe)):.1f}" if self.probe.size else "n/a"
+
+        corr_badge = (
+            '<span style="background:#10b981;color:#fff;padding:2px 8px;border-radius:12px;font-size:11px;">Corrected</span>'
+            if self.is_corrected
+            else '<span style="background:#64748b;color:#fff;padding:2px 8px;border-radius:12px;font-size:11px;">Raw</span>'
+        )
+
+        return (
+            '<div style="font-family: -apple-system, BlinkMacSystemFont, \'Segoe UI\', Roboto, Helvetica, Arial, sans-serif; '
+            'border: 1px solid #cbd5e1; border-radius: 8px; padding: 14px 18px; max-width: 540px; '
+            'background: #ffffff; color: #1e293b; box-shadow: 0 1px 3px rgba(0,0,0,0.05); margin: 8px 0;">'
+            '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px;">'
+            f'<span style="font-weight: 700; font-size: 15px; color: #0f172a;">PyMORGAN Dataset2D</span>'
+            f'<div>{corr_badge}</div>'
+            '</div>'
+            '<table style="width: 100%; border-collapse: collapse; font-size: 13px;">'
+            f'<tr><td style="color:#64748b; padding: 3px 0;">Data Type</td><td style="font-weight:600;">{self.data_type or "Unknown"}</td></tr>'
+            f'<tr><td style="color:#64748b; padding: 3px 0;">Cube Dimensions</td><td style="font-weight:600;">{self.pump.shape[0]} pump &times; {self.probe.shape[0]} probe &times; {len(self.delays)} t2</td></tr>'
+            f'<tr><td style="color:#64748b; padding: 3px 0;">Population time (t2)</td><td>[{t2_min}, {t2_max}] {time_unit}</td></tr>'
+            f'<tr><td style="color:#64748b; padding: 3px 0;">Pump range</td><td>[{pu_min}, {pu_max}] {freq_unit}</td></tr>'
+            f'<tr><td style="color:#64748b; padding: 3px 0;">Probe range</td><td>[{pr_min}, {pr_max}] {freq_unit}</td></tr>'
+            f'<tr><td style="color:#64748b; padding: 3px 0;">Signal unit</td><td>{z_unit}</td></tr>'
+            f'<tr><td style="color:#64748b; padding: 3px 0;">Calibration</td><td style="color:#0369a1;">{self.calibration_status()}</td></tr>'
+            '</table>'
+            '</div>'
+        )
+
     def process(
         self,
         *,
@@ -752,6 +878,9 @@ class Dataset2D:
         from . import analyse
 
         return analyse.get_slice_at_probe(self, probe_wn)
+
+    slice_at_pump = get_slice_at_pump
+    slice_at_probe = get_slice_at_probe
 
     def get_slice_integrate_pump(self, pump_min, pump_max):
         """Integrate along the pump axis between pump_min and pump_max, returning a 1D dataset."""

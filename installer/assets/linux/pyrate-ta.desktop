@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=PyRATE-TA
+GenericName=Global Analysis & Lifetime Fitting
+Comment=Fit transient absorption kinetics with multi-exponential and kinetic models
+Exec=DIR_PLACEHOLDER/PyRATE-TA %F
+Icon=ICON_PYRATE
+Terminal=false
+Categories=Science;Physics;DataVisualization;
+Keywords=spectroscopy;global;analysis;kinetics;fitting;
+StartupNotify=true
+StartupWMClass=PyRATE-TA

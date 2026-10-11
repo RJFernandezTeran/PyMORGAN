@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import NamedTuple
 
 import numpy as np
-from scipy.interpolate import interp1d
+from scipy.interpolate import make_interp_spline
 from scipy.optimize import least_squares
 from scipy.signal import savgol_filter
 from scipy.spatial import KDTree
@@ -335,9 +335,7 @@ def fit_wavelength_axis(
         else:
             pix_calc = dwl * ppnm + c_pix
 
-        meas_interp = interp1d(
-            meas_pixels, meas_y, kind="linear", bounds_error=False, fill_value="extrapolate"
-        )
+        meas_interp = make_interp_spline(meas_pixels, meas_y, k=1)
         scaled_meas = meas_interp(pix_calc) * p_fit[2]
         target_ref = convolved_ref_y if convolved_ref_y is not None else ref_y_cut
         target_b = target_ref - scaled_meas

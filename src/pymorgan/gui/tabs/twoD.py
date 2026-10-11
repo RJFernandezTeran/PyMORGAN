@@ -945,7 +945,7 @@ class TwoDTabMixin:
                     pump_wn = points[0]
                     t2_delays = self._ask_values(
                         "Transient spectra slices",
-                        "Delays to plot (comma-separated or MATLAB range e.g. 1:0.1:5, 'all'):",
+                        "Delays to plot (comma-separated or range e.g. 1:0.1:5, 'all'):",
                         [active_delay],
                         all_values=self.twoD_dataset.delays,
                     )
@@ -967,7 +967,7 @@ class TwoDTabMixin:
                 if ok:
                     t2_delays = self._ask_values(
                         "Transient spectra slices",
-                        "Delays to plot (comma-separated or MATLAB range e.g. 1:0.1:5, 'all'):",
+                        "Delays to plot (comma-separated or range e.g. 1:0.1:5, 'all'):",
                         [active_delay],
                         all_values=self.twoD_dataset.delays,
                     )
@@ -987,7 +987,7 @@ class TwoDTabMixin:
                     probe_wn = points[0]
                     t2_delays = self._ask_values(
                         "Transient spectra slices",
-                        "Delays to plot (comma-separated or MATLAB range e.g. 1:0.1:5, 'all'):",
+                        "Delays to plot (comma-separated or range e.g. 1:0.1:5, 'all'):",
                         [active_delay],
                         all_values=self.twoD_dataset.delays,
                     )
@@ -1009,7 +1009,7 @@ class TwoDTabMixin:
                 if ok:
                     t2_delays = self._ask_values(
                         "Transient spectra slices",
-                        "Delays to plot (comma-separated or MATLAB range e.g. 1:0.1:5, 'all'):",
+                        "Delays to plot (comma-separated or range e.g. 1:0.1:5, 'all'):",
                         [active_delay],
                         all_values=self.twoD_dataset.delays,
                     )
@@ -1051,7 +1051,7 @@ class TwoDTabMixin:
 
                         t2_delays = self._ask_values(
                             "Transient spectra slices",
-                            "Delays to plot (comma-separated or MATLAB range e.g. 1:0.1:5, 'all'):",
+                            "Delays to plot (comma-separated or range e.g. 1:0.1:5, 'all'):",
                             [active_delay],
                             all_values=self.twoD_dataset.delays,
                         )
@@ -1093,7 +1093,7 @@ class TwoDTabMixin:
                         p_min, p_max = map(float, text.split(":"))
                         t2_delays = self._ask_values(
                             "Transient spectra slices",
-                            "Delays to plot (comma-separated or MATLAB range e.g. 1:0.1:5, 'all'):",
+                            "Delays to plot (comma-separated or range e.g. 1:0.1:5, 'all'):",
                             [active_delay],
                             all_values=self.twoD_dataset.delays,
                         )
@@ -1141,7 +1141,7 @@ class TwoDTabMixin:
 
                         t2_delays = self._ask_values(
                             "Transient spectra slices",
-                            "Delays to plot (comma-separated or MATLAB range e.g. 1:0.1:5, 'all'):",
+                            "Delays to plot (comma-separated or range e.g. 1:0.1:5, 'all'):",
                             [active_delay],
                             all_values=self.twoD_dataset.delays,
                         )
@@ -1185,7 +1185,7 @@ class TwoDTabMixin:
                         pr_min, pr_max = map(float, text.split(":"))
                         t2_delays = self._ask_values(
                             "Transient spectra slices",
-                            "Delays to plot (comma-separated or MATLAB range e.g. 1:0.1:5, 'all'):",
+                            "Delays to plot (comma-separated or range e.g. 1:0.1:5, 'all'):",
                             [active_delay],
                             all_values=self.twoD_dataset.delays,
                         )

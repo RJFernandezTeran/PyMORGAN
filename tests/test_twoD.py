@@ -489,3 +489,71 @@ def test_robust_polyfit_edge_cases():
     assert np.isclose(c_flat[1], 5.0)
 
 
+# --------------------------------------------------------------------------- #
+# Dataset2D Copy, Crop & Slice                                                #
+# --------------------------------------------------------------------------- #
+def test_dataset2d_copy_and_crop():
+    t2 = np.array([0.1, 0.5, 1.0, 5.0])
+    pump = np.linspace(2000, 2050, 12)
+    probe = np.linspace(1950, 2100, 16)
+    Z = np.ones((len(pump), len(probe), len(t2)))
+    units = {
+        "unitsT_lbl": "Delay",
+        "unitsT_ltx": "ps",
+        "unitsL_lbl": "Wavenumber",
+        "unitsL_ltx": r"$\mathrm{cm^{-1}}$",
+        "unitsZ_lbl": r"$\Delta$A",
+        "unitsZ_ltx": "mOD",
+    }
+    ds2 = Dataset2D(Z=Z, delays=t2, pump=pump, probe=probe, units=units, data_type="2DIR")
+
+    cp = ds2.copy(deep=True)
+    assert cp is not ds2
+    assert np.array_equal(cp.Z, ds2.Z)
+
+    cp.Z[0, 0, 0] = 42.0
+    assert ds2.Z[0, 0, 0] != 42.0
+
+    cropped = ds2.copy().crop(
+        t2_min=0.5, t2_max=2.0, pump_min=2010, pump_max=2040, probe_min=1980, probe_max=2080
+    )
+    assert cropped.delays[0] >= 0.5
+    assert cropped.delays[-1] <= 2.0
+    assert cropped.pump[0] >= 2010
+    assert cropped.pump[-1] <= 2040
+    assert cropped.probe[0] >= 1980
+    assert cropped.probe[-1] <= 2080
+    assert cropped.Z.shape == (len(cropped.pump), len(cropped.probe), len(cropped.delays))
+
+
+def test_slice_dataset1d_inheritance():
+    from pymorgan.oneD.dataset import Dataset1D
+    from pymorgan.twoD.analyse import SliceDataset1D
+
+    t2 = np.array([0.1, 0.5, 1.0, 5.0])
+    pump = np.linspace(2000, 2050, 12)
+    probe = np.linspace(1950, 2100, 16)
+    Z = np.ones((len(pump), len(probe), len(t2)))
+    units = {
+        "unitsT_lbl": "Delay",
+        "unitsT_ltx": "ps",
+        "unitsL_lbl": "Wavenumber",
+        "unitsL_ltx": r"$\mathrm{cm^{-1}}$",
+        "unitsZ_lbl": r"$\Delta$A",
+        "unitsZ_ltx": "mOD",
+    }
+    ds2 = Dataset2D(Z=Z, delays=t2, pump=pump, probe=probe, units=units, data_type="2DIR")
+
+    slice_1d = ds2.slice_at_pump(pump[2])
+    assert isinstance(slice_1d, SliceDataset1D)
+    assert isinstance(slice_1d, Dataset1D)
+    assert slice_1d.delays.shape == ds2.delays.shape
+    assert slice_1d.probe.shape == ds2.probe.shape
+    assert slice_1d.noise_array() is None
+
+    cropped_slice = slice_1d.copy().crop(tmin=0.5, tmax=2.0)
+    assert len(cropped_slice.delays) <= len(slice_1d.delays)
+    df = slice_1d.to_dataframe(format="tidy")
+    assert len(df) == len(slice_1d.delays) * len(slice_1d.probe)
+
+

@@ -445,3 +445,89 @@ The \textbf{Subtract Shockwave\ldots} button opens
 probe value) whose average forms the shockwave reference trace, inspects a
 live preview, and confirms. The correction calls \code{subtract\_shockwave}
 and updates the dataset in place.
+
+\subsubsection{Dataset Stitching: Wavelength and Timescale}\label{sec:oneD:stitching}
+
+Ultrafast experiments often collect transient spectra across distinct spectral windows (such as UV/Vis and NIR spectrometers) or combine ultrafast optical delay lines with electronically synchronised sub-nanosecond to microsecond delays. PyMORGAN groups these operations under the \textbf{Spectra $\to$ Stitch Datasets} menu, providing two dedicated graphical interfaces.
+
+\paragraph{Wavelength stitching (\code{Stitch Wavelength Windows...}).}
+When measurements are conducted in adjacent or overlapping wavelength ranges (for instance, a UV/Vis window spanning $350$--$700\,\mathrm{nm}$ and an NIR window spanning $650$--$1400\,\mathrm{nm}$):
+\begin{enumerate}
+  \item \textbf{Overlap detection:} The tool automatically discovers the shared probe interval $[\lambda_{\mathrm{min}}^{\mathrm{ovl}}, \lambda_{\mathrm{max}}^{\mathrm{ovl}}]$ between Dataset~1 and Dataset~2.
+  \item \textbf{Amplitude scaling:} To compensate for slight differences in probe intensity or detector sensitivity, an optimal least-squares scaling coefficient $\alpha$ is evaluated across the shared delay and wavelength grid:
+    \begin{equation}
+      \alpha = \frac{\sum_{\tau, \lambda} Z_1(\tau, \lambda)\, Z_2(\tau, \lambda)}{\sum_{\tau, \lambda} Z_2(\tau, \lambda)^2}.
+    \end{equation}
+    The user can choose to scale Dataset~2 to Dataset~1, scale Dataset~1 to Dataset~2, or maintain native unscaled amplitudes.
+  \item \textbf{Smooth cosine taper blending:} Across the transition window, signals are seamlessly blended using a raised cosine taper weight:
+    \begin{equation}
+      w(\lambda) = \frac{1}{2} \left[ 1 + \cos\left( \pi \frac{\lambda - \lambda_{\mathrm{min}}^{\mathrm{ovl}}}{\lambda_{\mathrm{max}}^{\mathrm{ovl}} - \lambda_{\mathrm{min}}^{\mathrm{ovl}}} \right) \right],
+    \end{equation}
+    \begin{equation}
+      Z_{\mathrm{stitched}}(\tau, \lambda) = w(\lambda)\, Z_1(\tau, \lambda) + \big(1 - w(\lambda)\big)\, \alpha Z_2(\tau, \lambda).
+    \end{equation}
+    This prevents sharp steps or derivative artefacts in the stitched data.
+  \item \textbf{Live inspection and export:} The dialog provides an interactive 3-panel display (Dataset~1, Dataset~2, and Stitched preview) with kinetic and spectral cut comparisons before updating the main window or exporting to a new \code{.pdat} file.
+\end{enumerate}
+
+\paragraph{Timescale stitching (\code{Stitch Timescales...}).}
+When merging femtosecond/picosecond optical delay data with nanosecond/microsecond flash-photolysis or electronic delay measurements:
+\begin{enumerate}
+  \item \textbf{Delay offset calibration:} Compensates for small timing differences $\Delta \tau_0$ between the independent delay mechanisms so that both axes share an identical time-zero reference.
+  \item \textbf{Overlap interpolation and cross-scaling:} Identifies the overlapping delay window (typically $1$--$5\,\mathrm{ns}$), estimates the relative signal scaling factor via linear regression over the overlapping delays, and resamples the dataset onto a unified temporal grid.
+  \item The combined time axis preserves fine sub-picosecond temporal resolution around time zero while transitioning smoothly to logarithmic or extended linear steps at late nanosecond and microsecond delays.
+\end{enumerate}
+
+\subsubsection{Singular Value Decomposition (SVD)}\label{sec:oneD:svd}
+
+Accessed via \textbf{Analysis $\to$ Singular Value Decomposition (SVD)...}, this tool provides model-free factorisation of the two-dimensional transient matrix $Z \in \mathbb{R}^{N_\tau \times N_\lambda}$:
+\begin{equation}
+  Z = U \Sigma V^{\mathsf{T}} = \sum_{k=1}^{\min(N_\tau, N_\lambda)} \sigma_k\, \mathbf{u}_k\, \mathbf{v}_k^{\mathsf{T}},
+\end{equation}
+where:
+\begin{itemize}
+  \item $\Sigma = \operatorname{diag}(\sigma_1, \sigma_2, \dots)$ contains the singular values in descending order, representing the variance/energy carried by each component.
+  \item The columns of $U$ ($\mathbf{u}_k \in \mathbb{R}^{N_\tau}$) represent the orthonormal left singular vectors, corresponding to the time-dependent kinetic evolution of each component.
+  \item The rows of $V^{\mathsf{T}}$ ($\mathbf{v}_k \in \mathbb{R}^{N_\lambda}$) represent the orthonormal right singular vectors, corresponding to the spectral basis shapes of each component.
+\end{itemize}
+
+\paragraph{Diagnostic scree plot.}
+The dialog displays a scree plot showing both the individual singular values $\sigma_k$ (log-scaled) and the cumulative variance explained $\sum_{i=1}^k \sigma_i^2 / \sum \sigma_j^2 \times 100\%$. The transition from rapidly falling singular values to a flat, noisy plateau indicates the number of genuine photophysical species present in the sample, distinguishing genuine chemical states from random detector noise.
+
+\paragraph{Low-rank noise filtering and reconstruction.}
+Users can select a rank cutoff $K$ (e.g.\ $K=3$) to reconstruct a low-rank, noise-filtered approximation of the transient surface:
+\begin{equation}
+  Z_{\mathrm{filtered}} = \sum_{k=1}^{K} \sigma_k\, \mathbf{u}_k\, \mathbf{v}_k^{\mathsf{T}}.
+\end{equation}
+The dialog provides real-time contour previews of the raw data, the low-rank reconstruction, and the residual matrix $Z - Z_{\mathrm{filtered}}$. The filtered dataset can be committed directly to the main PyMORGAN session or exported to disk as a clean \code{.pdat} file.
+
+\subsubsection{Polarization Anisotropy and Magic Angle}\label{sec:oneD:anisotropy}
+
+Time-resolved polarization anisotropy allows isolating transition-dipole orientational relaxation (rotational diffusion) from isotropic population decay. The unified polarization suite is accessed through the top-level \textbf{Anisotropy} menu (as well as \textbf{Spectra $\to$ Calculate polarization anisotropy...}). It seamlessly handles:
+\begin{itemize}
+  \item \textbf{PyMESS slow-modulation datasets (\code{.h5}):} Polarization states (parallel and perpendicular) acquired with slow modulation are automatically recognised from metadata, labeled, and paired.
+  \item \textbf{Multi-detector instruments:} Hardware setups recording parallel and perpendicular signals on distinct detector channels.
+  \item \textbf{Separate files:} Two distinct single-channel measurements (one parallel, one perpendicular) paired directly via the interactive file browser.
+  \item \textbf{Legacy MESS folder archives:} Backwards-compatible presets (UV/IR anisotropy and calculated/experimental magic angles) accessible via the legacy submenu.
+\end{itemize}
+
+\paragraph{G-factor correction.}
+To account for differences in spectrometer throughput, grating efficiency, and detector sensitivity for parallel versus perpendicular polarizations, a correction factor $G$ is applied:
+\begin{equation}
+  G = \frac{\Delta A_\parallel(\tau_{\mathrm{iso}}, \lambda)}{\Delta A_\perp(\tau_{\mathrm{iso}}, \lambda)},
+\end{equation}
+which can either be specified as a calibrated constant, read directly from acquisition metadata (e.g.\ in PyMESS datasets), or determined by tail-matching at late delay times where rotational diffusion has fully randomised the orientation distribution ($r \to 0$).
+
+\paragraph{Anisotropy and isotropic decay.}
+The time-resolved anisotropy $r(\tau, \lambda)$, the isotropic (magic-angle equivalent) absorbance change $\Delta A_{\mathrm{iso}}(\tau, \lambda)$, and the polarization difference $\Delta I(\tau, \lambda)$ are computed according to:
+\begin{equation}
+  r(\tau, \lambda) = \frac{\Delta A_\parallel(\tau, \lambda) - G\, \Delta A_\perp(\tau, \lambda)}{\Delta A_\parallel(\tau, \lambda) + 2G\, \Delta A_\perp(\tau, \lambda)},
+\end{equation}
+\begin{equation}
+  \Delta A_{\mathrm{iso}}(\tau, \lambda) = \frac{\Delta A_\parallel(\tau, \lambda) + 2G\, \Delta A_\perp(\tau, \lambda)}{3},
+\end{equation}
+\begin{equation}
+  \Delta I(\tau, \lambda) = \Delta A_\parallel(\tau, \lambda) - G\, \Delta A_\perp(\tau, \lambda).
+\end{equation}
+The calculated $\Delta A_{\mathrm{iso}}$ is completely devoid of rotational reorientation dynamics, matching what would be measured directly at the magic angle ($54.7^\circ$). In addition to the rich interactive dialog—featuring simultaneous intensity and $r(\tau)$ kinetic traces, denominator noise thresholding, and probe wavelength slicing—the \textbf{Anisotropy} menu provides instant 1-click execution to replace the active workspace dataset with $r(\tau,\lambda)$, $\Delta A_{\mathrm{iso}}$, or the polarized components for immediate downstream kinetic analysis.
+

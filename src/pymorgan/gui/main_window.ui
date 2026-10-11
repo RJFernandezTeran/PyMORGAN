@@ -343,16 +343,6 @@ QTabWidget#MainTabs &gt; QTabBar::tab:!selected {
                </item>
                <item>
                 <property name="text">
-                 <string extracomment="UniGE_FLUPSold">UniGE FLUPS (Legacy)</string>
-                </property>
-               </item>
-               <item>
-                <property name="text">
-                 <string extracomment="UniGE_FLUPSnew">UniGE FLUPS (Modern)</string>
-                </property>
-               </item>
-               <item>
-                <property name="text">
                  <string extracomment="Helios_TA">Helios TA (Ultrafast Systems)</string>
                 </property>
                </item>
@@ -3792,6 +3782,10 @@ The magnitude sets the smoothing window width.</string>
     <addaction name="actionLoadSpectrum" />
     <addaction name="actionSubtractShockwave" />
     <addaction name="actionTimeDerivative" />
+    <addaction name="actionSVD" />
+    <addaction name="actionAnisotropy" />
+    <addaction name="actionStitchWavelength" />
+    <addaction name="actionStitchTimescale" />
     <addaction name="separator" />
     <addaction name="actionLoadAbsorption" />
     <addaction name="actionLoadEmission" />
@@ -3887,6 +3881,38 @@ The magnitude sets the smoothing window width.</string>
    </property>
    <property name="toolTip">
     <string>Calculate the time derivative d(ΔA)/dt of transient spectra along the delay axis with optional interpolation and smoothing</string>
+   </property>
+  </action>
+  <action name="actionSVD">
+   <property name="text">
+    <string>&amp;Singular value decomposition (SVD)...</string>
+   </property>
+   <property name="toolTip">
+    <string>Compute SVD factorization, component extraction, scree analysis, and rank-k recomposition</string>
+   </property>
+  </action>
+  <action name="actionAnisotropy">
+   <property name="text">
+    <string>Calculate polarization &amp;anisotropy...</string>
+   </property>
+   <property name="toolTip">
+    <string>Calculate transient polarization anisotropy r(t) from parallel and perpendicular signals</string>
+   </property>
+  </action>
+  <action name="actionStitchWavelength">
+   <property name="text">
+    <string>Stitch &amp;wavelength regions (UV/Vis + NIR)...</string>
+   </property>
+   <property name="toolTip">
+    <string>Stitch spectra from different wavelength/wavenumber windows with overlap scaling and blending</string>
+   </property>
+  </action>
+  <action name="actionStitchTimescale">
+   <property name="text">
+    <string>Stitch &amp;timescales (fs + ns)...</string>
+   </property>
+   <property name="toolTip">
+    <string>Stitch transient absorption datasets across different timescales with wavelength alignment and quadratic scaling</string>
    </property>
   </action>
   <action name="actionLoadAbsorption">

@@ -35,9 +35,14 @@ gui-dev = ["pytest-qt>=4"]
 [project.scripts]
 pymorgan = "pymorgan.launcher:main"
 pymorgan-gui = "pymorgan.gui.app:main"
+pymorgan-suite = "pymorgan.gui.suite_launcher:main"
 pymorgan-install-fonts = "pymorgan.fonts:main"
 pymorgan-edit-gui = "pymorgan.gui.designer:main"
 pymorgan-settings = "pymorgan.gui.settings_app:main"
+
+[project.gui-scripts]
+pymorgan-app = "pymorgan.launcher:main"
+pymorgan-suite-app = "pymorgan.gui.suite_launcher:main"
 
 [tool.hatch.version]
 path = "src/pymorgan/__about__.py"
@@ -55,7 +60,7 @@ dev-mode-dirs = ["src"]
 # --------------------------------------------------------------------------- #
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py312"
 extend-exclude = ["GUI/icons", "old_code", "local", "*.m"]
 
 [tool.ruff.lint]

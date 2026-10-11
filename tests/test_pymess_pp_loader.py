@@ -268,3 +268,22 @@ def test_read_real_20261007_datasets():
         ds.background_correct(tmin=-50.0, tmax=-10.0)
         assert ds.Zavg_C.shape == ds.Zavg_R.shape
         assert np.isfinite(ds.Zavg_C).all()
+
+
+def test_pymess_pp_describe(standard_pp_file: Path, slow_mod_anisotropy_file: Path):
+    """Verify PyMESS describer reports correct state counts and polarization names."""
+    from pymorgan.oneD.load import describe_dataset
+
+    # Standard file: 1 state
+    desc_std = describe_dataset("PyMESS_PP", standard_pp_file)
+    assert desc_std is not None
+    assert desc_std["n_slowmod"] == 1
+    assert desc_std["is_pymess"] is True
+
+    # Slow mod anisotropy file: 2 states (Parallel, Perpendicular)
+    desc_sm = describe_dataset("PyMESS_PP", slow_mod_anisotropy_file)
+    assert desc_sm is not None
+    assert desc_sm["n_slowmod"] == 2
+    assert desc_sm["state_names"] == ["Parallel", "Perpendicular"]
+    assert desc_sm["is_pymess"] is True
+

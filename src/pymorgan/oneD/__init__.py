@@ -31,15 +31,23 @@ from .chirp import (
 from .dataset import Dataset1D, load_1D
 from .load import (
     available_loaders,
+    export_pdat,
     get_loader,
+    load_1D_hdf5,
     load_pymess_anisotropy,
+    read_1D_hdf5,
     read_HARPIA,
     read_PDAT,
     read_PyMESS_PP,
+    read_RAL_IRpp,
     read_UniGE_fsTA,
     register_loader,
+    save_1D_hdf5,
+    write_pdat,
 )
-from .process import background_correct
+from .process import background_correct, calculate_anisotropy
+from .stitch import StitchResult, stitch_time, stitch_wavelength
+from .svd import SVDResult, compute_svd
 
 __all__ = [
     "Dataset1D",
@@ -48,11 +56,24 @@ __all__ = [
     "get_loader",
     "available_loaders",
     "load_pymess_anisotropy",
+    "calculate_anisotropy",
+    "compute_svd",
+    "SVDResult",
+    "StitchResult",
+    "stitch_wavelength",
+    "stitch_time",
     "read_PDAT",
     "read_HARPIA",
     "read_PyMESS_PP",
+    "read_RAL_IRpp",
     "read_UniGE_fsTA",
+    "write_pdat",
+    "export_pdat",
+    "save_1D_hdf5",
+    "load_1D_hdf5",
+    "read_1D_hdf5",
     "background_correct",
+
     "ChirpFit",
     "cauchy_t0",
     "fit_cauchy_dispersion",
@@ -65,3 +86,4 @@ __all__ = [
     "load_chirp_fit",
     "default_chirp_filename",
 ]
+

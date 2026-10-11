@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=PyMORGAN Suite Launcher
+GenericName=Spectroscopy Suite Launcher
+Comment=Launch PyMORGAN (Data Processing) or PyRATE-TA (Fitting)
+Exec=DIR_PLACEHOLDER/PyMORGAN_Suite
+Icon=ICON_PYMORGAN
+Terminal=false
+Categories=Science;Physics;DataVisualization;
+Keywords=spectroscopy;ultrafast;transient;fitting;
+StartupNotify=true
+StartupWMClass=PyMORGAN_Suite

@@ -38,13 +38,6 @@ def test_unknown_type_raises():
         pm.load_1D("x.pdat", data_type="DOES_NOT_EXIST")
 
 
-@pytest.mark.parametrize("name", ["UniGE_FLUPSold", "UniGE_FLUPSnew"])
-def test_stub_loaders_raise(name, tmp_path):
-    f = tmp_path / "x.dat"
-    f.write_text("0")
-    with pytest.raises(NotImplementedError):
-        pm.load_1D(f, data_type=name)
-
 
 def test_registry_shim_matches():
     from pymorgan.oneD import registry
@@ -870,6 +863,39 @@ def test_read_pymess_pp_folder_raises(tmp_path):
 def test_read_pymess_pp_missing_file_raises():
     with pytest.raises(FileNotFoundError):
         pm.load_1D("non_existent_pymess.h5", data_type="PyMESS_PP")
+
+
+def test_ral_irpp_loader(tmp_path):
+    from pymorgan.oneD.load import read_RAL_IRpp
+
+    # Create synthetic RAL folder
+    ral_dir = tmp_path / "RAL_data"
+    ral_dir.mkdir()
+
+    headers = ["Pixel", "5.0", "-10.0", "0.0", "1.0", "100.0"]
+    rows = []
+    for pix in range(256):
+        row = [str(pix + 1)] + [f"{(pix + 1) * 0.01 * float(t):.4f}" for t in headers[1:]]
+        rows.append(",".join(row))
+
+    avg_file = ral_dir / "Run 0 Avg Diff spec 01.csv"
+    avg_file.write_text(",".join(headers) + "\n" + "\n".join(rows), encoding="utf-8")
+
+    det1_probe = np.linspace(1800, 2200, 128)
+    det2_probe = np.linspace(1500, 1800, 128)
+    probe_full = np.concatenate([det1_probe, det2_probe])
+    cal_file = ral_dir / "CalibratedProbe.csv"
+    np.savetxt(cal_file, probe_full, delimiter=",")
+
+    res = read_RAL_IRpp(avg_file)
+    Zavg_R, delays, probe, Units, Nscans, Zss_R, Zstdv = res[:7]
+
+    assert np.all(np.diff(delays) > 0)
+    assert np.allclose(delays, [-10.0, 0.0, 1.0, 5.0, 100.0])
+    assert Zavg_R.shape == (5, 128, 2)
+    assert probe.shape == (128, 2)
+    assert np.allclose(probe[:, 0], det1_probe)
+    assert np.allclose(probe[:, 1], det2_probe)
 
 
 

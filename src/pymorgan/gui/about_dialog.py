@@ -128,6 +128,27 @@ class ModernAboutDialog(QDialog):
             QPushButton#btnManual:hover {
                 background-color: #1d4ed8;
             }
+            QMessageBox {
+                background-color: #0f172a;
+            }
+            QMessageBox QLabel {
+                color: #f8fafc;
+                font-size: 12.5px;
+            }
+            QMessageBox QPushButton {
+                background-color: #1e293b;
+                color: #93c5fd;
+                border: 1px solid #3b82f6;
+                border-radius: 5px;
+                padding: 6px 18px;
+                font-weight: bold;
+                font-size: 12px;
+                min-width: 65px;
+            }
+            QMessageBox QPushButton:hover {
+                background-color: #2563eb;
+                color: #ffffff;
+            }
         """)
 
         # ------------------------------------------------------------------ #
@@ -253,6 +274,12 @@ class ModernAboutDialog(QDialog):
             btn_github.clicked.connect(self._on_open_github)
             btn_layout.addWidget(btn_github)
 
+            btn_updates = QPushButton("🔄 Check for Updates")
+            btn_updates.setObjectName("btnUpdates")
+            btn_updates.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn_updates.clicked.connect(self._on_check_updates)
+            btn_layout.addWidget(btn_updates)
+
         btn_layout.addStretch()
 
         btn_close = QPushButton("Close")
@@ -261,6 +288,39 @@ class ModernAboutDialog(QDialog):
         btn_layout.addWidget(btn_close)
 
         layout.addLayout(btn_layout)
+
+    def _on_check_updates(self) -> None:
+        """Trigger an online update check for the latest release on GitHub."""
+        if not self._github_url:
+            return
+        from .updater import check_for_updates_interactive
+
+        btn = self.findChild(QPushButton, "btnUpdates")
+        if btn is not None:
+            btn.setEnabled(False)
+            btn.setText("⏳ Checking...")
+
+        def restore_btn(*_):
+            if btn is not None:
+                btn.setEnabled(True)
+                btn.setText("🔄 Check for Updates")
+
+        try:
+            check_for_updates_interactive(
+                self,
+                github_url=self._github_url,
+                current_version=self._version,
+                app_name=self._app_name,
+            )
+            worker = getattr(self, "_active_update_worker", None)
+            if worker is not None:
+                worker.check_finished.connect(restore_btn)
+                worker.check_failed.connect(restore_btn)
+            else:
+                restore_btn()
+        except Exception as exc:
+            restore_btn()
+            QMessageBox.warning(self, "Update Check Error", str(exc))
 
     def _on_open_github(self) -> None:
         """Open the project GitHub repository in the default web browser."""

@@ -9,6 +9,7 @@ from __future__ import annotations
 import numpy as np
 
 from ..log import get_logger
+from ..oneD.dataset import Dataset1D
 
 logger = get_logger(__name__)
 
@@ -710,21 +711,28 @@ def nodal_line_slope(data, pump_range=None, probe_range=None, t2_range=None) -> 
     return np.column_stack([delays, nls_slopes])
 
 
-class SliceDataset1D:
+class SliceDataset1D(Dataset1D):
     """A lightweight adapter wrapping a 2D slice/cut as a 1D dataset.
 
-    This allows us to reuse the 1D plotting functions (like plot_spectra and plot_kinetics)
-    without rewriting them.
+    Inherits from :class:`~pymorgan.oneD.dataset.Dataset1D` allowing full access
+    to 1D processing, kinetics, spectral plotting, cropping, and export.
     """
+
     def __init__(self, delays, probe, Z_matrix, units, source=None):
-        self.delays = np.asarray(delays)
-        self.probe = np.asarray(probe)
-        self.Z_R = np.asarray(Z_matrix)  # shape: [Ndelays x Nprobe]
-        self.units = units
-        self.source = source
+        Z_mat = np.asarray(Z_matrix, dtype=float)
+        Z_3d = Z_mat[:, :, np.newaxis] if Z_mat.ndim == 2 else Z_mat
+        super().__init__(
+            Zavg_R=Z_3d,
+            delays=np.asarray(delays, dtype=float),
+            probe=np.asarray(probe, dtype=float),
+            units=units if isinstance(units, dict) else {},
+            source=source,
+            data_type="2D_Slice",
+        )
+        self.Z_R = Z_mat
 
     def _detector_slice(self, detector: int = 0):
-        return self.Z_R
+        return self.Z[:, :, 0] if self.Z.ndim == 3 else self.Z
 
     def noise_array(self):
         """A 2-D slice carries no per-point noise; always ``None``."""
@@ -737,12 +745,14 @@ class SliceDataset1D:
     def _resolve(self, settings, label_style, delta_a_units):
         from ..oneD.dataset import DeltaAUnits
         from ..settings import get_settings
+
         s = settings or get_settings()
         style = label_style if label_style is not None else s.label_style.value
         if isinstance(delta_a_units, str):
             delta_a_units = DeltaAUnits(delta_a_units)
         units = s.units_with_convention(self.units, delta_a_units)
         return s, style, units
+
 
 
 def get_slice_at_pump(data, pump_wn) -> SliceDataset1D:

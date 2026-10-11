@@ -19,6 +19,7 @@ from pathlib import Path
 import numpy as np
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import (
+    QAction,
     QActionGroup,
 )
 from PyQt6.QtWidgets import (
@@ -28,13 +29,13 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QInputDialog,
     QLabel,
+    QMenu,
     QMessageBox,
     QSpinBox,
     QWidget,
 )
 
 import pymorgan as pm
-from pymorgan import helpers as hlp
 from pymorgan.oneD.chirp import (
     default_chirp_filename,
     fit_chirp_automatic,
@@ -45,7 +46,6 @@ from pymorgan.oneD.chirp import (
 from pymorgan.oneD.load import (
     MESS_ANISOTROPY_MODES,
     describe_dataset,
-    mess_recalc_average,
     parse_scan_selection,
 )
 
@@ -140,9 +140,22 @@ class OneDTabMixin:
         self._set_dataset_widgets_visible(True)
 
         act_deriv = getattr(self, "actionTimeDerivative", None)
+        act_svd = getattr(self, "actionSVD", None)
+        act_aniso = getattr(self, "actionAnisotropy", None)
+        act_stitch_wl = getattr(self, "actionStitchWavelength", None)
+        act_stitch_t = getattr(self, "actionStitchTimescale", None)
+        tab_idx = self.MainTabs.currentIndex() if hasattr(self, "MainTabs") and self.MainTabs is not None else 0
+        has_ds = self.dataset is not None
         if act_deriv is not None:
-            tab_idx = self.MainTabs.currentIndex() if hasattr(self, "MainTabs") and self.MainTabs is not None else 0
-            act_deriv.setEnabled(tab_idx == 0 and self.dataset is not None)
+            act_deriv.setEnabled(tab_idx == 0 and has_ds)
+        if act_svd is not None:
+            act_svd.setEnabled(tab_idx == 0 and has_ds)
+        if act_aniso is not None:
+            act_aniso.setEnabled(tab_idx == 0 and has_ds)
+        if act_stitch_wl is not None:
+            act_stitch_wl.setEnabled(tab_idx == 0 and has_ds)
+        if act_stitch_t is not None:
+            act_stitch_t.setEnabled(tab_idx == 0 and has_ds)
 
         if self.dataset is not None:
             has_single = bool(np.isfinite(self.dataset.nscans) and self.dataset.nscans > 0)
@@ -267,8 +280,9 @@ class OneDTabMixin:
             return
 
         import matplotlib.pyplot as plt
-        from pymorgan.steadyState import plot_steady_state
+
         from pymorgan.settings import SteadyStatePlotMode
+        from pymorgan.steadyState import plot_steady_state
 
         pm.apply_style()
         s = pm.get_settings()
@@ -341,13 +355,13 @@ class OneDTabMixin:
         self._build_anisotropy_menu()
 
     def _build_anisotropy_menu(self):
-        """Add a menu-bar 'Anisotropy' menu listing the recalculation modes."""
+        """Add a menu-bar 'Anisotropy' menu with unified interactive and direct calculations."""
         self._aniso_menu = None
         self._aniso_actions = {}
+        self._quick_aniso_actions = []
         menubar = self.menuBar()
         if menubar is None:
             return
-        from PyQt6.QtWidgets import QMenu
 
         menu_help = getattr(self, "menuHelp", None)
         if menu_help is not None:
@@ -355,16 +369,66 @@ class OneDTabMixin:
             menubar.insertMenu(menu_help.menuAction(), menu)
         else:
             menu = menubar.addMenu("Anisotropy")
+
+        # 1. Main interactive action (opens full AnisotropyDialog)
+        act_dialog = QAction("Calculate Polarization Anisotropy...", self)
+        act_dialog.setToolTip(
+            "Open interactive dialog to preview r(t), adjust G-factor, threshold noise, and apply or export components"
+        )
+        act_dialog.triggered.connect(self._calculate_anisotropy)
+        menu.addAction(act_dialog)
+        self.actionAnisotropy = act_dialog
+
+        menu.addSeparator()
+
+        # 2. Quick Direct Calculations (Multi-state / Multi-channel: PyMESS, RAL, UoS, etc.)
+        act_quick_aniso = QAction("Calculate Anisotropy: r(t)", self)
+        act_quick_aniso.setToolTip("Directly calculate and apply r(t) to active workspace")
+        act_quick_aniso.triggered.connect(lambda: self._apply_quick_anisotropy("anisotropy"))
+        menu.addAction(act_quick_aniso)
+        self._quick_aniso_actions.append(act_quick_aniso)
+
+        act_quick_ma = QAction("Calculate Magic Angle: I_MA (Isotropic)", self)
+        act_quick_ma.setToolTip("Directly calculate and apply isotropic magic angle signal (Par + 2*G*Perp)/3")
+        act_quick_ma.triggered.connect(lambda: self._apply_quick_anisotropy("magic_angle"))
+        menu.addAction(act_quick_ma)
+        self._quick_aniso_actions.append(act_quick_ma)
+
+        act_quick_diff = QAction("Calculate Polarization Difference: ΔI", self)
+        act_quick_diff.setToolTip("Directly calculate and apply polarization difference (Par - G*Perp)")
+        act_quick_diff.triggered.connect(lambda: self._apply_quick_anisotropy("difference"))
+        menu.addAction(act_quick_diff)
+        self._quick_aniso_actions.append(act_quick_diff)
+
+        act_extract_par = QAction("Extract Parallel Polarization (I_∥)", self)
+        act_extract_par.setToolTip("Extract parallel channel as a single-detector dataset")
+        act_extract_par.triggered.connect(lambda: self._apply_quick_anisotropy("parallel"))
+        menu.addAction(act_extract_par)
+        self._quick_aniso_actions.append(act_extract_par)
+
+        act_extract_perp = QAction("Extract Perpendicular Polarization (I_⊥)", self)
+        act_extract_perp.setToolTip("Extract perpendicular channel as a single-detector dataset")
+        act_extract_perp.triggered.connect(lambda: self._apply_quick_anisotropy("perpendicular"))
+        menu.addAction(act_extract_perp)
+        self._quick_aniso_actions.append(act_extract_perp)
+
+        menu.addSeparator()
+
+        # 3. Legacy MESS Folder Recalculation Submenu (for legacy directory archives)
+        menu_legacy = QMenu("Legacy MESS Modes (Folder Archive)", menu)
         group = QActionGroup(self)
         group.setExclusive(True)
         for mode in MESS_ANISOTROPY_MODES:
-            act = menu.addAction(mode)
+            act = menu_legacy.addAction(mode)
             act.setCheckable(True)
             act.setChecked(mode == "NONE")
             group.addAction(act)
             act.triggered.connect(lambda _checked=False, m=mode: self._on_anisotropy_changed(m))
             self._aniso_actions[mode] = act
+        menu.addMenu(menu_legacy)
+        self._legacy_aniso_menu = menu_legacy
         self._aniso_group = group
+
         self._aniso_menu = menu
         menu.setEnabled(False)
 
@@ -378,15 +442,80 @@ class OneDTabMixin:
         if act is not None:
             act.setChecked(True)
 
-    def _configure_state_controls(self, meta):
-        """Range/show the spin boxes and enable the anisotropy menu for ``meta``.
+    def _resolve_polarization_detectors(self) -> tuple[int, int]:
+        """Auto-detect parallel and perpendicular channel indices from detector metadata."""
+        if self.dataset is None:
+            return 0, 1
+        n_det = getattr(self.dataset, "n_detectors", 1)
+        det_names = self.dataset.units.get("detectors") if self.dataset.units else []
+        par_idx, perp_idx = 0, min(1, max(0, n_det - 1))
+        if det_names:
+            for i in range(min(n_det, len(det_names))):
+                nm_lower = str(det_names[i]).lower()
+                if "par" in nm_lower:
+                    par_idx = i
+                elif "perp" in nm_lower:
+                    perp_idx = i
+        return par_idx, perp_idx
 
-        ``meta`` is the loader's describe-dict (``n_spectra`` / ``n_slowmod``) or
-        ``None`` for formats without selectable states (controls hidden).
-        """
+    def _apply_quick_anisotropy(self, component: str):
+        """Quickly compute and apply polarization components (anisotropy, magic angle, difference)."""
+        if self.dataset is None:
+            return
+        if getattr(self.dataset, "n_detectors", 1) < 2:
+            QMessageBox.information(
+                self,
+                "Multi-Channel Required",
+                "Quick polarization calculation requires a multi-channel/polarization dataset (e.g. PyMESS slow-modulation).\n\n"
+                "To calculate anisotropy from two separate single-channel files, use "
+                "'Calculate Polarization Anisotropy...'.",
+            )
+            return
+
+        det_par, det_perp = self._resolve_polarization_detectors()
+        g_val = 1.0
+        if self.dataset.units:
+            if "g_factor" in self.dataset.units:
+                try:
+                    g_val = float(self.dataset.units["g_factor"])
+                except Exception:
+                    pass
+            elif "pymess_metadata" in self.dataset.units:
+                pm_meta = self.dataset.units.get("pymess_metadata") or {}
+                for gk in ("g_factor", "G_factor", "gfactor"):
+                    if gk in pm_meta:
+                        try:
+                            g_val = float(pm_meta[gk])
+                            break
+                        except Exception:
+                            pass
+
+        try:
+            comps = self.dataset.calculate_anisotropy(
+                g_factor=g_val,
+                return_components=True,
+                detector_par=det_par,
+                detector_perp=det_perp,
+            )
+            if component in comps:
+                new_ds = comps[component]
+                self._on_anisotropy_applied(new_ds)
+        except Exception as exc:
+            from pymorgan.log import get_logger
+
+            get_logger(__name__).exception("Quick anisotropy calculation failed: %s", exc)
+            QMessageBox.critical(self, "Calculation Error", f"Failed to compute {component}:\n{exc}")
+
+    def _configure_state_controls(self, meta):
+        """Range/show the spin boxes and enable the anisotropy menu for ``meta`` or multi-detector dataset."""
         self._mess_meta = meta
         n_spec = int(meta.get("n_spectra", 1)) if meta else 1
         n_slow = int(meta.get("n_slowmod", 1)) if meta else 1
+        has_ds = self.dataset is not None
+        n_det = getattr(self.dataset, "n_detectors", 1) if has_ds else 1
+        is_legacy_mess = meta is not None and "anisotropy_modes" in meta and not meta.get("is_pymess", False)
+        can_quick = (n_det >= 2) or (meta is not None and int(meta.get("n_slowmod", 1)) >= 2)
+
         self._suppress_state = True
         try:
             if self._sp_spin is not None:
@@ -404,10 +533,16 @@ class OneDTabMixin:
                 self._sm_spin.setVisible(vis)
                 self._sm_spin.setEnabled(vis and self._mess_anisotropy == "NONE")
             if self._state_bar is not None:
-                self._state_bar.setVisible(n_spec > 1 or n_slow > 1)
+                self._state_bar.setVisible(is_legacy_mess and (n_spec > 1 or n_slow > 1))
+
             if getattr(self, "_aniso_menu", None) is not None:
-                self._aniso_menu.setEnabled(n_slow > 1)
-                if n_slow <= 1 and self._mess_anisotropy != "NONE":
+                self._aniso_menu.setEnabled(has_ds)
+                for act in getattr(self, "_quick_aniso_actions", []):
+                    act.setEnabled(can_quick)
+                if getattr(self, "_legacy_aniso_menu", None) is not None:
+                    self._legacy_aniso_menu.menuAction().setVisible(is_legacy_mess)
+                    self._legacy_aniso_menu.setEnabled(is_legacy_mess and int(meta.get("n_slowmod", 1)) >= 2)
+                if not can_quick and self._mess_anisotropy != "NONE":
                     self._reset_state_selection()
         finally:
             self._suppress_state = False
@@ -694,7 +829,7 @@ class OneDTabMixin:
                     return
                 delays = self._ask_values(
                     "Transient spectra",
-                    "Delays to plot (comma-separated or MATLAB range e.g. 1:0.1:5, 'all'):",
+                    "Delays to plot (comma-separated or range e.g. 1:0.1:5, 'all'):",
                     self._auto_delays(),
                     all_values=self.dataset.delays,
                 )
@@ -720,7 +855,7 @@ class OneDTabMixin:
                     probe_disp = pc.probe_from_native(probe_disp)
                 positions = self._ask_values(
                     "Kinetic cuts",
-                    "Probe wavelengths / wavenumbers (comma-separated or MATLAB range e.g. 1:0.1:5, 'all'):",
+                    "Probe wavelengths / wavenumbers (comma-separated or range e.g. 1:0.1:5, 'all'):",
                     self._auto_wavelengths(),
                     all_values=probe_disp,
                 )
@@ -774,7 +909,7 @@ class OneDTabMixin:
                     return
                 delays = self._ask_values(
                     "Per-scan spectra",
-                    "Delays to plot (comma-separated or MATLAB range e.g. 1:0.1:5, 'all'):",
+                    "Delays to plot (comma-separated or range e.g. 1:0.1:5, 'all'):",
                     self._auto_delays(),
                     all_values=self.dataset.delays,
                 )
@@ -797,7 +932,7 @@ class OneDTabMixin:
                     probe_disp = pc.probe_from_native(probe_disp)
                 positions = self._ask_values(
                     "Per-scan kinetics",
-                    "Probe wavelengths / wavenumbers (comma-separated or MATLAB range e.g. 1:0.1:5, 'all'):",
+                    "Probe wavelengths / wavenumbers (comma-separated or range e.g. 1:0.1:5, 'all'):",
                     self._auto_wavelengths(central_only=True),
                     all_values=probe_disp,
                 )
@@ -893,7 +1028,7 @@ class OneDTabMixin:
 
     @busy_guard("Masking probe region...")
     def _mask_probe_region(self):
-        """Prompt to mask one or more ranges in the probe axis using MATLAB-type syntax."""
+        """Prompt to mask one or more ranges in the probe axis using range syntax."""
         if self.dataset is None:
             self.open_file()
             if self.dataset is None:
@@ -1133,6 +1268,130 @@ class OneDTabMixin:
         except Exception as exc:
             QMessageBox.critical(self, "Time Derivative Failed", str(exc))
 
+    @busy_guard("Singular Value Decomposition (SVD)...")
+    def _run_svd(self):
+        """Open the interactive SVD Analysis and Rank-k Recomposition dialog."""
+        if self.dataset is None:
+            self.open_file()
+            if self.dataset is None:
+                return
+
+        from pymorgan.gui.svd_dialog import SVDDialog
+
+        dlg = SVDDialog(self, self.dataset)
+        dlg.dataset_applied.connect(self._on_svd_dataset_applied)
+        dlg.exec()
+
+    def _on_svd_dataset_applied(self, new_ds):
+        self.dataset = new_ds
+        self._preview_contour()
+        self._update_sample_info()
+        self.statusBar().showMessage(f"Applied SVD recomposition to active workspace ({new_ds.source}).")
+
+    @busy_guard("Calculating polarization anisotropy...")
+    def _calculate_anisotropy(self):
+        """Open the interactive Polarization Anisotropy dialog."""
+        if self.dataset is None:
+            self.open_file()
+            if self.dataset is None:
+                return
+
+        from pymorgan.gui.anisotropy_dialog import AnisotropyDialog
+
+        dlg = AnisotropyDialog(self, self.dataset)
+        dlg.anisotropy_applied.connect(self._on_anisotropy_applied)
+        dlg.exec()
+
+    def _on_anisotropy_applied(self, new_ds):
+        self.dataset = new_ds
+        if getattr(self, "plot_controls", None) is not None:
+            self.plot_controls.set_dataset(new_ds)
+        self._preview_contour()
+        self._update_sample_info()
+        dtype_name = getattr(new_ds, "data_type", "Polarization calculation")
+        self.statusBar().showMessage(f"Applied {dtype_name} to active workspace ({new_ds.source}).")
+
+    @busy_guard("Stitching wavelength windows...")
+    def _stitch_wavelength(self):
+        """Open the interactive Wavelength Stitching dialog (UV/Vis + NIR)."""
+        if self.dataset is None:
+            self.open_file()
+            if self.dataset is None:
+                return
+
+        from pymorgan.gui.wavelength_stitch_dialog import WavelengthStitchDialog
+
+        dlg = WavelengthStitchDialog(self, self.dataset)
+        dlg.stitch_applied.connect(self._on_stitch_applied)
+        dlg.exec()
+
+    @busy_guard("Stitching timescales...")
+    def _stitch_timescale(self):
+        """Open the interactive Timescale Stitching dialog (fs + ns)."""
+        if self.dataset is None:
+            self.open_file()
+            if self.dataset is None:
+                return
+
+        from pymorgan.gui.timescale_stitch_dialog import TimescaleStitchDialog
+
+        dlg = TimescaleStitchDialog(self, self.dataset)
+        dlg.stitch_applied.connect(self._on_stitch_applied)
+        dlg.exec()
+
+    def _on_stitch_applied(self, new_ds):
+        self.dataset = new_ds
+        self._preview_contour()
+        self._update_sample_info()
+        self.statusBar().showMessage(f"Applied stitched dataset to active workspace ({new_ds.source}).")
+
+    def _launch_pyrate_ta(self):
+        """Launch companion package PyRATE-TA."""
+        from pymorgan.integrations.pyrate_bridge import is_pyrate_installed, launch_pyrate
+
+        if not is_pyrate_installed():
+            from PyQt6.QtWidgets import QMessageBox
+
+            QMessageBox.information(
+                self,
+                "PyRATE-TA Not Installed",
+                "PyRATE-TA is the companion kinetic analysis package for PyMORGAN.\n\n"
+                "Install it in your environment using:\n"
+                "    uv pip install pyrate-ta\n"
+                "or clone the companion repository:\n"
+                "    https://github.com/RJFernandezTeran/PyRATE-TA",
+            )
+            return
+
+        try:
+            launch_pyrate()
+            self.statusBar().showMessage("Launched PyRATE-TA kinetic analysis GUI.", 5000)
+        except Exception as exc:
+            from PyQt6.QtWidgets import QMessageBox
+
+            QMessageBox.critical(self, "Launch Error", f"Could not launch PyRATE-TA:\n{exc}")
+
+    def _send_to_pyrate_ta(self):
+        """Send current processed 1D dataset to PyRATE-TA for kinetic analysis."""
+        if self.dataset is None:
+            self.open_file()
+            if self.dataset is None:
+                return
+
+        from pymorgan.integrations.pyrate_bridge import is_pyrate_installed, launch_pyrate
+
+        if not is_pyrate_installed():
+            self._launch_pyrate_ta()
+            return
+
+        try:
+            launch_pyrate(dataset_or_path=self.dataset)
+            self.statusBar().showMessage("Handed off active dataset to PyRATE-TA.", 5000)
+        except Exception as exc:
+            from PyQt6.QtWidgets import QMessageBox
+
+            QMessageBox.critical(self, "Handoff Error", f"Could not send dataset to PyRATE-TA:\n{exc}")
+
     @busy_guard("Fitting chirp correction...")
     def _fit_chirp(self):
         """Fit the chirp/dispersion correction (Automatic / Manual / Step Function).
@@ -1274,7 +1533,7 @@ class OneDTabMixin:
             self,
             "Load chirp correction",
             start_dir,
-            "Chirp correction files (*.mat *.h5 *.hdf5 *.json);;MATLAB files (*.mat);;HDF5 files (*.h5 *.hdf5);;JSON files (*.json);;All files (*)",
+            "Chirp correction files (*.mat *.h5 *.hdf5 *.json);;MAT files (*.mat);;HDF5 files (*.h5 *.hdf5);;JSON files (*.json);;All files (*)",
         )
         if not path:
             return
@@ -1409,7 +1668,7 @@ class OneDTabMixin:
                 self,
                 "Save chirp correction",
                 default_path,
-                "MATLAB files (*.mat);;HDF5 files (*.h5 *.hdf5);;JSON files (*.json);;All files (*)",
+                "MAT files (*.mat);;HDF5 files (*.h5 *.hdf5);;JSON files (*.json);;All files (*)",
             )
             if not path:
                 self.statusBar().showMessage("Chirp correction applied (not saved).")

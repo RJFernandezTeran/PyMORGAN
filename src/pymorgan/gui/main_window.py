@@ -135,6 +135,20 @@ class MainWindow(
 
         self._apply_button_aesthetics()
         self._apply_button_tooltips_and_states()
+        QTimer.singleShot(1500, self._start_bg_update_check)
+
+    def _start_bg_update_check(self):
+        """Perform a quiet, non-blocking background check for updates."""
+        try:
+            from .updater import check_for_updates_background
+            check_for_updates_background(
+                self,
+                github_url="https://github.com/RJFernandezTeran/PyMORGAN",
+                current_version=pm.__version__,
+                app_name="PyMORGAN",
+            )
+        except Exception:
+            pass
 
     def _load_ui(self):
         """Load the Qt Designer UI, using a compiled module when possible.
@@ -833,6 +847,10 @@ class MainWindow(
             "actionLoadSpectrum": self._load_spectrum,
             "actionSubtractShockwave": self._subtract_shockwave,
             "actionTimeDerivative": self._calculate_time_derivative,
+            "actionSVD": self._run_svd,
+            "actionAnisotropy": self._calculate_anisotropy,
+            "actionStitchWavelength": self._stitch_wavelength,
+            "actionStitchTimescale": self._stitch_timescale,
             "actionLoadAbsorption": lambda _=False: self._load_steady_state("absorption"),
             "actionLoadEmission": lambda _=False: self._load_steady_state("emission"),
             "actionClearSteadyState": self._clear_steady_state,
@@ -847,6 +865,56 @@ class MainWindow(
             action = getattr(self, name, None)
             if action is not None:
                 action.triggered.connect(slot)
+
+        # Ensure analysis and stitching actions are in menuSpectra even if not defined in .ui
+        menu_spec = getattr(self, "menuSpectra", None)
+        if menu_spec is not None:
+            from PyQt6.QtGui import QAction
+
+            if getattr(self, "actionSVD", None) is None:
+                act_svd = QAction("Singular Value Decomposition (SVD)...", self)
+                act_svd.triggered.connect(self._run_svd)
+                menu_spec.addAction(act_svd)
+                self.actionSVD = act_svd
+            if getattr(self, "actionAnisotropy", None) is None:
+                act_aniso = QAction("Calculate Polarization Anisotropy...", self)
+                act_aniso.triggered.connect(self._calculate_anisotropy)
+                menu_spec.addAction(act_aniso)
+                self.actionAnisotropy = act_aniso
+            from PyQt6.QtWidgets import QMenu
+
+            menu_stitch = QMenu("Stitch Datasets", menu_spec)
+            menu_spec.addMenu(menu_stitch)
+
+            act_stitch_wl = getattr(self, "actionStitchWavelength", None)
+            if act_stitch_wl is None:
+                act_stitch_wl = QAction("Stitch Wavelength Windows (UV/Vis + NIR)...", self)
+                act_stitch_wl.triggered.connect(self._stitch_wavelength)
+                self.actionStitchWavelength = act_stitch_wl
+            else:
+                menu_spec.removeAction(act_stitch_wl)
+            menu_stitch.addAction(act_stitch_wl)
+
+            act_stitch_t = getattr(self, "actionStitchTimescale", None)
+            if act_stitch_t is None:
+                act_stitch_t = QAction("Stitch Timescales (fs + ns)...", self)
+                act_stitch_t.triggered.connect(self._stitch_timescale)
+                self.actionStitchTimescale = act_stitch_t
+            else:
+                menu_spec.removeAction(act_stitch_t)
+            menu_stitch.addAction(act_stitch_t)
+
+            if getattr(self, "actionSendToPyRATE", None) is None:
+                menu_spec.addSeparator()
+                act_send_pyrate = QAction("Send Active Dataset to PyRATE-TA (Kinetic Analysis)...", self)
+                act_send_pyrate.triggered.connect(self._send_to_pyrate_ta)
+                menu_spec.addAction(act_send_pyrate)
+                self.actionSendToPyRATE = act_send_pyrate
+            if getattr(self, "actionLaunchPyRATE", None) is None:
+                act_launch_pyrate = QAction("Launch PyRATE-TA...", self)
+                act_launch_pyrate.triggered.connect(self._launch_pyrate_ta)
+                menu_spec.addAction(act_launch_pyrate)
+                self.actionLaunchPyRATE = act_launch_pyrate
 
         if hasattr(self, "actionReload") and self.actionReload is not None:
             self.actionReload.setShortcut(QKeySequence(Qt.Key.Key_F5))
@@ -1027,70 +1095,7 @@ class MainWindow(
             return
         try:
             self._apply_background()
-
-            delays = np.asarray(self.dataset.delays, dtype=float)
-            noise_arr = self.dataset.noise_array()
-
-            lbl = self.dataset.units.get("unitsL_lbl", "")
-            if lbl == "Wavenumber":
-                probe_unit = "cm^{-1}"
-            elif lbl == "Wavelength":
-                probe_unit = "nm"
-            elif lbl == "Energy":
-                probe_unit = "eV"
-            else:
-                probe_unit = "nm"
-            time_unit = self.dataset.units.get("unitsT_ltx", "ps")
-            header_line = f"{time_unit}*{probe_unit}"
-
-            exported_paths = []
-            base_pdat_path = Path(path)
-            if base_pdat_path.suffix.lower() != ".pdat":
-                base_pdat_path = base_pdat_path.with_suffix(".pdat")
-
-            for d in range(n_det):
-                det_num = d + 1
-                if n_det > 1:
-                    base_stem = base_pdat_path.stem
-                    if re.search(r"_DET\d+", base_stem, flags=re.IGNORECASE):
-                        target_stem = re.sub(r"_DET\d+", f"_DET{det_num}", base_stem, flags=re.IGNORECASE)
-                    else:
-                        target_stem = f"{base_stem}_DET{det_num}"
-                    pdat_path = base_pdat_path.with_name(target_stem + ".pdat")
-                else:
-                    pdat_path = base_pdat_path
-
-                probe_d = np.asarray(self.dataset._detector_probe(d), dtype=float)
-                z_d = np.asarray(self.dataset.Z)
-                if z_d.ndim == 3:
-                    z_d = z_d[:, :, d]
-
-                pdat_table = np.empty((z_d.shape[0] + 1, z_d.shape[1] + 1))
-                pdat_table[0, 0] = 0.0
-                pdat_table[0, 1:] = probe_d
-                pdat_table[1:, 0] = delays
-                pdat_table[1:, 1:] = z_d
-
-                with open(pdat_path, "w", newline="") as f:
-                    f.write(f"{header_line}\n")
-                    np.savetxt(f, pdat_table, delimiter=",", fmt="%.18g")
-                exported_paths.append(pdat_path)
-
-                if noise_arr is not None:
-                    z_noise = np.asarray(noise_arr)
-                    if z_noise.ndim == 3:
-                        z_noise = z_noise[:, :, d]
-                    pdatn_table = np.empty((z_noise.shape[0] + 1, z_noise.shape[1] + 1))
-                    pdatn_table[0, 0] = 0.0
-                    pdatn_table[0, 1:] = probe_d
-                    pdatn_table[1:, 0] = delays
-                    pdatn_table[1:, 1:] = z_noise
-
-                    pdatn_path = pdat_path.with_suffix(".pdatn")
-                    with open(pdatn_path, "w", newline="") as f:
-                        f.write(f"{header_line}\n")
-                        np.savetxt(f, pdatn_table, delimiter=",", fmt="%.18g")
-
+            exported_paths = self.dataset.to_pdat(path, use_corrected=True)
             msg_path = "\n".join(str(p) for p in exported_paths)
             QMessageBox.information(self, "Export complete", f"PDAT file(s) exported at:\n{msg_path}")
             self.statusBar().showMessage(f"Exported PDAT to {exported_paths[0]}")
@@ -1150,12 +1155,31 @@ class MainWindow(
         act_1d = getattr(self, "actionExportPDAT", None)
         act_2d = getattr(self, "actionExportP2DAT", None)
         act_deriv = getattr(self, "actionTimeDerivative", None)
+        act_svd = getattr(self, "actionSVD", None)
+        act_aniso = getattr(self, "actionAnisotropy", None)
+        act_stitch_wl = getattr(self, "actionStitchWavelength", None)
+        act_stitch_t = getattr(self, "actionStitchTimescale", None)
+        act_send_pyrate = getattr(self, "actionSendToPyRATE", None)
         if act_1d is not None:
             act_1d.setEnabled(index == 0)
         if act_2d is not None:
             act_2d.setEnabled(index == 1)
+        has_1d_ds = index == 0 and getattr(self, "dataset", None) is not None
         if act_deriv is not None:
-            act_deriv.setEnabled(index == 0 and getattr(self, "dataset", None) is not None)
+            act_deriv.setEnabled(has_1d_ds)
+        if act_svd is not None:
+            act_svd.setEnabled(has_1d_ds)
+        if act_aniso is not None:
+            act_aniso.setEnabled(has_1d_ds)
+        if act_stitch_wl is not None:
+            act_stitch_wl.setEnabled(has_1d_ds)
+        if act_stitch_t is not None:
+            act_stitch_t.setEnabled(has_1d_ds)
+        if act_send_pyrate is not None:
+            act_send_pyrate.setEnabled(has_1d_ds)
+        menu_aniso = getattr(self, "_aniso_menu", None)
+        if menu_aniso is not None:
+            menu_aniso.setEnabled(has_1d_ds)
         if index == 0 and getattr(self, "plot_controls", None) is not None:
             self.plot_controls.sync_from_settings()
         elif index == 2:
@@ -1292,7 +1316,7 @@ class MainWindow(
     def _ask_values(
         self, title: str, label: str, default: list, all_values: list | np.ndarray | None = None
     ) -> list | None:
-        """Prompt for cuts: numbers, MATLAB ranges (``1:0.1:5``) or ``all``.
+        """Prompt for cuts: numbers, range expressions (``1:0.1:5``) or ``all``.
 
         The parsing lives in :func:`pymorgan.gui.dialogs.ask_values` so that
         every window asking "which delays?" -- here and in PyRATE-TA -- accepts

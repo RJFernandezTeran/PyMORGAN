@@ -34,6 +34,10 @@ import numpy as np
 
 from pymorgan import helpers as hlp
 
+from ..log import get_logger
+
+logger = get_logger(__name__)
+
 LoaderResult = tuple[Any, Any, Any, dict, Any, Any, Any]
 Loader = Callable[[str], LoaderResult]
 
@@ -234,6 +238,317 @@ def read_PDAT(datafilename: str) -> LoaderResult:
     return Zavg_R, delays, probe, Units, Nscans, Zss_R, Zstdv
 
 
+def write_pdat(
+    path: str | PathLike,
+    delays: np.ndarray,
+    probe: np.ndarray,
+    z_data: np.ndarray,
+    *,
+    time_unit: str = "ps",
+    probe_unit: str = "cm^{-1}",
+    noise: np.ndarray | None = None,
+) -> Path:
+    """Write a 1-D transient absorption slice to a PyMORGAN ``.pdat`` (and optional ``.pdatn``) file.
+
+    Parameters
+    ----------
+    path : str or Path
+        Target file path (.pdat extension added if omitted).
+    delays : ndarray, shape [Ndelays]
+        Delay axis values.
+    probe : ndarray, shape [Npixels]
+        Probe spectral axis values.
+    z_data : ndarray, shape [Ndelays x Npixels]
+        Signal data matrix.
+    time_unit : str, default "ps"
+        Delay timescale unit string (e.g. "ps", "ns", "fs").
+    probe_unit : str, default "cm^{-1}"
+        Probe spectral unit string (e.g. "cm^{-1}", "nm", "eV").
+    noise : ndarray, optional
+        Standard deviation / noise matrix [Ndelays x Npixels]. If supplied, writes a sibling ``.pdatn`` file.
+
+    Returns
+    -------
+    Path
+        The written .pdat file path.
+    """
+    target = Path(path)
+    if target.suffix.lower() != ".pdat":
+        target = target.with_suffix(".pdat")
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    delays_arr = np.asarray(delays, dtype=float).ravel()
+    probe_arr = np.asarray(probe, dtype=float).ravel()
+    z_mat = np.asarray(z_data, dtype=float)
+    if z_mat.ndim == 3 and z_mat.shape[2] == 1:
+        z_mat = z_mat[:, :, 0]
+
+    header_line = f"{time_unit}*{probe_unit}"
+    table = np.empty((z_mat.shape[0] + 1, z_mat.shape[1] + 1), dtype=float)
+    table[0, 0] = 0.0
+    table[0, 1:] = probe_arr
+    table[1:, 0] = delays_arr
+    table[1:, 1:] = z_mat
+
+    with open(target, "w", newline="") as f:
+        f.write(f"{header_line}\n")
+        np.savetxt(f, table, delimiter=",", fmt="%.18g")
+
+    if noise is not None:
+        noise_mat = np.asarray(noise, dtype=float)
+        if noise_mat.ndim == 3 and noise_mat.shape[2] == 1:
+            noise_mat = noise_mat[:, :, 0]
+        n_table = np.empty((noise_mat.shape[0] + 1, noise_mat.shape[1] + 1), dtype=float)
+        n_table[0, 0] = 0.0
+        n_table[0, 1:] = probe_arr
+        n_table[1:, 0] = delays_arr
+        n_table[1:, 1:] = noise_mat
+
+        pdatn_path = target.with_suffix(".pdatn")
+        with open(pdatn_path, "w", newline="") as f:
+            f.write(f"{header_line}\n")
+            np.savetxt(f, n_table, delimiter=",", fmt="%.18g")
+
+    return target
+
+
+def export_pdat(
+    dataset,
+    path: str | PathLike,
+    *,
+    detector: int | None = None,
+    use_corrected: bool = True,
+    write_noise: bool = True,
+) -> list[Path]:
+    """Export a :class:`pymorgan.oneD.Dataset1D` to ``.pdat`` (and optional ``.pdatn``) files.
+
+    If the dataset has multiple detectors and ``detector`` is None, exports one
+    ``.pdat`` per detector with a ``_DET{i}`` filename suffix.
+
+    Returns the list of exported Paths.
+    """
+    base_pdat_path = Path(path)
+    if base_pdat_path.suffix.lower() != ".pdat":
+        base_pdat_path = base_pdat_path.with_suffix(".pdat")
+
+    delays = np.asarray(dataset.delays, dtype=float)
+    noise_arr = dataset.noise_array() if write_noise else None
+
+    lbl = dataset.units.get("unitsL_lbl", "")
+    if lbl == "Wavenumber":
+        probe_unit = "cm^{-1}"
+    elif lbl == "Wavelength":
+        probe_unit = "nm"
+    elif lbl == "Energy":
+        probe_unit = "eV"
+    else:
+        probe_unit = dataset.units.get("unitsL_ltx", "nm").replace("$", "")
+
+    time_unit = dataset.units.get("unitsT_ltx", "ps").replace("$", "")
+
+    z_all = np.asarray(dataset.Z if use_corrected else dataset.Zavg_R, dtype=float)
+    n_det = dataset.n_detectors
+
+    if detector is not None:
+        det_indices = [int(detector)]
+    else:
+        det_indices = list(range(n_det))
+
+    exported: list[Path] = []
+    for d in det_indices:
+        det_num = d + 1
+        if n_det > 1 and detector is None:
+            base_stem = base_pdat_path.stem
+            if re.search(r"_DET\d+", base_stem, flags=re.IGNORECASE):
+                target_stem = re.sub(r"_DET\d+", f"_DET{det_num}", base_stem, flags=re.IGNORECASE)
+            else:
+                target_stem = f"{base_stem}_DET{det_num}"
+            pdat_path = base_pdat_path.with_name(target_stem + ".pdat")
+        else:
+            pdat_path = base_pdat_path
+
+        probe_d = np.asarray(dataset._detector_probe(d), dtype=float)
+        z_d = z_all[:, :, d] if z_all.ndim == 3 else z_all
+
+        noise_d = None
+        if noise_arr is not None:
+            n_arr = np.asarray(noise_arr, dtype=float)
+            noise_d = n_arr[:, :, d] if n_arr.ndim == 3 else n_arr
+
+        written = write_pdat(
+            pdat_path,
+            delays,
+            probe_d,
+            z_d,
+            time_unit=time_unit,
+            probe_unit=probe_unit,
+            noise=noise_d,
+        )
+        exported.append(written)
+
+    return exported
+
+
+def save_1D_hdf5(dataset, path: str | PathLike) -> Path:
+    """Save a :class:`pymorgan.oneD.Dataset1D` instance to a self-contained HDF5 file."""
+    import json
+
+    target = Path(path)
+    if target.suffix.lower() not in (".h5", ".hdf5"):
+        target = target.with_suffix(".h5")
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    with h5py.File(target, "w") as f:
+        f.create_dataset("delays", data=np.asarray(dataset.delays, dtype=float))
+        f.create_dataset("probe", data=np.asarray(dataset.probe, dtype=float))
+        if dataset.Zavg_R is not None:
+            f.create_dataset("Zavg_R", data=np.asarray(dataset.Zavg_R, dtype=float))
+        if dataset.Zavg_C is not None:
+            f.create_dataset("Zavg_C", data=np.asarray(dataset.Zavg_C, dtype=float))
+        if dataset.Zss_R is not None:
+            f.create_dataset("Zss_R", data=np.asarray(dataset.Zss_R, dtype=float))
+        if dataset.Zss_C is not None:
+            f.create_dataset("Zss_C", data=np.asarray(dataset.Zss_C, dtype=float))
+        if dataset.Zstdv is not None:
+            f.create_dataset("Zstdv", data=np.asarray(dataset.Zstdv, dtype=float))
+        if dataset.bkg_avg is not None:
+            f.create_dataset("bkg_avg", data=np.asarray(dataset.bkg_avg, dtype=float))
+        if dataset.bkg_ss is not None:
+            f.create_dataset("bkg_ss", data=np.asarray(dataset.bkg_ss, dtype=float))
+
+        f.attrs["nscans"] = float(dataset.nscans) if np.isfinite(dataset.nscans) else -1.0
+        f.attrs["data_type"] = str(dataset.data_type or "PDAT")
+        f.attrs["source"] = str(dataset.source or "")
+        f.attrs["format_version"] = "1.0"
+
+        units_serializable = {
+            k: v
+            for k, v in dataset.units.items()
+            if isinstance(v, (str, int, float, bool, list, dict))
+        }
+        f.attrs["units_json"] = json.dumps(units_serializable)
+        if getattr(dataset, "mask_ranges", None):
+            f.attrs["mask_ranges_json"] = json.dumps(dataset.mask_ranges)
+        if getattr(dataset, "scan_ids", None):
+            f.attrs["scan_ids_json"] = json.dumps(list(dataset.scan_ids))
+
+    return target
+
+
+@register_loader("HDF5")
+def read_1D_hdf5(path: str | PathLike) -> LoaderResult:
+    """Read a Dataset1D from an HDF5 file written by save_1D_hdf5."""
+    import json
+
+    p = Path(path)
+    with h5py.File(p, "r") as f:
+        # Auto-delegate if this is a PyMESS acquisition file opened via HDF5 loader
+        if "delays" not in f and "data" in f and "data/delays_fs" in f:
+            return read_PyMESS_PP(str(p))
+
+        delays = np.asarray(f["delays"][:], dtype=float)
+        probe = np.asarray(f["probe"][:], dtype=float)
+        Zavg_R = np.asarray(f["Zavg_R"][:], dtype=float) if "Zavg_R" in f else None
+
+        Zss_R = np.asarray(f["Zss_R"][:], dtype=float) if "Zss_R" in f else None
+        Zstdv = np.asarray(f["Zstdv"][:], dtype=float) if "Zstdv" in f else np.zeros_like(Zavg_R)
+
+        nscans_attr = f.attrs.get("nscans", -1.0)
+        nscans = float(nscans_attr) if nscans_attr > 0 else np.nan
+
+        units_json = f.attrs.get("units_json", "{}")
+        try:
+            Units = json.loads(units_json)
+        except Exception:
+            Units = hlp.units2dic("cm^{-1}", "ps", "x1E3")
+
+        scan_ids = None
+        if "scan_ids_json" in f.attrs:
+            try:
+                scan_ids = json.loads(f.attrs["scan_ids_json"])
+            except Exception:
+                pass
+
+    return Zavg_R, delays, probe, Units, nscans, Zss_R, Zstdv, scan_ids
+
+
+def load_1D_hdf5(path: str | PathLike):
+    """Load an HDF5 archive into a fully restored :class:`pymorgan.oneD.Dataset1D`."""
+    import json
+
+    from .dataset import Dataset1D
+
+    p = Path(path)
+    with h5py.File(p, "r") as f:
+        delays = np.asarray(f["delays"][:], dtype=float)
+        probe = np.asarray(f["probe"][:], dtype=float)
+        Zavg_R = np.asarray(f["Zavg_R"][:], dtype=float) if "Zavg_R" in f else None
+        Zavg_C = np.asarray(f["Zavg_C"][:], dtype=float) if "Zavg_C" in f else None
+        Zss_R = np.asarray(f["Zss_R"][:], dtype=float) if "Zss_R" in f else None
+        Zss_C = np.asarray(f["Zss_C"][:], dtype=float) if "Zss_C" in f else None
+        Zstdv = np.asarray(f["Zstdv"][:], dtype=float) if "Zstdv" in f else None
+        bkg_avg = np.asarray(f["bkg_avg"][:], dtype=float) if "bkg_avg" in f else None
+        bkg_ss = np.asarray(f["bkg_ss"][:], dtype=float) if "bkg_ss" in f else None
+
+        nscans_attr = f.attrs.get("nscans", -1.0)
+        nscans = float(nscans_attr) if nscans_attr > 0 else np.nan
+        data_type = str(f.attrs.get("data_type", "HDF5"))
+        source = str(f.attrs.get("source", str(p)))
+
+        units_json = f.attrs.get("units_json", "{}")
+        try:
+            units = json.loads(units_json)
+        except Exception:
+            units = hlp.units2dic("cm^{-1}", "ps", "x1E3")
+
+        scan_ids = None
+        if "scan_ids_json" in f.attrs:
+            try:
+                scan_ids = json.loads(f.attrs["scan_ids_json"])
+            except Exception:
+                pass
+
+        mask_ranges = None
+        if "mask_ranges_json" in f.attrs:
+            try:
+                mask_ranges = [tuple(r) for r in json.loads(f.attrs["mask_ranges_json"])]
+            except Exception:
+                pass
+
+    ds = Dataset1D(
+        Zavg_R,
+        delays,
+        probe,
+        units,
+        nscans=nscans,
+        Zss_R=Zss_R,
+        Zstdv=Zstdv,
+        source=source,
+        data_type=data_type,
+        scan_ids=scan_ids,
+    )
+    ds.Zavg_C = Zavg_C
+    ds.Zss_C = Zss_C
+    ds.bkg_avg = bkg_avg
+    ds.bkg_ss = bkg_ss
+    ds.mask_ranges = mask_ranges
+    return ds
+
+
+register_dataset_glob("HDF5", "*.h5")
+register_dataset_glob("HDF5", "*.hdf5")
+
+
+def _pymorgan_hdf5_is_file(p: Path) -> bool:
+    return p.is_file() and p.suffix.lower() in {".h5", ".hdf5"}
+
+
+register_dataset_file_filter("HDF5")(_pymorgan_hdf5_is_file)
+
+
+
+
+
 def _stub_loader(name: str) -> Loader:
     """Build a placeholder loader that fails loudly until implemented."""
 
@@ -245,14 +560,6 @@ def _stub_loader(name: str) -> Loader:
 
     loader.__name__ = f"load_{name}"
     return loader
-
-
-# Instrument-specific formats are recognised but not yet implemented.
-for _name in (
-    "UniGE_FLUPSold",
-    "UniGE_FLUPSnew",
-):
-    register_loader(_name)(_stub_loader(_name))
 
 
 # --------------------------------------------------------------------------- #
@@ -871,6 +1178,208 @@ def read_UoS_IRpp(
 
 
 # --------------------------------------------------------------------------- #
+#                             RAL IRpp reader                                 #
+# --------------------------------------------------------------------------- #
+register_dataset_glob("RAL_IRpp", "*.csv")
+
+
+@register_dataset_detector("RAL_IRpp")
+def _ral_irpp_is_dataset(folder: Path) -> tuple[bool, bool]:
+    """Whether folder is a Rutherford Appleton Laboratory (RAL LIFEtime/Ultra) dataset folder."""
+    folder = Path(folder)
+    if not folder.is_dir():
+        return False, False
+    avg_files = list(folder.glob("*Avg Diff spec*.csv")) + list(folder.glob("*avg diff spec*.csv"))
+    if not avg_files:
+        return False, False
+    is_candidate = True
+    is_valid = any(f.stat().st_size > 0 for f in avg_files)
+    return is_candidate, is_valid
+
+
+@register_dataset_file_filter("RAL_IRpp")
+def _ral_irpp_is_file(path: Path) -> bool:
+    """Whether path is a RAL IRpp CSV file."""
+    if path.suffix.lower() != ".csv":
+        return False
+    name_lower = path.name.lower()
+    return "avg diff spec" in name_lower or "cycle" in name_lower
+
+
+@register_loader("RAL_IRpp")
+def read_RAL_IRpp(
+    path: str | PathLike,
+    *,
+    load_single_scans: bool | None = None,
+) -> LoaderResult:
+    """Read a Rutherford Appleton Laboratory (CLF Ultra / LIFEtime) IRpp dataset.
+
+    Supports dual-detector arrays (2 detectors of 128 pixels each, 256 pixels total)
+    and single-cycle scans (Run * Cycle*.csv). Delays are extracted from column headers
+    and sorted into ascending order.
+    """
+    import pandas as pd
+
+    from ..settings import get_settings
+
+    p = Path(path)
+    folder = p if p.is_dir() else p.parent
+
+    # 1. Locate the average difference spectrum file
+    if p.is_file() and "avg diff spec" in p.name.lower():
+        avg_file = p
+    else:
+        avg_files = sorted(
+            list(folder.glob("*Avg Diff spec*.csv")) + list(folder.glob("*avg diff spec*.csv"))
+        )
+        avg_files = [f for f in avg_files if f.stat().st_size > 0]
+        if not avg_files:
+            raise FileNotFoundError(
+                f"Could not find valid 'Avg Diff spec' CSV file in RAL dataset folder: {folder}"
+            )
+        avg_file = avg_files[0]
+
+    df_avg = pd.read_csv(avg_file)
+    if df_avg.shape[1] < 2:
+        raise ValueError(f"RAL dataset file {avg_file} must have at least 2 columns: {df_avg.shape}")
+
+    delays_raw = np.array([float(c) for c in df_avg.columns[1:]], dtype=float)
+    sort_idx = np.argsort(delays_raw)
+    delays = delays_raw[sort_idx]
+
+    # Convert delay timescale if in fs or large ps
+    if np.max(delays) > 5000.0:
+        delays = delays / 1000.0
+        units_T = "ns"
+    else:
+        units_T = "ps"
+
+    raw_mat = df_avg.iloc[:, 1:].to_numpy(dtype=float)
+    raw_mat = np.where(np.isneginf(raw_mat) | np.isposinf(raw_mat), np.nan, raw_mat)
+
+    total_pixels = raw_mat.shape[0]
+    if total_pixels >= 256:
+        n_detectors = 2
+        pixels_per_det = 128
+    elif total_pixels >= 192:
+        n_detectors = 2
+        pixels_per_det = 96
+    else:
+        n_detectors = 1
+        pixels_per_det = total_pixels
+
+    s = get_settings()
+    load_single = s.load_single_scans if load_single_scans is None else load_single_scans
+
+    # 2. Check for cycle files (single scans)
+    cycle_files = sorted(
+        list(folder.glob("*Cycle*.csv")) + list(folder.glob("*cycle*.csv"))
+    )
+    cycle_files = [f for f in cycle_files if f.stat().st_size > 0]
+    n_scans = len(cycle_files)
+
+    if load_single and n_scans > 1:
+        n_delays = len(delays)
+        Zss_R = np.full((n_delays, pixels_per_det, n_detectors, n_scans), np.nan, dtype=float)
+        for s_idx, c_path in enumerate(cycle_files):
+            try:
+                df_c = pd.read_csv(c_path)
+                ion = df_c.iloc[:total_pixels, 1::3].to_numpy(dtype=float)
+                ioff = df_c.iloc[:total_pixels, 2::3].to_numpy(dtype=float)
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    da = -np.log10(ion / ioff)
+                da = np.where(np.isneginf(da) | np.isposinf(da), np.nan, da)
+                if da.shape[1] == n_delays:
+                    da_sorted = da[:, sort_idx]
+                    for d in range(n_detectors):
+                        Zss_R[:, :, d, s_idx] = da_sorted[
+                            d * pixels_per_det : (d + 1) * pixels_per_det, :
+                        ].T
+            except Exception:
+                logger.debug("Failed to read cycle file %s.", c_path, exc_info=True)
+
+        Zavg_R = np.zeros((len(delays), pixels_per_det, n_detectors), dtype=float)
+        for d in range(n_detectors):
+            Zavg_R[:, :, d] = raw_mat[d * pixels_per_det : (d + 1) * pixels_per_det, sort_idx].T
+        Zstdv = np.nanstd(Zss_R, axis=-1, ddof=1)
+        scan_ids = list(range(n_scans))
+        Nscans_val = n_scans
+    else:
+        Zavg_R = np.zeros((len(delays), pixels_per_det, n_detectors), dtype=float)
+        for d in range(n_detectors):
+            Zavg_R[:, :, d] = raw_mat[d * pixels_per_det : (d + 1) * pixels_per_det, sort_idx].T
+        Zstdv = np.zeros_like(Zavg_R)
+        Zss_R = np.full((len(delays), pixels_per_det, n_detectors, 1), np.nan)
+        scan_ids = None
+        Nscans_val = n_scans if n_scans > 1 else np.nan
+
+    # 3. Probe calibration lookup
+    cal_file = folder / "CalibratedProbe.csv"
+    cal_loc = "data folder"
+    cal_lvl = "datadir"
+    if not cal_file.is_file():
+        cal_file = folder.parent / "CalibratedProbe.csv"
+        cal_loc = "root folder"
+        cal_lvl = "rootdir"
+
+    probe = None
+    cal_source = None
+    cal_level = None
+    if cal_file.is_file():
+        try:
+            tmp_probe = np.loadtxt(cal_file, delimiter=",").ravel().astype(float)
+            if n_detectors == 2 and len(tmp_probe) >= 256:
+                probe = np.column_stack([tmp_probe[:128], tmp_probe[128:256]])
+                cal_source = f"CalibratedProbe.csv ({cal_loc})"
+                cal_level = cal_lvl
+            elif n_detectors == 2 and len(tmp_probe) >= 192:
+                probe = np.column_stack([tmp_probe[:96], tmp_probe[96:192]])
+                cal_source = f"CalibratedProbe.csv ({cal_loc})"
+                cal_level = cal_lvl
+            elif len(tmp_probe) >= pixels_per_det:
+                probe = tmp_probe[:pixels_per_det]
+                cal_source = f"CalibratedProbe.csv ({cal_loc})"
+                cal_level = cal_lvl
+        except Exception:
+            probe = None
+
+    if probe is None:
+        pix = np.arange(1, pixels_per_det + 1, dtype=float)
+        probe = np.column_stack([pix] * n_detectors) if n_detectors > 1 else pix
+        cal_source = "Pixel indices (uncalibrated)"
+
+    Units = hlp.units2dic("cm^{-1}", units_T, "x1E3")
+    Units["cal_source"] = cal_source
+    Units["cal_level"] = cal_level
+
+    # Check for metadata in Run * info.txt
+    info_files = sorted(list(folder.glob("*info.txt")) + list(folder.glob("*Info.txt")))
+    if info_files:
+        try:
+            lines = info_files[0].read_text(encoding="utf-8", errors="ignore").splitlines()
+            for line in lines:
+                if ":" in line:
+                    k, v = line.split(":", 1)
+                    k_clean = k.strip().lower().replace(" ", "_")
+                    Units[f"info_{k_clean}"] = v.strip()
+        except Exception:
+            pass
+
+    return Zavg_R, delays, probe, Units, Nscans_val, Zss_R, Zstdv, scan_ids
+
+
+register_loader("RAL_TRIR")(read_RAL_IRpp)
+register_loader("RAL_LIFEtime")(read_RAL_IRpp)
+register_dataset_glob("RAL_TRIR", "*.csv")
+register_dataset_glob("RAL_LIFEtime", "*.csv")
+register_dataset_detector("RAL_TRIR")(_ral_irpp_is_dataset)
+register_dataset_detector("RAL_LIFEtime")(_ral_irpp_is_dataset)
+register_dataset_file_filter("RAL_TRIR")(_ral_irpp_is_file)
+register_dataset_file_filter("RAL_LIFEtime")(_ral_irpp_is_file)
+
+
+
+# --------------------------------------------------------------------------- #
 #                         MESS_TRIR / MESS_TRUVIS reader                       #
 # --------------------------------------------------------------------------- #
 # Directory-based transient-IR format written by the MESS acquisition software
@@ -1410,6 +1919,46 @@ def _pymess_pp_is_file(path: Path | str) -> bool:
         return False
 
 
+@register_dataset_describer("PyMESS_PP")
+def _pymess_pp_describe(path: Path) -> dict:
+    """Selection metadata for PyMESS pump-probe files (slow modulation states / anisotropy)."""
+    p = Path(path)
+    if not p.is_file() or p.suffix.lower() != ".h5":
+        return {"n_spectra": 1, "n_slowmod": 1}
+    try:
+        with h5py.File(p, "r") as f:
+            meta = {str(k): _pymess_attr_str(v) for k, v in f.get("metadata", {}).attrs.items()}
+            is_slow_mod = str(meta.get("slow_modulation_enabled", "False")).lower() in ("true", "1")
+            k_slow = int(meta.get("slow_modulation_num_states", 1)) if is_slow_mod else 1
+            raw_state_names = meta.get("slow_modulation_state_names", "")
+            state_names = (
+                [s.strip() for s in str(raw_state_names).split(",")] if raw_state_names else []
+            )
+            if "data/slow_modulation/delta_A_parallel" in f and "data/slow_modulation/delta_A_perpendicular" in f:
+                k_slow = max(k_slow, 2)
+                if not state_names:
+                    state_names = ["Parallel", "Perpendicular"]
+
+            g_val = 1.0
+            for g_key in ("g_factor", "G_factor", "gfactor"):
+                if g_key in meta:
+                    try:
+                        g_val = float(meta[g_key])
+                        break
+                    except (ValueError, TypeError):
+                        pass
+
+            return {
+                "n_spectra": 1,
+                "n_slowmod": max(1, k_slow),
+                "state_names": state_names,
+                "is_pymess": True,
+                "g_factor": g_val,
+            }
+    except Exception:
+        return {"n_spectra": 1, "n_slowmod": 1}
+
+
 @register_loader("PyMESS_PP")
 def read_PyMESS_PP(
     datafilename: str,
@@ -1445,6 +1994,9 @@ def read_PyMESS_PP(
 
     with f:
         if "data" not in f or "data/delays_fs" not in f:
+            # Auto-delegate if this is a PyMORGAN native HDF5 dataset opened via PyMESS loader
+            if "delays" in f and "probe" in f:
+                return read_1D_hdf5(str(path))
             raise ValueError(
                 f"File {path.name} is not a valid PyMESS pump-probe dataset (missing /data/delays_fs)."
             )
@@ -1532,6 +2084,29 @@ def read_PyMESS_PP(
             if not load_single_scans:
                 Nscans = 1
                 Zss_R = Zavg_R[:, :, :, np.newaxis]
+        elif (
+            "data/slow_modulation/delta_A_parallel" in f
+            and "data/slow_modulation/delta_A_perpendicular" in f
+        ):
+            d_par = np.asarray(f["data/slow_modulation/delta_A_parallel"][:], dtype=np.float64)
+            d_perp = np.asarray(f["data/slow_modulation/delta_A_perpendicular"][:], dtype=np.float64)
+            valid_rows = ~np.all(np.isnan(d_par), axis=1)
+            if not np.all(valid_rows):
+                last_valid = np.where(valid_rows)[0]
+                if len(last_valid) > 0:
+                    cut_idx = int(last_valid[-1]) + 1
+                    d_par = d_par[:cut_idx, :]
+                    d_perp = d_perp[:cut_idx, :]
+                    delays = delays[:cut_idx]
+
+            Zavg_R = np.stack([d_par, d_perp], axis=2)
+            Zstdv = np.zeros_like(Zavg_R)
+            Nscans = 1
+            Zss_R = Zavg_R[:, :, :, np.newaxis]
+            is_slow_mod = True
+            k_slow = 2
+            if not state_names:
+                state_names = ["Parallel", "Perpendicular"]
         else:
             delta_A = np.asarray(f["data/delta_A"][:], dtype=np.float64)
             valid_rows = ~np.all(np.isnan(delta_A), axis=1)
@@ -1575,6 +2150,13 @@ def read_PyMESS_PP(
                 Units["detectors"] = [f"State_{i}" for i in range(k_slow)]
 
         Units["pymess_metadata"] = meta_dict
+        for g_key in ("g_factor", "G_factor", "gfactor"):
+            if g_key in meta_dict:
+                try:
+                    Units["g_factor"] = float(meta_dict[g_key])
+                    break
+                except (ValueError, TypeError):
+                    pass
         if "sample_id" in meta_dict and meta_dict["sample_id"]:
             Units["sample"] = meta_dict["sample_id"]
         if "pump_wl_nm" in meta_dict and meta_dict["pump_wl_nm"]:

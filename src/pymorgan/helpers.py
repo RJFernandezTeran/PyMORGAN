@@ -942,7 +942,7 @@ def add_glow(ax, x, y, colour=None, base_frac=0.04, *, color=None):
 
 
 def parse_value_list(text: str, all_values=None) -> list[float] | None:
-    """Parse the cut-list syntax: numbers, MATLAB ranges, or ``all``.
+    """Parse the cut-list syntax: numbers, range expressions (``start:step:stop``), or ``all``.
 
     Accepts ``1900, 1950``, ``1:0.1:5`` (start:step:stop), ``1:5``
     (unit step, descending allowed) and the word ``all``, which returns every

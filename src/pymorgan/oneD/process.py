@@ -9,6 +9,10 @@ from __future__ import annotations
 
 import numpy as np
 
+from ..log import get_logger
+
+logger = get_logger(__name__)
+
 
 def background_correct(Zavg_R, Zss_R, nscans, delays, tmin, tmax, do_correct: bool = True):
     """Subtract the pre-zero background averaged over ``[tmin, tmax]``.
@@ -104,8 +108,6 @@ def subtract_solvent(Z_sample, delays_sample, Z_solvent, delays_solvent, dt=0.0,
     -------
     ndarray : corrected signal, same shape as ``Z_sample``
     """
-    from scipy.interpolate import interp1d
-
     Z_sample = np.asarray(Z_sample, dtype=float)
     Z_solvent = np.asarray(Z_solvent, dtype=float)
     delays_sample = np.asarray(delays_sample, dtype=float)
@@ -130,14 +132,12 @@ def subtract_solvent(Z_sample, delays_sample, Z_solvent, delays_solvent, dt=0.0,
             if t_f.size == 1:
                 Z_solvent_interp[:, pix, det] = c_f[0]
             else:
-                f = interp1d(
-                    t_f,
-                    c_f,
-                    kind="linear",
-                    bounds_error=False,
-                    fill_value=(c_f[0], c_f[-1]),
+                s_idx = np.argsort(t_f)
+                t_sorted = t_f[s_idx]
+                c_sorted = c_f[s_idx]
+                Z_solvent_interp[:, pix, det] = np.interp(
+                    delays_sample, t_sorted, c_sorted, left=c_sorted[0], right=c_sorted[-1]
                 )
-                Z_solvent_interp[:, pix, det] = f(delays_sample)
 
     # Apply scaling factor (scalar or per-pixel array broadcast over delays/dets)
     scale_arr = np.broadcast_to(np.asarray(scale, dtype=float), (Npixels,))
@@ -189,10 +189,10 @@ def fit_solvent_auto(
     dt : float or ndarray, shape [Npixels]
         Optimal global timing offset (float) or per-pixel timing offsets (ndarray).
     """
-    from scipy.interpolate import interp1d
     from scipy.optimize import least_squares, minimize_scalar
     from scipy.signal import savgol_filter
     from scipy.special import erf
+
 
     Z_sample = np.asarray(Z_sample, dtype=float)
     Z_solvent = np.asarray(Z_solvent, dtype=float)
@@ -216,23 +216,29 @@ def fit_solvent_auto(
 
         return fallback_itp
 
+    def make_linear_itp(xp, yp):
+        s_idx = np.argsort(xp)
+        xp_s = xp[s_idx]
+        yp_s = yp[s_idx]
+        lv, rv = yp_s[0], yp_s[-1]
+
+        def linear_itp(t):
+            return np.interp(t, xp_s, yp_s, left=lv, right=rv)
+
+        return linear_itp
+
     # 2. Pre-build interpolator functions for the solvent signal per pixel
     sol_interpolators = []
     for i in range(Npixels):
         sol_y = Z_solvent[:, i, det_idx]
         finite = np.isfinite(sol_y) & np.isfinite(delays_solvent)
         if np.count_nonzero(finite) >= 2:
-            itp = interp1d(
-                delays_solvent[finite],
-                sol_y[finite],
-                kind="linear",
-                bounds_error=False,
-                fill_value=(sol_y[finite][0], sol_y[finite][-1]),
-            )
+            itp = make_linear_itp(delays_solvent[finite], sol_y[finite])
         else:
             val = np.nanmean(sol_y)
             itp = make_fallback_itp(val)
         sol_interpolators.append(itp)
+
 
     # 3. Pass 1: Optimise global scale A and global timing offset dt_global
     # using a subset of top 5 highest-variance pixels to avoid slow O(N^2) finite-diff evaluations.
@@ -628,14 +634,16 @@ def time_derivative(
                 f_ss = PchipInterpolator(delays, Zss, axis=0)
                 Zss = f_ss(t_new)
         else:
-            from scipy.interpolate import interp1d
+            from scipy.interpolate import make_interp_spline
 
-            kind = interp_kind.lower() if interp_kind.lower() in ("linear", "cubic", "quadratic", "nearest") else "cubic"
-            f_avg = interp1d(delays, Zavg, axis=0, kind=kind, bounds_error=False, fill_value="extrapolate")
+            k_dict = {"linear": 1, "quadratic": 2, "cubic": 3}
+            k = k_dict.get(interp_kind.lower(), 3)
+            f_avg = make_interp_spline(delays, Zavg, k=k, axis=0)
             Zavg = f_avg(t_new)
             if Zss is not None:
-                f_ss = interp1d(delays, Zss, axis=0, kind=kind, bounds_error=False, fill_value="extrapolate")
+                f_ss = make_interp_spline(delays, Zss, k=k, axis=0)
                 Zss = f_ss(t_new)
+
         delays = t_new
 
     # 3. Smoothing
@@ -671,3 +679,191 @@ def time_derivative(
     Zss_dt = np.gradient(Zss, delays, axis=0) if Zss is not None else None
 
     return delays, Zavg_dt, Zss_dt
+
+
+def calculate_anisotropy(
+    parallel,
+    perpendicular=None,
+    *,
+    g_factor: float | np.ndarray = 1.0,
+    threshold: float | None = None,
+    return_components: bool = False,
+    detector_par: int = 0,
+    detector_perp: int = 1,
+    use_corrected: bool = True,
+):
+    """Calculate time-resolved polarization anisotropy from parallel and perpendicular datasets.
+
+    Supports either two separate :class:`~pymorgan.oneD.Dataset1D` instances (or 2D arrays),
+    or a single multi-detector :class:`~pymorgan.oneD.Dataset1D` where ``detector_par`` and
+    ``detector_perp`` specify the respective polarization channels.
+
+    Formulas
+    --------
+    - Anisotropy:
+        .. math:: r(t, \\omega) = \\frac{I_\\parallel - G \\cdot I_\\perp}{I_\\parallel + 2G \\cdot I_\\perp}
+    - Magic Angle / Isotropic signal:
+        .. math:: I_\\text{MA}(t, \\omega) = \\frac{I_\\parallel + 2G \\cdot I_\\perp}{3}
+    - Polarization Difference:
+        .. math:: \\Delta I(t, \\omega) = I_\\parallel - G \\cdot I_\\perp
+
+    Parameters
+    ----------
+    parallel : Dataset1D or ndarray
+        Parallel polarization dataset or 2D array [Ndelays x Npixels]. If
+        ``perpendicular`` is None, ``parallel`` must have at least 2 detectors.
+    perpendicular : Dataset1D or ndarray, optional
+        Perpendicular polarization dataset or 2D array [Ndelays x Npixels].
+    g_factor : float or ndarray, default 1.0
+        Sensitivity correction factor G (scalar or 1D array of shape [Npixels]).
+    threshold : float, optional
+        Minimum absolute value of the isotropic denominator below which anisotropy
+        is clamped to NaN (avoids division-by-zero noise spikes).
+    return_components : bool, default False
+        If True, returns a dict with keys ``'anisotropy'``, ``'magic_angle'``,
+        ``'difference'``, ``'parallel'``, and ``'perpendicular'``.
+        If False, returns just the anisotropy :class:`Dataset1D`.
+    detector_par : int, default 0
+        Channel index for parallel polarization when unpacking a single multi-detector dataset.
+    detector_perp : int, default 1
+        Channel index for perpendicular polarization when unpacking a single multi-detector dataset.
+    use_corrected : bool, default True
+        Whether to use background-corrected signal (``Dataset1D.Z``) or raw (``Dataset1D.Zavg_R``).
+
+    Returns
+    -------
+    Dataset1D or dict[str, Dataset1D]
+        Anisotropy dataset or dictionary of component datasets.
+    """
+    from .dataset import Dataset1D
+
+    is_ds_par = isinstance(parallel, Dataset1D)
+    is_ds_perp = isinstance(perpendicular, Dataset1D)
+
+    if perpendicular is None:
+        if not is_ds_par:
+            raise ValueError(
+                "When perpendicular is omitted, parallel must be a Dataset1D with at least 2 detectors."
+            )
+        if parallel.n_detectors < 2:
+            raise ValueError(
+                f"parallel dataset only has {parallel.n_detectors} detector(s); "
+                f"need at least 2 detectors to extract parallel and perpendicular channels."
+            )
+        delays = np.asarray(parallel.delays, dtype=float)
+        probe = np.asarray(parallel._detector_probe(detector_par), dtype=float)
+        units = dict(parallel.units or {})
+        source = parallel.source
+
+        z_all = parallel.Z if use_corrected else parallel.Zavg_R
+        d_par = np.asarray(z_all[:, :, detector_par], dtype=float)
+        d_perp = np.asarray(z_all[:, :, detector_perp], dtype=float)
+
+        noise_all = parallel.noise_array()
+        n_par = noise_all[:, :, detector_par] if noise_all is not None else None
+        n_perp = noise_all[:, :, detector_perp] if noise_all is not None else None
+    else:
+        if is_ds_par:
+            delays = np.asarray(parallel.delays, dtype=float)
+            probe = np.asarray(parallel.probe, dtype=float)
+            units = dict(parallel.units or {})
+            source = parallel.source
+            z_par = parallel.Z if use_corrected else parallel.Zavg_R
+            d_par = z_par[:, :, 0] if z_par.ndim == 3 else np.asarray(z_par, dtype=float)
+            noise_par = parallel.noise_array()
+            n_par = noise_par[:, :, 0] if noise_par is not None and noise_par.ndim == 3 else noise_par
+        else:
+            d_par = np.asarray(parallel, dtype=float)
+            delays = np.arange(d_par.shape[0], dtype=float)
+            probe = np.arange(d_par.shape[1], dtype=float)
+            units = {}
+            source = "array"
+            n_par = None
+
+        if is_ds_perp:
+            z_perp = perpendicular.Z if use_corrected else perpendicular.Zavg_R
+            d_perp = z_perp[:, :, 0] if z_perp.ndim == 3 else np.asarray(z_perp, dtype=float)
+            noise_perp = perpendicular.noise_array()
+            n_perp = noise_perp[:, :, 0] if noise_perp is not None and noise_perp.ndim == 3 else noise_perp
+
+            # Check grid alignment if both are Dataset1D
+            if is_ds_par and not (np.array_equal(delays, perpendicular.delays) and np.array_equal(probe, perpendicular.probe)):
+                from scipy.interpolate import make_interp_spline
+                logger.info("Interpolating perpendicular dataset onto parallel grid coordinates.")
+                if not np.array_equal(probe, perpendicular.probe):
+                    p_perp = np.asarray(perpendicular.probe, dtype=float)
+                    s_idx = np.argsort(p_perp)
+                    spl_p = make_interp_spline(p_perp[s_idx], d_perp[:, s_idx], k=1, axis=1)
+                    d_perp = spl_p(probe)
+                    if n_perp is not None:
+                        spl_np = make_interp_spline(p_perp[s_idx], n_perp[:, s_idx], k=1, axis=1)
+                        n_perp = spl_np(probe)
+                if not np.array_equal(delays, perpendicular.delays):
+                    t_perp = np.asarray(perpendicular.delays, dtype=float)
+                    s_t = np.argsort(t_perp)
+                    spl_t = make_interp_spline(t_perp[s_t], d_perp[s_t, :], k=1, axis=0)
+                    d_perp = spl_t(delays)
+                    if n_perp is not None:
+                        spl_nt = make_interp_spline(t_perp[s_t], n_perp[s_t, :], k=1, axis=0)
+                        n_perp = spl_nt(delays)
+        else:
+            d_perp = np.asarray(perpendicular, dtype=float)
+            n_perp = None
+
+    if d_par.shape != d_perp.shape:
+        raise ValueError(f"Shape mismatch: parallel {d_par.shape} vs perpendicular {d_perp.shape}")
+
+    G = np.asarray(g_factor, dtype=float)
+    d_diff = d_par - G * d_perp
+    d_denom = d_par + 2.0 * G * d_perp
+    d_iso = d_denom / 3.0
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        r_mat = d_diff / d_denom
+        if threshold is not None and float(threshold) > 0.0:
+            th = float(threshold)
+            r_mat = np.where(np.abs(d_denom) >= th, r_mat, np.nan)
+        r_mat = np.where(np.isneginf(r_mat) | np.isposinf(r_mat), np.nan, r_mat)
+
+    sigma_r = None
+    if n_par is not None and n_perp is not None:
+        with np.errstate(divide="ignore", invalid="ignore"):
+            denom_sq = d_denom ** 2
+            var_term = (d_perp * n_par) ** 2 + (d_par * n_perp) ** 2
+            sigma_r = (3.0 * G / denom_sq) * np.sqrt(var_term)
+            sigma_r = np.where(np.isfinite(sigma_r), sigma_r, 0.0)
+
+    def _create_ds(arr_2d, data_type_name, unit_z_lbl, unit_z_ltx, noise_mat=None):
+        u = dict(units)
+        u["unitsZ_lbl"] = unit_z_lbl
+        u["unitsZ_ltx"] = unit_z_ltx
+        z_3d = arr_2d[:, :, np.newaxis]
+        n_3d = noise_mat[:, :, np.newaxis] if noise_mat is not None else np.zeros_like(z_3d)
+        return Dataset1D(
+            Zavg_R=z_3d,
+            delays=delays.copy(),
+            probe=probe.copy(),
+            units=u,
+            Zstdv=n_3d,
+            source=source,
+            data_type=data_type_name,
+        )
+
+    ds_aniso = _create_ds(r_mat, "Anisotropy", "r", "dimensionless", sigma_r)
+
+    if not return_components:
+        return ds_aniso
+
+    ds_ma = _create_ds(d_iso, "Magic_Angle", units.get("unitsZ_lbl", "ΔA"), units.get("unitsZ_ltx", "mOD"))
+    ds_diff = _create_ds(d_diff, "Polarization_Diff", units.get("unitsZ_lbl", "ΔA"), units.get("unitsZ_ltx", "mOD"))
+    ds_par = _create_ds(d_par, "Parallel", units.get("unitsZ_lbl", "ΔA"), units.get("unitsZ_ltx", "mOD"), n_par)
+    ds_perp = _create_ds(d_perp, "Perpendicular", units.get("unitsZ_lbl", "ΔA"), units.get("unitsZ_ltx", "mOD"), n_perp)
+
+    return {
+        "anisotropy": ds_aniso,
+        "magic_angle": ds_ma,
+        "difference": ds_diff,
+        "parallel": ds_par,
+        "perpendicular": ds_perp,
+    }
+
