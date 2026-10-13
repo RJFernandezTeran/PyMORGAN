@@ -755,7 +755,12 @@ class Dataset1D:
         return self
 
     def recalc_average(
-        self, scan_indices: Sequence[int], *, spectrum: int = 0, slowmod: int = 0
+        self,
+        scan_indices: Sequence[int],
+        *,
+        spectrum: int = 0,
+        slowmod: int = 0,
+        noise_weighted: bool = True,
     ) -> Dataset1D:
         """Recompute the averaged signal and standard deviation over selected scans.
 
@@ -767,6 +772,9 @@ class Dataset1D:
             Spectrum index (for MESS datasets).
         slowmod : int, default 0
             Slow-modulation index (for MESS datasets).
+        noise_weighted : bool, default True
+            Whether to combine scans using inverse-variance noise weighting
+            (default) or direct arithmetic averaging.
 
         Returns
         -------
@@ -781,12 +789,31 @@ class Dataset1D:
             from .load import mess_recalc_average
 
             Zavg, Zstdv = mess_recalc_average(
-                self.source, scan_indices, spectrum=spectrum, slowmod=slowmod
+                self.source,
+                scan_indices,
+                spectrum=spectrum,
+                slowmod=slowmod,
+                noise_weighted=noise_weighted,
             )
         elif self.has_single_scans:
             sub = self.Zss_R[:, :, :, scan_indices]
             with np.errstate(divide="ignore", invalid="ignore"):
-                Zavg = np.nanmean(sub, axis=-1)
+                if noise_weighted and len(scan_indices) > 1:
+                    neg_idx = np.where(self.delays < 0)[0]
+                    if len(neg_idx) >= 2:
+                        scan_var = np.nanvar(sub[neg_idx, :, :, :], axis=(0, 1, 2))
+                        valid = np.isfinite(scan_var) & (scan_var > 0)
+                        if np.all(valid):
+                            w = 1.0 / scan_var
+                            w = w / np.sum(w)
+                            Zavg = np.sum(sub * w.reshape(1, 1, 1, -1), axis=-1)
+                        else:
+                            Zavg = np.nanmean(sub, axis=-1)
+                    else:
+                        Zavg = np.nanmean(sub, axis=-1)
+                else:
+                    Zavg = np.nanmean(sub, axis=-1)
+
                 if len(scan_indices) > 1:
                     import warnings
 

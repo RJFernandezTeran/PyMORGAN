@@ -24,6 +24,7 @@ New instrument formats are added by decorating a reader with
 from __future__ import annotations
 
 import re
+import warnings
 from collections.abc import Callable
 from os import PathLike
 from pathlib import Path
@@ -2410,50 +2411,118 @@ def read_HARPIA(datafilename: str) -> LoaderResult:
 
     bcks: dict[int, dict[str, np.ndarray]] = {}
     meas: dict[int, list[dict[str, Any]]] = {}
+    seen_delays_per_scan: dict[int, set[float]] = {}
+    skipped_blocks = 0
+
+    header_re = re.compile(
+        r"^(Background|Measurement)\s*,\s*scan\s*(\d+)\s*,\s*Delay\s*([+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)",
+        re.IGNORECASE,
+    )
 
     idx = 4
     while idx < len(lines):
         line = lines[idx]
-        if line.startswith("Background") or line.startswith("Measurement"):
-            kind, scan_str, delay_str = [p.strip() for p in line.split(",")]
-            scan_num = int(scan_str.replace("scan", "").strip())
-            delay_val = float(delay_str.split()[1])
-
-            pump_val = 0.0
-            if idx + 1 < len(lines) and lines[idx + 1].startswith("Pump="):
-                try:
-                    pump_val = float(lines[idx + 1].split("=")[1])
-                except (IndexError, ValueError):
-                    pass
-                idx_data = idx + 2
-            else:
-                idx_data = idx + 1
-
-            if idx_data + 3 >= len(lines):
-                break
-
-            sp = np.fromstring(lines[idx_data], sep="\t").astype(float)
-            rp = np.fromstring(lines[idx_data + 1], sep="\t").astype(float)
-            su = np.fromstring(lines[idx_data + 2], sep="\t").astype(float)
-            ru = np.fromstring(lines[idx_data + 3], sep="\t").astype(float)
-
-            entry = {
-                "delay": delay_val,
-                "pump": pump_val,
-                "sp": sp,
-                "rp": rp,
-                "su": su,
-                "ru": ru,
-            }
-
-            if kind == "Background":
-                bcks[scan_num] = entry
-            else:
-                meas.setdefault(scan_num, []).append(entry)
-
-            idx = idx_data + 4
-        else:
+        m = header_re.match(line)
+        if not m:
             idx += 1
+            continue
+
+        kind = m.group(1).capitalize()
+        scan_num = int(m.group(2))
+        try:
+            delay_val = float(m.group(3))
+        except ValueError:
+            skipped_blocks += 1
+            idx += 1
+            continue
+
+        cur_idx = idx + 1
+        pump_val = 0.0
+        if cur_idx < len(lines) and lines[cur_idx].startswith("Pump="):
+            try:
+                pump_val = float(lines[cur_idx].split("=")[1])
+            except (IndexError, ValueError):
+                pass
+            cur_idx += 1
+
+        data_arrays: list[np.ndarray] = []
+        valid_block = True
+        for _ in range(4):
+            if cur_idx >= len(lines):
+                valid_block = False
+                break
+            dline = lines[cur_idx]
+            if header_re.match(dline) or dline.startswith("Background") or dline.startswith("Measurement"):
+                valid_block = False
+                break
+            toks = dline.split("\t")
+            if len(toks) != Npixels:
+                valid_block = False
+                cur_idx += 1
+                break
+            try:
+                arr = np.fromstring(dline, sep="\t").astype(float)
+                if len(arr) != Npixels or not np.all(np.isfinite(arr)):
+                    valid_block = False
+                    cur_idx += 1
+                    break
+                data_arrays.append(arr)
+            except Exception:
+                valid_block = False
+                cur_idx += 1
+                break
+            cur_idx += 1
+
+        if not valid_block or len(data_arrays) != 4:
+            skipped_blocks += 1
+            logger.warning(
+                "Skipping corrupted %s block for scan %d (around line %d) in HARPIA file '%s'",
+                kind,
+                scan_num,
+                idx,
+                path.name,
+            )
+            idx = cur_idx
+            continue
+
+        sp, rp, su, ru = data_arrays
+        entry = {
+            "delay": delay_val,
+            "pump": pump_val,
+            "sp": sp,
+            "rp": rp,
+            "su": su,
+            "ru": ru,
+        }
+
+        if kind == "Background":
+            if scan_num not in bcks:
+                bcks[scan_num] = entry
+        else:
+            delays_set = seen_delays_per_scan.setdefault(scan_num, set())
+            already_seen = any(np.isclose(delay_val, d, atol=1e-5, rtol=1e-5) for d in delays_set)
+            if already_seen:
+                skipped_blocks += 1
+                logger.warning(
+                    "Skipping duplicate/spliced delay %.4f in scan %d (around line %d) in HARPIA file '%s'",
+                    delay_val,
+                    scan_num,
+                    idx,
+                    path.name,
+                )
+                idx = cur_idx
+                continue
+            delays_set.add(delay_val)
+            meas.setdefault(scan_num, []).append(entry)
+
+        idx = cur_idx
+
+    if skipped_blocks > 0:
+        warnings.warn(
+            f"HARPIA file '{path.name}': skipped {skipped_blocks} corrupted or duplicate measurement block(s).",
+            UserWarning,
+            stacklevel=2,
+        )
 
     if not meas:
         raise ValueError(f"No measurement blocks found in HARPIA file {datafilename}.")
@@ -2530,10 +2599,10 @@ def read_HARPIA(datafilename: str) -> LoaderResult:
                 Zss_R[d_i, :, 0, s_idx] = np.mean(da_list, axis=0)
 
     with np.errstate(divide="ignore", invalid="ignore"):
-        Zavg_R = np.nanmean(Zss_R, axis=-1)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=RuntimeWarning)
+            Zavg_R = np.nanmean(Zss_R, axis=-1)
         if Nscans > 1:
-            import warnings
-
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", category=RuntimeWarning)
                 Zstdv = np.nanstd(Zss_R, axis=-1, ddof=1)
@@ -2553,6 +2622,8 @@ def read_HARPIA(datafilename: str) -> LoaderResult:
     Units = hlp.units2dic("nm", unitsT, "x1E3")
     Units["cal_source"] = cal_source
     Units["cal_level"] = cal_level
+    if skipped_blocks > 0:
+        Units["corrupted_blocks_skipped"] = skipped_blocks
     return Zavg_R, delays, probe, Units, Nscans, Zss_R, Zstdv, scan_ids
 
 
@@ -2590,17 +2661,23 @@ def parse_scan_selection(text: str, nmax: int) -> list[int]:
 
 
 def mess_recalc_average(
-    path: str, scan_indices, *, spectrum: int = 0, slowmod: int = 0
+    path: str,
+    scan_indices,
+    *,
+    spectrum: int = 0,
+    slowmod: int = 0,
+    noise_weighted: bool = True,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Recompute the noise-weighted average over selected MESS scans.
+    """Recompute the average over selected MESS scans.
 
     Reads the per-scan signal and per-scan noise from ``<folder>/temp`` and
-    combines the selected ``scan_indices`` (0-based) by inverse-variance
-    weighting (weight ``1/noise**2``), matching the acquisition's averaged data:
-    selecting every scan reproduces the main-directory ``_signal`` /
-    ``_signal_noise`` files. Returns ``(Zavg_R, Zstdv)`` shaped
-    ``[Ndelays x Npixels x 1]`` and aligned to the dataset's (deduplicated,
-    sorted) delay axis.
+    combines the selected ``scan_indices`` (0-based). When ``noise_weighted=True``
+    (default), combines scans by inverse-variance weighting (weight ``1/noise**2``),
+    matching the acquisition's averaged data: selecting every scan reproduces
+    the main-directory ``_signal`` / ``_signal_noise`` files. When ``False``,
+    computes the direct arithmetic mean and propagates the per-scan noise.
+    Returns ``(Zavg_R, Zstdv)`` shaped ``[Ndelays x Npixels x 1]`` and aligned
+    to the dataset's (deduplicated, sorted) delay axis.
     """
     folder = Path(path)
     name = folder.name
@@ -2639,10 +2716,22 @@ def mess_recalc_average(
     S = np.stack(sigs, axis=-1)  # [Ndelays x Npixels x Ksel]
     Nz = np.stack(nois, axis=-1)
     with np.errstate(divide="ignore", invalid="ignore"):
-        w = 1.0 / np.where(Nz == 0, np.nan, Nz) ** 2
-        wsum = np.nansum(w, axis=-1)
-        avg = np.nansum(S * w, axis=-1) / wsum
-        comb = np.sqrt(1.0 / wsum)
+        if noise_weighted:
+            w = 1.0 / np.where(Nz == 0, np.nan, Nz) ** 2
+            wsum = np.nansum(w, axis=-1)
+            avg = np.nansum(S * w, axis=-1) / wsum
+            comb = np.sqrt(1.0 / wsum)
+        else:
+            avg = np.nanmean(S, axis=-1)
+            k_valid = np.sum(np.isfinite(Nz) & (Nz > 0), axis=-1)
+            if np.any(k_valid > 0):
+                comb = np.sqrt(np.nansum(np.where(Nz > 0, Nz, 0.0) ** 2, axis=-1)) / np.where(k_valid == 0, 1.0, k_valid)
+            elif len(scan_indices) > 1:
+                comb = np.nanstd(S, axis=-1, ddof=1)
+            else:
+                comb = np.zeros_like(avg)
+        avg = np.nan_to_num(avg, nan=0.0)
+        comb = np.nan_to_num(comb, nan=0.0)
     return avg[..., np.newaxis], comb[..., np.newaxis]
 
 

@@ -406,6 +406,128 @@ def test_harpia_demo_data_loading():
             assert np.isfinite(ds.Zavg_R).any()
 
 
+def test_harpia_corrupted_and_spliced_blocks(tmp_path):
+    """Verify that corrupt blocks, bad float tokens, shape mismatches, and spliced headers are skipped."""
+    probe = np.linspace(400.0, 600.0, 8)
+    lines = [
+        "Pump-probe, Not referenced, 1000 Hz",
+        "Background header",
+        "Measurement header",
+        "Wavelength:\t" + "\t".join(f"{p:.2f}" for p in probe),
+        # Valid Background scan 1
+        "Background, scan 1, Delay -5.0000",
+        "Pump=0.0",
+        "\t".join(["0.05"] * 8),
+        "\t".join(["0.05"] * 8),
+        "\t".join(["0.05"] * 8),
+        "\t".join(["0.05"] * 8),
+        # Valid Measurement scan 1 delay -5.0
+        "Measurement, scan 1, Delay -5.0000",
+        "Pump=1.0",
+        "\t".join(["0.10"] * 8),
+        "\t".join(["0.10"] * 8),
+        "\t".join(["0.10"] * 8),
+        "\t".join(["0.10"] * 8),
+        # Corrupted block: bad float token in data line
+        "Measurement, scan 1, Delay 0.0000",
+        "Pump=1.0",
+        "\t".join(["0.20"] * 7) + "\t4.7014E+4E+000",
+        "\t".join(["0.20"] * 8),
+        "\t".join(["0.20"] * 8),
+        "\t".join(["0.20"] * 8),
+        # Spliced header without data lines
+        "Measurement, scan 1, Delay 1.0000\t0.55\t0.66",
+        # Duplicate delay from an earlier scan
+        "Measurement, scan 1, Delay -5.0000",
+        "Pump=1.0",
+        "\t".join(["0.15"] * 8),
+        "\t".join(["0.15"] * 8),
+        "\t".join(["0.15"] * 8),
+        "\t".join(["0.15"] * 8),
+        # Valid Measurement scan 1 delay 5.0
+        "Measurement, scan 1, Delay 5.0000",
+        "Pump=1.0",
+        "\t".join(["0.25"] * 8),
+        "\t".join(["0.25"] * 8),
+        "\t".join(["0.25"] * 8),
+        "\t".join(["0.25"] * 8),
+        # Valid Scan 2 containing all delays including 0.0 and 1.0
+        "Background, scan 2, Delay -5.0000",
+        "Pump=0.0",
+        "\t".join(["0.05"] * 8),
+        "\t".join(["0.05"] * 8),
+        "\t".join(["0.05"] * 8),
+        "\t".join(["0.05"] * 8),
+    ]
+    for d in [-5.0, 0.0, 1.0, 5.0]:
+        lines.append(f"Measurement, scan 2, Delay {d:.4f}")
+        lines.append("Pump=1.0")
+        lines.extend(["\t".join(["0.30"] * 8)] * 4)
+
+    test_file = tmp_path / "corrupt_harpia.dat"
+    test_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    with pytest.warns(UserWarning, match="skipped .* corrupted or duplicate"):
+        ds = pm.load_1D(test_file, data_type="HARPIA_TA")
+
+    assert ds.nscans == 2
+    assert ds.Zavg_R.shape == (4, 8, 1)
+    assert len(ds.delays) == 4
+    # All delays should be valid in the average because scan 2 measured all of them
+    assert np.isfinite(ds.Zavg_R).all()
+    assert ds.units.get("corrupted_blocks_skipped") == 3
+
+
+def test_harpia_real_20260929_datasets():
+    """Verify loading real datasets from 20260929 directory (which had byte splices in scan 6)."""
+    folder = Path(r"C:\Users\ricar\switchdrive\Ambizione UniGE\Scripts\testData\HARPIA\20260929")
+    if not folder.is_dir():
+        pytest.skip(f"HARPIA 20260929 directory not found at {folder}")
+
+    blank_path = folder / "260928_blank_HFIP_Vis_TA_2.dat"
+    i0_path = folder / "260928_I0_HFIP_Vis_highconc_TA_4.dat"
+    i1_path = folder / "260928_I1_HFIP_Vis_TA_1.dat"
+
+    # blank file
+    if blank_path.is_file():
+        ds_b = pm.load_1D(blank_path, data_type="HARPIA_TA")
+        assert ds_b.data_type == "HARPIA_TA"
+        assert ds_b.Zavg_R.shape == (130, 256, 1)
+        assert ds_b.nscans == 6
+        assert len(ds_b.delays) == 130
+        assert len(ds_b.probe) == 256
+        assert np.isfinite(ds_b.Zavg_R).all()
+        assert ds_b.units.get("corrupted_blocks_skipped") == 9
+        ds_b.background_correct(tmin=-10.0, tmax=-1.0)
+        assert ds_b.Zavg_C.shape == (130, 256, 1)
+
+    # I0 highconc file
+    if i0_path.is_file():
+        ds_i0 = pm.load_1D(i0_path, data_type="HARPIA_TA")
+        assert ds_i0.data_type == "HARPIA_TA"
+        assert ds_i0.Zavg_R.shape == (130, 256, 1)
+        assert ds_i0.nscans == 10
+        assert len(ds_i0.delays) == 130
+        assert len(ds_i0.probe) == 256
+        assert np.isfinite(ds_i0.Zavg_R).all()
+        assert ds_i0.units.get("corrupted_blocks_skipped") == 9
+        ds_i0.background_correct(tmin=-10.0, tmax=-1.0)
+        assert ds_i0.Zavg_C.shape == (130, 256, 1)
+
+    # I1 file (clean)
+    if i1_path.is_file():
+        ds_i1 = pm.load_1D(i1_path, data_type="HARPIA_TA")
+        assert ds_i1.data_type == "HARPIA_TA"
+        assert ds_i1.Zavg_R.shape == (130, 256, 1)
+        assert ds_i1.nscans == 10
+        assert len(ds_i1.delays) == 130
+        assert len(ds_i1.probe) == 256
+        assert np.isfinite(ds_i1.Zavg_R).all()
+        assert "corrupted_blocks_skipped" not in ds_i1.units
+        ds_i1.background_correct(tmin=-10.0, tmax=-1.0)
+        assert ds_i1.Zavg_C.shape == (130, 256, 1)
+
+
 
 # --------------------------------------------------------------------------- #
 #                                Helios TA                                    #
