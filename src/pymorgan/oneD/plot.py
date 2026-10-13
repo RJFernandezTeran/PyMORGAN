@@ -1334,7 +1334,7 @@ def plot_spectra(
     secondary_axis=None,
     dualScale=None,  # deprecated: a truthy value maps to secondary_axis=True
     normY=False,
-    anisotropy=False,
+    anisotropy=None,
     roundT=None,
     flipColor=False,
     Abs=None,
@@ -1381,8 +1381,9 @@ def plot_spectra(
     normY : bool, default False
         Normalise each spectrum to its own peak absolute amplitude, which
         compares band shapes independently of intensity.
-    anisotropy : bool, default False
-        Label the Y axis ``r(t)`` and fix its limits to [-0.3, 0.9].
+    anisotropy : bool, optional
+        Label the Y axis ``r(t)`` and fix its limits to [-1.0, 1.0]. Inferred
+        automatically if data is an anisotropy dataset.
     roundT : bool, optional
         Round the delays shown in the legend. Defaults to
         ``Settings.round_labels``.
@@ -1427,6 +1428,11 @@ def plot_spectra(
     s, labelStyle, Units = data._resolve(settings, label_style, delta_a_units)
     if roundT is None:
         roundT = s.round_labels
+    if anisotropy is None:
+        dt = str(getattr(data, "data_type", "") or "").lower()
+        uz = str(getattr(data, "units", {}).get("unitsZ_lbl", "") or "").lower()
+        src = str(getattr(data, "source", "") or "").lower()
+        anisotropy = "anisotropy" in dt or "anisotropy" in src or uz in ("r", "r(t)")
     created = ax is None
     pFig, where = _new_axes(ax, fig, layout="constrained", figsize=s.spectra_figsize)
     Zavg_C = data._detector_slice(detector)
@@ -1450,6 +1456,11 @@ def plot_spectra(
     xplot, XUnits, _sec, _xconv = _resolve_x_axis(
         X_l, Units, s, x_axis_unit=x_axis_unit, secondary_axis=secondary_axis
     )
+
+    if Abs is not None and hasattr(Abs, "as_overlay_dict"):
+        Abs = Abs.as_overlay_dict()
+    if Em is not None and hasattr(Em, "as_overlay_dict"):
+        Em = Em.as_overlay_dict()
 
     if Abs is not None:
         Abs_Y = Abs["Y"][(Abs["X"] >= np.nanmin(X_l)) & (Abs["X"] <= np.nanmax(X_l))]
@@ -1592,7 +1603,7 @@ def plot_spectra(
 
     if anisotropy:
         where.set_ylabel(r"r(t)")
-        where.set_ylim([-0.3, 0.9])
+        where.set_ylim([-1.0, 1.0])
 
     _create_legend(where, s, upd)
     where.set_xlim(xplot[0], xplot[-1])
@@ -1778,7 +1789,7 @@ def plot_kinetics(
     delta_a_units=None,
     normY=False,
     Xscale=None,
-    anisotropy=False,
+    anisotropy=None,
     plotStyle="o-",
     doSmooth=0,
     round_labels=None,
@@ -1820,8 +1831,9 @@ def plot_kinetics(
         decay kinetics independently of amplitude.
     Xscale : {"symlog", "log", "lin"}, optional
         Scale of the delay axis. Defaults to ``Settings.time_axis_scale``.
-    anisotropy : bool, default False
-        Label the Y axis ``r(t)`` and fix its limits to [-0.3, 0.5].
+    anisotropy : bool, optional
+        Label the Y axis ``r(t)`` and fix its limits to [-1.0, 1.0]. Inferred
+        automatically if data is an anisotropy dataset.
     doSmooth : int, default 0
         Box-filter width in points applied to each trace; ``< 0`` also draws
         the raw trace faintly underneath, so the smoothing can be judged.
@@ -1866,6 +1878,11 @@ def plot_kinetics(
     (45, 2)
     """
     s, labelStyle, Units = data._resolve(settings, label_style, delta_a_units)
+    if anisotropy is None:
+        dt = str(getattr(data, "data_type", "") or "").lower()
+        uz = str(getattr(data, "units", {}).get("unitsZ_lbl", "") or "").lower()
+        src = str(getattr(data, "source", "") or "").lower()
+        anisotropy = "anisotropy" in dt or "anisotropy" in src or uz in ("r", "r(t)")
     if Xscale is None:
         Xscale = s.time_axis_scale.value
     if round_labels is None:
@@ -2048,10 +2065,10 @@ def plot_kinetics(
     if anisotropy:
         if swap_axes:
             where.set_xlabel(r"r(t)")
-            where.set_xlim([-0.3, 0.5])
+            where.set_xlim([-1.0, 1.0])
         else:
             where.set_ylabel(r"r(t)")
-            where.set_ylim([-0.3, 0.5])
+            where.set_ylim([-1.0, 1.0])
 
     _apply_time_xscale(
         where, Xscale, Y_t, time_axis_label=time_axis_label, settings=s, axis=delay_axis
@@ -2560,7 +2577,7 @@ def plot_species_spectra(
     Notes
     -----
     The ``Sfit`` / ``Taus`` / ``TauErr`` inputs come from a global-analysis fit,
-    which PyMORGAN does not perform — see the companion project **PyRATE-TA**. This
+    which PyMORGAN does not perform - see the companion project **PyRATE-TA**. This
     function is the rendering half of that seam and takes plain arrays, so it is
     independent of how the fit was obtained.
     """
@@ -2601,9 +2618,29 @@ def plot_species_spectra(
 
     if secondary_axis is None and dualScale:
         secondary_axis = True
-    xplot, XUnits, _sec, _ = _resolve_x_axis(
+    xplot, XUnits, _sec, _xconv = _resolve_x_axis(
         X_l, Units, s, x_axis_unit=x_axis_unit, secondary_axis=secondary_axis
     )
+
+    if Abs is not None and hasattr(Abs, "as_overlay_dict"):
+        Abs = Abs.as_overlay_dict()
+    if Em is not None and hasattr(Em, "as_overlay_dict"):
+        Em = Em.as_overlay_dict()
+
+    if Abs is not None:
+        Abs_Y = Abs["Y"][(Abs["X"] >= np.nanmin(X_l)) & (Abs["X"] <= np.nanmax(X_l))]
+        Abs_X = Abs["X"][(Abs["X"] >= np.nanmin(X_l)) & (Abs["X"] <= np.nanmax(X_l))]
+        Abs_Y = hlp.uniform_smooth(Abs_Y, 20)
+        Abs_Y = -Abs_Y / np.nanmax(np.abs(Abs_Y))
+        Abs_X = _xconv(Abs_X)
+
+    if Em is not None:
+        Em_Y = Em["Y"] * Em["X"] ** 4
+        Em_Y = Em_Y[(Em["X"] >= np.nanmin(X_l)) & (Em["X"] <= np.nanmax(X_l))]
+        Em_X = Em["X"][(Em["X"] >= np.nanmin(X_l)) & (Em["X"] <= np.nanmax(X_l))]
+        Em_Y = hlp.uniform_smooth(Em_Y, 20)
+        Em_Y = -Em_Y / np.nanmax(np.abs(Em_Y))
+        Em_X = _xconv(Em_X)
 
     if flipColor:
         cm = plt.cm.turbo(np.linspace(1, 0, Nplots + 1))
@@ -2688,6 +2725,48 @@ def plot_species_spectra(
         else:
             where.plot(xplot, yplot, linewidth=1.5, color=cm[i], label=lbl, **kwargs)
 
+    if (Abs is not None) or (Em is not None):
+        ax3 = where.twinx()
+        ss_dashes = list(s.ss_line_dashes)
+        if Abs is not None:
+            ax3.plot(
+                Abs_X,
+                Abs_Y,
+                color=s.ss_abs_color,
+                dashes=ss_dashes,
+                alpha=s.ss_line_alpha,
+                linewidth=s.ss_line_width,
+            )
+            ax3.fill_between(Abs_X, Abs_Y, color=s.ss_abs_color, alpha=s.ss_fill_alpha)
+            ax3.fill(
+                np.nan,
+                np.nan,
+                color=s.ss_abs_color,
+                alpha=s.ss_line_alpha,
+                linewidth=s.ss_line_width,
+                label="Abs.",
+            )
+        if Em is not None:
+            ax3.plot(
+                Em_X,
+                Em_Y,
+                color=s.ss_em_color,
+                dashes=ss_dashes,
+                alpha=s.ss_line_alpha,
+                linewidth=s.ss_line_width,
+            )
+            ax3.fill_between(Em_X, Em_Y, color=s.ss_em_color, alpha=s.ss_fill_alpha)
+            ax3.fill(
+                np.nan,
+                np.nan,
+                color=s.ss_em_color,
+                alpha=s.ss_line_alpha,
+                linewidth=s.ss_line_width,
+                label="Em.",
+            )
+        ax3.yaxis.set_visible(False)
+        ax3.tick_params(right=False, left=False)
+
     _add_complementary_axis(where, _sec, labelStyle, side="top")
 
     hlp.setXYlabels(
@@ -2712,4 +2791,13 @@ def plot_species_spectra(
     )
     if legend is not None:
         legend.set_draggable(True)
+
+    if (Abs is not None) or (Em is not None):
+        leg3 = ax3.legend(loc="best", handlelength=0.75)
+        if leg3 is not None:
+            leg3.set_draggable(True)
+        yl = where.get_ylim()
+        c_pos = (0 - yl[0]) / (yl[1] - yl[0])
+        mpl_axes_aligner.shift.yaxis(ax3, 0, c_pos, expand=True)
+
     return where

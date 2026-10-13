@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.gridspec import GridSpec
+from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QButtonGroup,
@@ -37,6 +37,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+import pymorgan as pm
+from pymorgan import helpers as hlp
 from pymorgan.gui.canvas import MplCanvas
 from pymorgan.log import get_logger
 from pymorgan.oneD.svd import SVDResult
@@ -269,7 +271,11 @@ class SVDDialog(QDialog):
         self.time_scale_group = QButtonGroup(self)
         self.rad_time_linear = QRadioButton("Linear")
         self.rad_time_symlog = QRadioButton("Symlog (t0 linthresh)")
-        self.rad_time_linear.setChecked(True)
+        delays_span = float(np.ptp(self.dataset.delays)) if len(self.dataset.delays) > 1 else 0.0
+        if delays_span > 10.0 or (np.min(self.dataset.delays) < 0 and np.max(self.dataset.delays) > 1.0):
+            self.rad_time_symlog.setChecked(True)
+        else:
+            self.rad_time_linear.setChecked(True)
         self.time_scale_group.addButton(self.rad_time_linear)
         self.time_scale_group.addButton(self.rad_time_symlog)
 
@@ -399,9 +405,11 @@ class SVDDialog(QDialog):
             QMessageBox.critical(self, "SVD Error", f"SVD calculation failed:\n{exc}")
 
     def _update_plots(self):
-        """Redraw all 4 quadrants in the Matplotlib canvas."""
+        """Redraw all 4 quadrants in the Matplotlib canvas with PyMORGAN aesthetics."""
         if self.svd_res is None:
             return
+
+        pm.apply_style()
 
         k = self.k_spin.value()
         res = self.svd_res
@@ -414,45 +422,63 @@ class SVDDialog(QDialog):
 
         fig = self.canvas.figure
         fig.clear()
+        fig.set_layout_engine(None)
 
-        # GridSpec: 2 rows x 3 columns
-        # Row 0: Scree plot (Col 0), Components (Cols 1-2)
-        # Row 1: Raw (Col 0), Recomposed (Col 1), Residuals (Col 2)
-        gs = GridSpec(2, 3, figure=fig, height_ratios=[1.0, 1.15], hspace=0.35, wspace=0.32)
+        s = pm.get_settings()
+        cmap_id = str(getattr(s, "cmap", "DkRd/Wh/DkBu"))
+        n_white = int(getattr(s, "white_levels", 2))
+        cmap_obj, _ = hlp.CalcCMAP(cmap_id, Ntot=60, Nwhite=n_white)
 
-        # ----------------------------------------------------------------- #
-        # Quadrant 1: Scree Plot (Row 0, Col 0)                            #
-        # ----------------------------------------------------------------- #
-        ax_scree = fig.add_subplot(gs[0, 0])
+        k_plot = min(k, 6)
+
+        # Main vertical split: Top diagnostics (1.0), Bottom 2D maps (1.25)
+        gs_main = GridSpec(
+            2, 1, figure=fig,
+            height_ratios=[1.0, 1.25],
+            hspace=0.34,
+            top=0.94, bottom=0.08, left=0.08, right=0.94,
+        )
+
+        # Top row: Scree (left) + SVD traces (right)
+        gs_top = GridSpecFromSubplotSpec(
+            1, 2, subplot_spec=gs_main[0],
+            width_ratios=[1.0, 1.15],
+            wspace=0.32,
+        )
+
+        # --- Quadrant 1: Scree Plot (No grid) ---
+        ax_scree = fig.add_subplot(gs_top[0])
+        self._ax_scree = ax_scree
+        ax_scree.grid(False)
+
         n_display = min(n_comp, 15)
         comp_idx = np.arange(1, n_display + 1)
         s_vals = res.S[:n_display]
 
-        # Singular value bars & line
+        colors_bars = ["#2563eb" if i <= k else "#cbd5e1" for i in comp_idx]
         min_s = float(np.min(s_vals))
         bar_bottom = min_s * 0.4 if is_scree_log else 0.0
 
-        colors = ["#2563eb" if i <= k else "#94a3b8" for i in comp_idx]
         ax_scree.bar(
             comp_idx,
             s_vals,
-            color=colors,
-            alpha=0.75,
+            color=colors_bars,
             edgecolor="#1e293b",
             linewidth=0.8,
             bottom=bar_bottom,
-            width=0.65,
+            width=0.62,
         )
-        ax_scree.plot(comp_idx, s_vals, "o-", color="#1e3a8a", markersize=4, linewidth=1.2)
-
-        # Cutoff line at k
+        ax_scree.plot(comp_idx, s_vals, "o-", color="#1e3a8a", markersize=4.5, linewidth=1.2)
         ax_scree.axvline(k, color="#dc2626", linestyle="--", linewidth=1.5, label=f"Rank k={k}")
 
-        ax_scree.set_xlabel("Singular Component Index", fontsize=9)
-        ax_scree.set_ylabel(rf"Singular Value $\sigma$ ({'Log10' if is_scree_log else 'Linear'})", fontsize=9)
+        ax_scree.set_xlabel("Component Index", fontsize=9.5, fontweight="bold")
+        ax_scree.set_ylabel(
+            rf"Singular Value $\sigma_i$ ({'Log10' if is_scree_log else 'Linear'})",
+            fontsize=9.5, fontweight="bold",
+        )
         ax_scree.set_xticks(comp_idx)
-        ax_scree.set_title(r"Scree Plot ($\sigma_i$)", fontsize=10, fontweight="bold")
-        ax_scree.tick_params(labelsize=8)
+        ax_scree.set_title(r"Scree Plot ($\sigma_i$)", fontsize=10.5, fontweight="bold", pad=6)
+        ax_scree.tick_params(labelsize=8.5, direction="in", which="both", top=True)
 
         if is_scree_log:
             ax_scree.set_yscale("log")
@@ -461,60 +487,91 @@ class SVDDialog(QDialog):
             ax_scree.set_yscale("linear")
             ax_scree.set_ylim(bottom=0.0, top=float(np.max(s_vals)) * 1.08)
 
-        # Twinx cumulative variance curve
+        # Cumulative variance twinx
         ax_scree_cum = ax_scree.twinx()
+        self._ax_scree_cum = ax_scree_cum
+        ax_scree_cum.grid(False)
         cum_vals = res.cumulative_variance[:n_display] * 100.0
         ax_scree_cum.plot(comp_idx, cum_vals, "s--", color="#059669", markersize=4, linewidth=1.2)
-        ax_scree_cum.set_ylabel("Cumulative Variance (%)", color="#059669", fontsize=9)
-        ax_scree_cum.tick_params(axis="y", labelcolor="#059669", labelsize=8)
+        ax_scree_cum.axhline(95, color="#059669", linestyle=":", alpha=0.6)
+        ax_scree_cum.set_ylabel("Cumulative Variance (%)", color="#059669", fontsize=9.5, fontweight="bold")
+        ax_scree_cum.tick_params(axis="y", labelcolor="#059669", labelsize=8.5, direction="in")
         ax_scree_cum.set_ylim(0, 105)
-        ax_scree_cum.grid(False)
 
-        # ----------------------------------------------------------------- #
-        # Quadrant 2: SVD Components (Row 0, Cols 1-2)                      #
-        # ----------------------------------------------------------------- #
-        gs_comp = gs[0, 1:].subgridspec(2, 1, hspace=0.35)
-        ax_u = fig.add_subplot(gs_comp[0, 0])
-        ax_v = fig.add_subplot(gs_comp[1, 0])
+        # --- Quadrant 2: SVD Components with Rainbow Colormap, No Grid, Only Zero Line ---
+        gs_comp = GridSpecFromSubplotSpec(
+            2, 1, subplot_spec=gs_top[1],
+            hspace=0.55,
+        )
+        ax_u = fig.add_subplot(gs_comp[0])
+        ax_v = fig.add_subplot(gs_comp[1])
 
-        cmap_tab = plt.get_cmap("tab10")
-        k_plot = min(k, 6)
+        ax_u.grid(False)
+        ax_v.grid(False)
 
-        # Temporal components U_i(t) * S_i
+        # Rainbow colormap for traces
+        cmap_rainbow = plt.get_cmap("rainbow")
+        if k_plot == 1:
+            trace_colors = [cmap_rainbow(0.2)]
+        else:
+            trace_colors = [cmap_rainbow(val) for val in np.linspace(0.05, 0.92, k_plot)]
+
+        # Zero line only
+        ax_u.axhline(0, color="#64748b", linestyle="--", linewidth=0.8, alpha=0.8)
+        ax_v.axhline(0, color="#64748b", linestyle="--", linewidth=0.8, alpha=0.8)
+
+        # Temporal traces
         for i in range(k_plot):
-            c = cmap_tab(i % 10)
             u_trace = res.component_time(i, scaled=True)
-            ax_u.plot(res.delays, u_trace, color=c, label=f"$U_{{{i+1}}} \\cdot S_{{{i+1}}}$", linewidth=1.3)
-        ax_u.axhline(0, color="#94a3b8", linestyle=":", linewidth=0.8)
-        ax_u.set_ylabel("$U_k(t) \\cdot S_k$", fontsize=8)
-        ax_u.set_title(f"First {k_plot} Temporal Components $U_k(t)$", fontsize=9, fontweight="bold")
-        ax_u.legend(loc="upper right", fontsize=7, ncol=min(k_plot, 3), framealpha=0.6)
-        ax_u.tick_params(labelsize=8)
+            ax_u.plot(
+                res.delays, u_trace,
+                color=trace_colors[i],
+                label=rf"$U_{{{i+1}}} \cdot S_{{{i+1}}}$",
+                linewidth=1.5,
+            )
 
+        linthresh = 1.0 if np.any(np.abs(res.delays) >= 1.0) else 0.1
         if is_time_symlog:
-            linthresh = 1.0 if np.any(res.delays > 1.0) else 0.1
             ax_u.set_xscale("symlog", linthresh=linthresh)
+            ax_u.set_xlabel(f"{self.time_label} ({self.time_unit}, symlog)", fontsize=8.5, fontweight="bold")
         else:
             ax_u.set_xscale("linear")
+            ax_u.set_xlabel(f"{self.time_label} ({self.time_unit})", fontsize=8.5, fontweight="bold")
 
-        # Spectral components V_i(lambda)
+        ax_u.set_ylabel(r"$U_k(t) \cdot S_k$", fontsize=8.5, fontweight="bold")
+        ax_u.set_title(rf"First {k_plot} Temporal Components $U_k(t)$", fontsize=10, fontweight="bold", pad=4)
+        ax_u.legend(loc="upper right", fontsize=8, ncol=min(k_plot, 3), framealpha=0.7)
+        ax_u.tick_params(labelsize=8, direction="in", which="both", top=True, right=True)
+
+        # Spectral traces
         for i in range(k_plot):
-            c = cmap_tab(i % 10)
             v_trace = res.component_probe(i)
-            ax_v.plot(res.probe, v_trace, color=c, label=f"$V_{{{i+1}}}$", linewidth=1.3)
-        ax_v.axhline(0, color="#94a3b8", linestyle=":", linewidth=0.8)
-        ax_v.set_xlabel(f"{self.probe_label} ({self.probe_unit})", fontsize=8)
-        ax_v.set_ylabel("$V_k(\\lambda)$", fontsize=8)
-        ax_v.set_title(f"First {k_plot} Spectral Components $V_k(\\lambda)$", fontsize=9, fontweight="bold")
-        ax_v.legend(loc="upper right", fontsize=7, ncol=min(k_plot, 3), framealpha=0.6)
-        ax_v.tick_params(labelsize=8)
+            ax_v.plot(
+                res.probe, v_trace,
+                color=trace_colors[i],
+                label=rf"$V_{{{i+1}}}$",
+                linewidth=1.5,
+            )
 
-        # ----------------------------------------------------------------- #
-        # Quadrants 3 & 4: 2D Maps (Row 1, Cols 0, 1, 2)                     #
-        # ----------------------------------------------------------------- #
-        ax_raw = fig.add_subplot(gs[1, 0])
-        ax_recon = fig.add_subplot(gs[1, 1], sharex=ax_raw, sharey=ax_raw)
-        ax_resid = fig.add_subplot(gs[1, 2], sharex=ax_raw, sharey=ax_raw)
+        ax_v.set_xlabel(f"{self.probe_label} ({self.probe_unit})", fontsize=8.5, fontweight="bold")
+        ax_v.set_ylabel(r"$V_k(\lambda)$", fontsize=8.5, fontweight="bold")
+        ax_v.set_title(rf"First {k_plot} Spectral Components $V_k(\lambda)$", fontsize=10, fontweight="bold", pad=4)
+        ax_v.legend(loc="upper right", fontsize=8, ncol=min(k_plot, 3), framealpha=0.7)
+        ax_v.tick_params(labelsize=8, direction="in", which="both", top=True, right=True)
+
+        # --- Bottom Row: 3 2D Maps (PyMORGAN Colormap, No Grid, Balanced Aspect) ---
+        gs_bottom = GridSpecFromSubplotSpec(
+            1, 4, subplot_spec=gs_main[1],
+            width_ratios=[1.0, 1.0, 1.0, 0.035],
+            wspace=0.18,
+        )
+        ax_raw = fig.add_subplot(gs_bottom[0])
+        ax_recon = fig.add_subplot(gs_bottom[1], sharex=ax_raw, sharey=ax_raw)
+        ax_resid = fig.add_subplot(gs_bottom[2], sharex=ax_raw, sharey=ax_raw)
+        cax = fig.add_subplot(gs_bottom[3])
+
+        for ax in (ax_raw, ax_recon, ax_resid):
+            ax.grid(False)
 
         raw_mat = res.raw_matrix
         recon_mat = res.recompose(k)
@@ -526,40 +583,37 @@ class SVDDialog(QDialog):
             vmax = 1.0
         vmin = -vmax
 
-        # Map colormap (RdBu_r standard symmetric)
-        cmap = "RdBu_r"
-
-        # Pcolormesh
         p_grid, t_grid = np.meshgrid(res.probe, res.delays)
-        ax_raw.pcolormesh(p_grid, t_grid, raw_mat, cmap=cmap, vmin=vmin, vmax=vmax, shading="auto")
-        ax_raw.set_title("Raw Data $A(t, \\lambda)$", fontsize=10, fontweight="bold")
-        ax_raw.set_ylabel(f"{self.time_label} ({self.time_unit})", fontsize=9)
-        ax_raw.set_xlabel(f"{self.probe_label} ({self.probe_unit})", fontsize=9)
-        ax_raw.tick_params(labelsize=8)
 
-        ax_recon.pcolormesh(p_grid, t_grid, recon_mat, cmap=cmap, vmin=vmin, vmax=vmax, shading="auto")
-        ax_recon.set_title(f"Recomposed $\\hat{{A}}_k$ (Rank {k})", fontsize=10, fontweight="bold")
-        ax_recon.set_xlabel(f"{self.probe_label} ({self.probe_unit})", fontsize=9)
-        ax_recon.tick_params(labelsize=8)
-
-        c_res = ax_resid.pcolormesh(
-            p_grid, t_grid, resid_mat, cmap=cmap, vmin=vmin, vmax=vmax, shading="auto"
-        )
-        ax_resid.set_title("Residuals ($A - \\hat{A}_k$)", fontsize=10, fontweight="bold")
-        ax_resid.set_xlabel(f"{self.probe_label} ({self.probe_unit})", fontsize=9)
-        ax_resid.tick_params(labelsize=8)
-
-        # Shared time scale
+        ax_raw.pcolormesh(p_grid, t_grid, raw_mat, cmap=cmap_obj, vmin=vmin, vmax=vmax, shading="auto")
         if is_time_symlog:
-            linthresh = 1.0 if np.any(res.delays > 1.0) else 0.1
             ax_raw.set_yscale("symlog", linthresh=linthresh)
         else:
             ax_raw.set_yscale("linear")
 
-        # Colorbar
-        cbar = fig.colorbar(c_res, ax=[ax_raw, ax_recon, ax_resid], orientation="horizontal", fraction=0.04, pad=0.18)
-        cbar.set_label(f"{self.z_label} ({self.z_unit})", fontsize=8)
-        cbar.ax.tick_params(labelsize=8)
+        ax_raw.set_title(r"Raw Data $A(t, \lambda)$", fontsize=10.5, fontweight="bold", pad=6)
+        ax_raw.set_ylabel(f"{self.time_label} ({self.time_unit})", fontsize=9.5, fontweight="bold")
+        ax_raw.set_xlabel(f"{self.probe_label} ({self.probe_unit})", fontsize=9.5, fontweight="bold")
+        ax_raw.tick_params(labelsize=8.5, direction="in", which="both", top=True, right=True)
+
+        ax_recon.pcolormesh(p_grid, t_grid, recon_mat, cmap=cmap_obj, vmin=vmin, vmax=vmax, shading="auto")
+        ax_recon.set_title(rf"Recomposed $\hat{{A}}_k$ (Rank {k})", fontsize=10.5, fontweight="bold", pad=6, color="#059669")
+        ax_recon.set_xlabel(f"{self.probe_label} ({self.probe_unit})", fontsize=9.5, fontweight="bold")
+        plt.setp(ax_recon.get_yticklabels(), visible=False)
+        ax_recon.tick_params(labelsize=8.5, direction="in", which="both", top=True, right=True)
+
+        c_res = ax_resid.pcolormesh(
+            p_grid, t_grid, resid_mat, cmap=cmap_obj, vmin=vmin, vmax=vmax, shading="auto"
+        )
+        ax_resid.set_title(r"Residuals ($A - \hat{A}_k$)", fontsize=10.5, fontweight="bold", pad=6, color="#dc2626")
+        ax_resid.set_xlabel(f"{self.probe_label} ({self.probe_unit})", fontsize=9.5, fontweight="bold")
+        plt.setp(ax_resid.get_yticklabels(), visible=False)
+        ax_resid.tick_params(labelsize=8.5, direction="in", which="both", top=True, right=True)
+
+        # Dedicated vertical colorbar on the right
+        cbar = fig.colorbar(c_res, cax=cax, orientation="vertical")
+        cbar.set_label(f"{self.z_label} ({self.z_unit})", fontsize=8.5, fontweight="bold")
+        cbar.ax.tick_params(labelsize=8.5, direction="in")
 
         self.canvas.draw()
 
@@ -567,10 +621,8 @@ class SVDDialog(QDialog):
         """Allow clicking on the scree plot to select rank k."""
         if event.inaxes is None or self.svd_res is None:
             return
-        # If click was inside the scree plot
-        if event.xdata is not None and 0.5 <= event.xdata <= min(self.svd_res.n_components, 20) + 0.5:
-            # Check if clicked in row 0, col 0
-            if event.ydata is not None and event.ydata > 0:
+        if event.inaxes in (getattr(self, "_ax_scree", None), getattr(self, "_ax_scree_cum", None)):
+            if event.xdata is not None and 0.5 <= event.xdata <= min(self.svd_res.n_components, 20) + 0.5:
                 clicked_k = int(np.round(event.xdata))
                 if 1 <= clicked_k <= min(self.svd_res.n_components, 20):
                     self.k_spin.setValue(clicked_k)

@@ -187,7 +187,8 @@ class AnisotropyDialog(QDialog):
         self.spin_preview_probe.setRange(min(p_min, p_max), max(p_min, p_max))
         self.spin_preview_probe.setDecimals(2)
         u_l = dataset.units.get("unitsL_lbl", "nm") if dataset.units else "nm"
-        self.spin_preview_probe.setSuffix(f" {u_l}")
+        disp_u = "cm⁻¹" if u_l in ("cm-1", "cm^-1", "cm⁻¹") else u_l
+        self.spin_preview_probe.setSuffix(f" {disp_u}")
         self.spin_preview_probe.setValue(float(probe[len(probe) // 2]))
         h_pr.addWidget(self.spin_preview_probe)
         vbox_params.addLayout(h_pr)
@@ -205,9 +206,9 @@ class AnisotropyDialog(QDialog):
         self.combo_target_component = QComboBox()
         self.combo_target_component.addItem("Anisotropy: r(t)", "anisotropy")
         self.combo_target_component.addItem("Magic Angle: I_MA (Isotropic)", "magic_angle")
-        self.combo_target_component.addItem("Polarization Difference: ΔI", "difference")
-        self.combo_target_component.addItem("Parallel Channel: I_∥", "parallel")
-        self.combo_target_component.addItem("Perpendicular Channel: I_⊥", "perpendicular")
+        self.combo_target_component.addItem("Polarization Difference: Delta I", "difference")
+        self.combo_target_component.addItem("Parallel Channel: I_par", "parallel")
+        self.combo_target_component.addItem("Perpendicular Channel: I_perp", "perpendicular")
         h_act.addWidget(self.combo_target_component)
 
         self.btn_apply = QPushButton("Apply to Workspace")
@@ -348,7 +349,7 @@ class AnisotropyDialog(QDialog):
         ax2.axhline(0.0, color="#94a3b8", linestyle=":", linewidth=0.8)
         ax2.set_xlabel(f"Delay ({u_t})", fontsize=9)
         ax2.set_ylabel("Anisotropy r(t)", fontsize=9)
-        ax2.set_ylim(-0.3, 0.5)
+        ax2.set_ylim(-1.0, 1.0)
         ax2.legend(loc="best", fontsize=8)
         ax2.grid(True, alpha=0.3)
 

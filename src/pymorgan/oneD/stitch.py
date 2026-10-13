@@ -42,9 +42,11 @@ class StitchResult:
     stitch_region : tuple[float, float]
         Overlap interval used for scaling estimation.
     blend_window : tuple[float, float] | None
-        Transition window for linear cross-fade ramp (if blended).
+        Transition window for blending.
     cutover_val : float | None
         Cutover threshold (if hard cutover).
+    blend_method : {"cubic", "linear", "quintic", "cosine", "step"}
+        Transition weighting function used for blending.
     wl_shift_params : tuple[float, float] | None
         Linear wavelength shift parameters (slope m, intercept b) if applied.
     scaling_params : dict[str, Any]
@@ -58,6 +60,7 @@ class StitchResult:
     stitch_region: tuple[float, float] = (0.0, 0.0)
     blend_window: tuple[float, float] | None = None
     cutover_val: float | None = None
+    blend_method: str = "cubic"
     wl_shift_params: tuple[float, float] | None = None
     scaling_params: dict[str, Any] = field(default_factory=dict)
 
@@ -103,6 +106,34 @@ class StitchResult:
             raise ValueError(f"Unsupported export format '{fmt}'. Choose 'pdat', 'h5', or 'csv'.")
 
 
+def _compute_blend_weight(u: np.ndarray, method: str = "cubic") -> np.ndarray:
+    """Compute normalized blend weight w(u) in [0, 1] for dataset 2.
+
+    Parameters
+    ----------
+    u : np.ndarray
+        Normalized coordinate from 0.0 (dataset 1 pure) to 1.0 (dataset 2 pure).
+    method : {"cubic", "linear", "quintic", "cosine", "step"}
+        Transition weighting function:
+        - "cubic": Cubic Hermite polynomial (3u^2 - 2u^3), C^1 smooth with zero boundary slopes.
+        - "linear": Linear cross-fade ramp (u).
+        - "quintic": Quintic smootherstep polynomial (6u^5 - 15u^4 + 10u^3), C^2 smooth.
+        - "cosine": Half-period raised cosine (0.5 * (1 - cos(pi * u))), C^1 smooth.
+        - "step": Direct step threshold (0 for u < 0.5, 1 for u >= 0.5).
+    """
+    u_clamped = np.clip(u, 0.0, 1.0)
+    m = str(method).lower().strip()
+    if m in ("cubic", "polynomial", "smoothstep"):
+        return 3.0 * (u_clamped ** 2) - 2.0 * (u_clamped ** 3)
+    elif m in ("quintic", "smootherstep"):
+        return 6.0 * (u_clamped ** 5) - 15.0 * (u_clamped ** 4) + 10.0 * (u_clamped ** 3)
+    elif m == "cosine":
+        return 0.5 * (1.0 - np.cos(np.pi * u_clamped))
+    elif m in ("step", "hard", "cutover"):
+        return np.where(u_clamped >= 0.5, 1.0, 0.0)
+    return u_clamped
+
+
 def stitch_wavelength(
     ds1: Dataset1D,
     ds2: Dataset1D,
@@ -115,6 +146,7 @@ def stitch_wavelength(
     target_delays: Literal["ds2", "ds1"] | np.ndarray = "ds2",
     detector1: int = 0,
     detector2: int = 0,
+    blend_method: Literal["cubic", "linear", "quintic", "cosine", "step"] = "cubic",
 ) -> StitchResult:
     """Stitch two datasets with different spectral ranges (e.g. UV/Vis + NIR).
 
@@ -126,7 +158,7 @@ def stitch_wavelength(
         Dataset 2 (typically the longer wavelength window, e.g. NIR).
     stitch_region : tuple[float, float], optional
         Wavelength range ``(wl_min, wl_max)`` over which the scaling factor C is
-        fitted (such that C * ds1 ≈ ds2). If None, automatically set to the inner
+        fitted (such that C * ds1 ~ ds2). If None, automatically set to the inner
         80% of the overlapping probe range.
     mode : {"blend", "cutover"}, default "blend"
         Stitching transition mode:
@@ -230,7 +262,7 @@ def stitch_wavelength(
         a_vec = z1_eval[mask_t, :].ravel()
         b_vec = z2_eval[mask_t, :].ravel()
 
-        # Least squares C * a ≈ b
+        # Least squares C * a ~ b
         denom = float(np.dot(a_vec, a_vec))
         if denom > 1e-15:
             scaling_factor = float(np.dot(a_vec, b_vec) / denom)
@@ -281,9 +313,12 @@ def stitch_wavelength(
             z1_blend[r, :] = np.interp(grid_blend, wl1, z1_scaled[r, :])
             z2_blend[r, :] = np.interp(grid_blend, wl2, z2_aligned[r, :])
 
-        # Linear weights: 1 at blend_start -> 0 at blend_end
-        w = (blend_end - grid_blend) / (blend_end - blend_start)
-        part_blend = w[np.newaxis, :] * z1_blend + (1.0 - w[np.newaxis, :]) * z2_blend
+        # Compute weights using selected blend method
+        denom_wl = max(blend_end - blend_start, 1e-12)
+        u_blend = (grid_blend - blend_start) / denom_wl
+        w2 = _compute_blend_weight(u_blend, blend_method)
+        w1 = 1.0 - w2
+        part_blend = w1[np.newaxis, :] * z1_blend + w2[np.newaxis, :] * z2_blend
 
         out_wl = np.concatenate([wl1[idx_pure_1], grid_blend, wl2[idx_pure_2]])
         out_z = np.concatenate([part_1, part_blend, part_2], axis=1)
@@ -310,6 +345,7 @@ def stitch_wavelength(
         stitch_region=(float(fit_min), float(fit_max)),
         blend_window=actual_blend,
         cutover_val=actual_cutover,
+        blend_method=blend_method,
         scaling_params={"swapped": swapped, "time_threshold": time_threshold},
     )
 
@@ -369,6 +405,7 @@ def stitch_time(
     scatter_region: tuple[float, float] = (500.0, 550.0),
     detector_fs: int = 0,
     detector_ns: int = 0,
+    blend_method: Literal["cubic", "linear", "quintic", "cosine", "step"] = "cubic",
 ) -> StitchResult:
     """Stitch femtosecond and nanosecond/microsecond datasets across timescales.
 
@@ -382,20 +419,22 @@ def stitch_time(
     time_overlap : tuple[float, float], default (0.5, 2.0)
         Delay window in ns where the scaling factor is calculated.
     blend_window : tuple[float, float], default (1.0, 1.7)
-        Delay transition window in ns over which the linear weight ramp is applied.
+        Delay transition window in ns over which the blend weight ramp is applied.
     scale_model : {"quadratic", "scalar"}, default "quadratic"
-        - ``"quadratic"``: Fit a smooth quadratic polynomial S(λ) across wavelengths.
+        - ``"quadratic"``: Fit a smooth quadratic polynomial S(lambda) across wavelengths.
         - ``"scalar"``: Fit a single global scalar multiplier C.
     scale_override : float, optional
         Manual scalar scaling multiplier.
     align_wl : bool, default True
-        Optimize linear spectrometer shift (m * λ + b) to reconcile slight grating offsets.
+        Optimize linear spectrometer shift (m * lambda + b) to reconcile slight grating offsets.
     cut_scatter : bool, default False
         Exclude scatter band from wavelength alignment.
     scatter_region : tuple[float, float], default (500.0, 550.0)
         Wavelength band to ignore during alignment if ``cut_scatter`` is True.
     detector_fs, detector_ns : int, default 0
         Detector channel index.
+    blend_method : {"cubic", "linear", "quintic", "cosine", "step"}, default "cubic"
+        Weighting function used across the blend transition window.
 
     Returns
     -------
@@ -544,7 +583,11 @@ def stitch_time(
     weights = np.zeros(len(joined_t), dtype=float)
     weights[joined_t <= t_blend_start] = 1.0
     blend_mask = (joined_t > t_blend_start) & (joined_t < t_blend_end)
-    weights[blend_mask] = (t_blend_end - joined_t[blend_mask]) / (t_blend_end - t_blend_start)
+    denom_t = max(t_blend_end - t_blend_start, 1e-12)
+    u_blend = (joined_t[blend_mask] - t_blend_start) / denom_t
+    # u=0 is fs pure, u=1 is ns pure; weights holds fs weight, so 1.0 - w_ns
+    weights[blend_mask] = 1.0 - _compute_blend_weight(u_blend, blend_method)
+    weights[joined_t >= t_blend_end] = 0.0
 
     joined_z = weights[:, np.newaxis] * fs_interp_t + (1.0 - weights[:, np.newaxis]) * ns_interp_t
 
@@ -570,6 +613,7 @@ def stitch_time(
         scaling_model=used_model,
         stitch_region=(float(t_scale_min), float(t_scale_max)),
         blend_window=(float(t_blend_start), float(t_blend_end)),
+        blend_method=blend_method,
         wl_shift_params=wl_shift,
         scaling_params=fit_params,
     )

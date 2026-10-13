@@ -599,12 +599,24 @@ class PlotControlsPanel(QObject):
             w.setValue(v)
             w.blockSignals(False)
 
-        zabs, zlo, zhi = self._compute_zref()
-        self._zabs = zabs or 1.0
-        for w, v in ((self.z_min, -self._zabs), (self.z_max, self._zabs)):
-            w.blockSignals(True)
-            w.setValue(v)
-            w.blockSignals(False)
+        dt = str(getattr(dataset, "data_type", "") or "").lower()
+        uz = str(getattr(dataset, "units", {}).get("unitsZ_lbl", "") or "").lower()
+        src = str(getattr(dataset, "source", "") or "").lower()
+        is_aniso = "anisotropy" in dt or "anisotropy" in src or uz in ("r", "r(t)")
+        if is_aniso:
+            self._zabs = 1.0
+            zlo, zhi = -1.0, 1.0
+            for w, v in ((self.z_min, -1.0), (self.z_max, 1.0)):
+                w.blockSignals(True)
+                w.setValue(v)
+                w.blockSignals(False)
+        else:
+            zabs, zlo, zhi = self._compute_zref()
+            self._zabs = zabs or 1.0
+            for w, v in ((self.z_min, -self._zabs), (self.z_max, self._zabs)):
+                w.blockSignals(True)
+                w.setValue(v)
+                w.blockSignals(False)
         self.z_slider.blockSignals(True)
         self.z_slider.setValue(100)
         self.z_slider.blockSignals(False)
@@ -965,10 +977,11 @@ class PlotControlsPanel2D(QObject):
         # Show the spectral unit on the limit spin boxes (defaults to cm-1 in the
         # .ui; follow the dataset if it reports something else).
         unit = str(getattr(dataset, "freq_units", "") or "").strip()
-        if unit:
+        disp_unit = "cm⁻¹" if unit in ("cm-1", "cm^-1", "cm⁻¹") else unit
+        if disp_unit:
             for w in (self.pump_min, self.pump_max, self.probe_min, self.probe_max):
-                if w is not None and w.suffix().strip() != unit:
-                    w.setSuffix(f" {unit}")
+                if w is not None and w.suffix().strip() != disp_unit:
+                    w.setSuffix(f" {disp_unit}")
 
         # Set default pump limits dynamically
         if dataset.datatype == "shaper":

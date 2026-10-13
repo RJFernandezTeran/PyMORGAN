@@ -193,9 +193,9 @@ class PeakInterpolation(StrEnum):
 
 
 class T2LabelStyle(StrEnum):
-    """Format of the t₂ delay indicator text box in 2-D contour plots.
+    """Format of the t_2 delay indicator text box in 2-D contour plots.
 
-    T2_EQ  -> shows ``t₂ = 1.0 ps`` (full equation notation)
+    T2_EQ  -> shows ``t_2 = 1.0 ps`` (full equation notation)
     PLAIN  -> shows just ``1.0 ps`` (number and unit only)
     """
 
@@ -430,8 +430,8 @@ class Settings:
     time_axis_label: TimeAxisLabel = TimeAxisLabel.POWER
     freq_label: FreqLabel = FreqLabel.OMEGA_N
     pump_axis: PumpAxis = PumpAxis.HORIZONTAL
-    # Format of the t₂ delay text box in 2-D contour plots.
-    # T2_EQ -> "t₂ = 1.0 ps";  PLAIN -> "1.0 ps"
+    # Format of the t_2 delay text box in 2-D contour plots.
+    # T2_EQ -> "t_2 = 1.0 ps";  PLAIN -> "1.0 ps"
     t2_label_style: T2LabelStyle = T2LabelStyle.T2_EQ
     # Display unit for the pump/probe axes of 2-D spectra (the data itself stays
     # in wavenumbers). Axes above helpers.DISPLAY_SCALE_THRESHOLD are shown
@@ -453,7 +453,7 @@ class Settings:
     quick_plots: bool = False
     # When True, kinetic/spectral cut figures opened from the GUI inherit the
     # embedded contour's axis limits: spectra X <- probe limits, kinetics X <-
-    # delay limits, and both cuts' signal (Y) axis <- the contour Z (ΔA) limits.
+    # delay limits, and both cuts' signal (Y) axis <- the contour Z (Delta A) limits.
     inherit_cut_limits: bool = True
     # When True, the MESS_TRIR reader loads the per-scan arrays from the
     # dataset's temp/ folder into Zss_R (single-scan exploration); off by
@@ -575,8 +575,15 @@ class Settings:
 
         plt.style.use(str(self.style_path))
 
-        # Warn once if none of the preferred fonts are available.
-        from pymorgan.fonts import PREFERRED_FONTS, available_preferred_fonts
+        # Ensure preferred fonts are configured and available
+        from pymorgan.fonts import (
+            PREFERRED_FONTS,
+            available_preferred_fonts,
+            ensure_fonts_installed,
+        )
+
+        if "TeX Gyre Heros" not in available_preferred_fonts():
+            ensure_fonts_installed(quiet=True)
 
         if not available_preferred_fonts():
             import warnings
@@ -833,7 +840,7 @@ class Settings:
                 "tab": "common",
             },
             "delta_a_units": {
-                "label": "ΔA units",
+                "label": "Delta A units",
                 "kind": "choice",
                 "choices": [e.value for e in DeltaAUnits],
                 "tab": "common",
@@ -876,7 +883,7 @@ class Settings:
                 "tab": "common",
             },
             "show_uncertainties": {
-                "label": "Show 1-σ uncertainties",
+                "label": "Show 1-sigma uncertainties",
                 "kind": "bool",
                 "tab": "common",
             },
@@ -950,7 +957,7 @@ class Settings:
                 ),
             },
             "t2_label_style": {
-                "label": "t₂ delay label format",
+                "label": "t_2 delay label format",
                 "kind": "choice",
                 "choices": [e.value for e in T2LabelStyle],
                 "tab": "twoD",
@@ -1069,7 +1076,7 @@ class Settings:
                 "tab": "oneD",
             },
             "solvent_per_pixel_dt": {
-                "label": "Per-pixel solvent t₀ offset",
+                "label": "Per-pixel solvent t0 offset",
                 "kind": "bool",
                 "tab": "oneD",
             },
@@ -1079,7 +1086,7 @@ class Settings:
                 "tab": "oneD",
             },
             "error_shading": {
-                "label": "Error shading (±1 std)",
+                "label": "Error shading (+/-1 std)",
                 "kind": "bool",
                 "tab": "oneD",
             },
@@ -1133,7 +1140,7 @@ class Settings:
                 ),
             },
             "sd_peak_range": {
-                "label": "Peak search range (cm⁻¹)",
+                "label": "Peak search range (cm-1)",
                 "kind": "float",
                 "min": 0.0,
                 "max": 100.0,
