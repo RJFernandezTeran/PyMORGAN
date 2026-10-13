@@ -332,6 +332,14 @@ def main(argv: list[str] | None = None) -> int:
     set_windows_app_id("PyMORGAN.SuiteLauncher")
     hide_console()
 
+    # Ensure preferred fonts are installed and registered with Matplotlib early
+    try:
+        from pymorgan.fonts import ensure_fonts_installed
+
+        ensure_fonts_installed(quiet=True)
+    except Exception:
+        pass
+
     app = QApplication.instance() or QApplication(sys.argv)
     icon_path = Path(__file__).parent / "icons" / "pirate-hat.png"
     if icon_path.exists():

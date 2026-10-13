@@ -14,7 +14,7 @@ ICON_DIR="$HOME/.local/share/icons/hicolor/256x256/apps"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 echo "======================================================================"
-echo "  $APP_NAME — Linux Installer"
+echo "  $APP_NAME - Linux Installer"
 echo "======================================================================"
 echo ""
 
@@ -29,6 +29,17 @@ mkdir -p "$ICON_DIR"
 # Copy binary payload
 echo "Copying application binaries..."
 cp -r "$SCRIPT_DIR/bin/"* "$INSTALL_DIR/"
+
+# Install fonts
+FONT_DIR="$HOME/.local/share/fonts/texgyreheros"
+if compgen -G "$INSTALL_DIR/_internal/pymorgan/assets/fonts/*.otf" > /dev/null || compgen -G "$INSTALL_DIR/pymorgan/assets/fonts/*.otf" > /dev/null; then
+    echo "Installing TeX Gyre Heros fonts..."
+    mkdir -p "$FONT_DIR"
+    cp "$INSTALL_DIR"/_internal/pymorgan/assets/fonts/*.otf "$FONT_DIR/" 2>/dev/null || cp "$INSTALL_DIR"/pymorgan/assets/fonts/*.otf "$FONT_DIR/" 2>/dev/null || true
+    if command -v fc-cache >/dev/null 2>&1; then
+        fc-cache -f "$FONT_DIR" >/dev/null 2>&1 || true
+    fi
+fi
 
 # Install icons
 echo "Installing application icons..."

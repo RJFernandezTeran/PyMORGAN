@@ -123,6 +123,14 @@ def main(argv: list[str] | None = None) -> int:
         except Exception:
             logger.debug("Could not set the Windows AppUserModelID.", exc_info=True)
 
+    # Ensure preferred fonts are installed and registered with Matplotlib early
+    try:
+        from ..fonts import ensure_fonts_installed
+
+        ensure_fonts_installed(quiet=True)
+    except Exception:
+        pass
+
     from PyQt6.QtWidgets import QApplication, QStyleFactory
 
     app = QApplication.instance() or QApplication(args)

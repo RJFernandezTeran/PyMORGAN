@@ -39,6 +39,7 @@ pymorgan-suite = "pymorgan.gui.suite_launcher:main"
 pymorgan-install-fonts = "pymorgan.fonts:main"
 pymorgan-edit-gui = "pymorgan.gui.designer:main"
 pymorgan-settings = "pymorgan.gui.settings_app:main"
+pymorgan-test = "pymorgan.test_runner:main"
 
 [project.gui-scripts]
 pymorgan-app = "pymorgan.launcher:main"

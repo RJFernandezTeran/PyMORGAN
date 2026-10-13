@@ -35,16 +35,28 @@ def available_preferred_fonts() -> list[str]:
     return [name for name in PREFERRED_FONTS if name in available]
 
 
+def _find_bundled_heros() -> list[Path]:
+    """Search PyMORGAN bundled package assets for TeX Gyre Heros font files."""
+    bundled_dir = Path(__file__).parent / "assets" / "fonts"
+    if not bundled_dir.exists():
+        return []
+    patterns = ["**/texgyreheros-*.otf", "**/texgyreheros-*.ttf"]
+    found: list[Path] = []
+    for pattern in patterns:
+        found.extend(bundled_dir.glob(pattern))
+    return sorted(found)
+
+
 def _find_miktex_heros() -> list[Path]:
     """Search common MiKTeX / TeX Live locations for TeX Gyre Heros font files."""
     home = Path.home()
     search_roots = [
-        # MiKTeX — system-wide and per-user
+        # MiKTeX - system-wide and per-user
         Path(r"C:\Program Files\MiKTeX"),
         Path(r"C:\Program Files (x86)\MiKTeX"),
         home / "AppData" / "Local" / "Programs" / "MiKTeX",
         home / "AppData" / "Roaming" / "MiKTeX",
-        # TeX Live — common install paths
+        # TeX Live - common install paths
         Path(r"C:\texlive"),
         Path("/usr/share/texmf"),
         Path("/usr/local/texlive"),
@@ -78,9 +90,13 @@ def _find_rinoh_heros() -> list[Path]:
 def find_heros_fonts() -> list[Path]:
     """Locate TeX Gyre Heros font files.
 
-    First searches system LaTeX installations (MiKTeX, TeX Live).
+    First searches PyMORGAN's bundled package assets.
+    Next searches system LaTeX installations (MiKTeX, TeX Live).
     If none are found, falls back to the rinoh-typeface-texgyreheros package.
     """
+    fonts = _find_bundled_heros()
+    if fonts:
+        return fonts
     fonts = _find_miktex_heros()
     if fonts:
         return fonts
@@ -92,13 +108,18 @@ def install_fonts(quiet: bool = False) -> None:
     import matplotlib
     import matplotlib.font_manager as fm
 
-    fonts_miktex = _find_miktex_heros()
-    if fonts_miktex:
-        fonts = fonts_miktex
-        source = "MiKTeX / TeX Live installation"
+    fonts_bundled = _find_bundled_heros()
+    if fonts_bundled:
+        fonts = fonts_bundled
+        source = "PyMORGAN bundled assets"
     else:
-        fonts = _find_rinoh_heros()
-        source = "rinoh-typeface-texgyreheros package"
+        fonts_miktex = _find_miktex_heros()
+        if fonts_miktex:
+            fonts = fonts_miktex
+            source = "MiKTeX / TeX Live installation"
+        else:
+            fonts = _find_rinoh_heros()
+            source = "rinoh-typeface-texgyreheros package"
 
     if not fonts:
         if not quiet:
@@ -146,9 +167,11 @@ def install_fonts(quiet: bool = False) -> None:
     except Exception:
         pass
 
-    # Rebuild in this session.
+    # Rebuild in this session and update module singleton.
     try:
-        fm._load_fontmanager(try_read_cache=False)
+        new_fm = fm._load_fontmanager(try_read_cache=False)
+        if new_fm is not None:
+            fm.fontManager = new_fm
     except Exception:
         pass
     available_preferred_fonts.cache_clear()
@@ -163,7 +186,7 @@ def install_fonts(quiet: bool = False) -> None:
     found = [f.name for f in fm.fontManager.ttflist if "Heros" in f.name]
     if not quiet:
         if found:
-            print(f"\nSuccess — Matplotlib now sees: {found}")
+            print(f"\nSuccess - Matplotlib now sees: {found}")
         else:
             print("\nFonts copied but not yet detected. Restart your Python session.")
 
@@ -209,12 +232,24 @@ def ensure_fonts_installed(quiet: bool = True) -> bool:
     """Ensure TeX Gyre Heros fonts are available in Matplotlib.
 
     If fonts are already verified, does nothing. Otherwise, installs them from
-    the bundled `rinoh-typeface-texgyreheros` dependency or system TeX
-    installations.
+    the bundled package assets, rinoh dependency, or system TeX installations.
 
     Returns True if at least one preferred font is available, False otherwise.
     """
     if are_fonts_installed():
+        # Ensure active session fontManager has them registered
+        try:
+            import matplotlib.font_manager as fm
+
+            if not any("Heros" in f.name for f in fm.fontManager.ttflist):
+                for f in find_heros_fonts():
+                    try:
+                        fm.fontManager.addfont(str(f))
+                    except Exception:
+                        pass
+                available_preferred_fonts.cache_clear()
+        except Exception:
+            pass
         return True
 
     try:

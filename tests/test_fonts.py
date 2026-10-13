@@ -31,11 +31,34 @@ def test_find_rinoh_heros_import_error():
         assert _find_rinoh_heros() == []
 
 
+def test_find_bundled_heros():
+    """Verify _find_bundled_heros locates font files in bundled assets."""
+    from pymorgan.fonts import _find_bundled_heros
+
+    fonts = _find_bundled_heros()
+    assert len(fonts) > 0
+    assert any("texgyreheros" in f.name for f in fonts)
+
+
+def test_find_heros_fonts_prefer_bundled():
+    """Test that find_heros_fonts prefers bundled fonts when present."""
+    fake_bundled = [Path("/bundled/texgyreheros-regular.otf")]
+    with (
+        patch("pymorgan.fonts._find_bundled_heros", return_value=fake_bundled),
+        patch("pymorgan.fonts._find_miktex_heros", return_value=[Path("/miktex/font.otf")]),
+        patch("pymorgan.fonts._find_rinoh_heros", return_value=[Path("/rinoh/font.otf")]),
+    ):
+        fonts = find_heros_fonts()
+        assert fonts == fake_bundled
+
+
 def test_find_heros_fonts_fallback():
     """Test that find_heros_fonts falls back to rinoh when miktex finds nothing."""
     fake_rinoh_fonts = [Path("/fake/texgyreheros-regular.otf")]
-    with patch("pymorgan.fonts._find_miktex_heros", return_value=[]), patch(
-        "pymorgan.fonts._find_rinoh_heros", return_value=fake_rinoh_fonts
+    with (
+        patch("pymorgan.fonts._find_bundled_heros", return_value=[]),
+        patch("pymorgan.fonts._find_miktex_heros", return_value=[]),
+        patch("pymorgan.fonts._find_rinoh_heros", return_value=fake_rinoh_fonts),
     ):
         fonts = find_heros_fonts()
         assert fonts == fake_rinoh_fonts
@@ -45,8 +68,10 @@ def test_find_heros_fonts_prefer_miktex():
     """Test that find_heros_fonts prefers MiKTeX/TeX Live fonts if found."""
     fake_miktex_fonts = [Path("/miktex/texgyreheros-regular.otf")]
     fake_rinoh_fonts = [Path("/rinoh/texgyreheros-regular.otf")]
-    with patch("pymorgan.fonts._find_miktex_heros", return_value=fake_miktex_fonts), patch(
-        "pymorgan.fonts._find_rinoh_heros", return_value=fake_rinoh_fonts
+    with (
+        patch("pymorgan.fonts._find_bundled_heros", return_value=[]),
+        patch("pymorgan.fonts._find_miktex_heros", return_value=fake_miktex_fonts),
+        patch("pymorgan.fonts._find_rinoh_heros", return_value=fake_rinoh_fonts),
     ):
         fonts = find_heros_fonts()
         assert fonts == fake_miktex_fonts
@@ -63,21 +88,29 @@ def test_install_fonts(tmp_path):
     mpl_cache_dir.mkdir()
     (mpl_cache_dir / "fontlist-v330.json").write_text("{}")
 
+    import matplotlib.font_manager as fm
+
+    original_fm = fm.fontManager
     mock_fm = MagicMock()
     mock_fm.ttflist = []
 
-    with (
-        patch("pymorgan.fonts._find_miktex_heros", return_value=[]),
-        patch("pymorgan.fonts._find_rinoh_heros", return_value=[font_file]),
-        patch("matplotlib.get_data_path", return_value=str(mpl_data_dir)),
-        patch("matplotlib.get_cachedir", return_value=str(mpl_cache_dir)),
-        patch("matplotlib.font_manager._load_fontmanager", return_value=mock_fm),
-    ):
-        install_fonts()
+    try:
+        with (
+            patch("pymorgan.fonts._find_bundled_heros", return_value=[]),
+            patch("pymorgan.fonts._find_miktex_heros", return_value=[]),
+            patch("pymorgan.fonts._find_rinoh_heros", return_value=[font_file]),
+            patch("matplotlib.get_data_path", return_value=str(mpl_data_dir)),
+            patch("matplotlib.get_cachedir", return_value=str(mpl_cache_dir)),
+            patch("matplotlib.font_manager._load_fontmanager", return_value=mock_fm),
+        ):
+            install_fonts()
 
-        copied_font = mpl_data_dir / "fonts" / "ttf" / "texgyreheros-regular.otf"
-        assert copied_font.exists()
-        assert not (mpl_cache_dir / "fontlist-v330.json").exists()
+            copied_font = mpl_data_dir / "fonts" / "ttf" / "texgyreheros-regular.otf"
+            assert copied_font.exists()
+            assert not (mpl_cache_dir / "fontlist-v330.json").exists()
+    finally:
+        fm.fontManager = original_fm
+        available_preferred_fonts.cache_clear()
 
 
 def test_available_preferred_fonts():
@@ -130,6 +163,7 @@ def test_are_fonts_installed_not_found(tmp_path):
     mock_fm.ttflist = []
 
     with (
+        patch("pymorgan.fonts._find_bundled_heros", return_value=[]),
         patch("matplotlib.get_cachedir", return_value=str(cache_dir)),
         patch("matplotlib.get_data_path", return_value=str(tmp_path / "mpl_data")),
         patch("matplotlib.font_manager.fontManager", mock_fm),
