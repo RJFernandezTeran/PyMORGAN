@@ -908,7 +908,7 @@ background-color: PaleTurquoise
                     </sizepolicy>
                    </property>
                    <property name="toolTip">
-                    <string>Recalculate noise-weighted average excluding specific scans</string>
+                    <string>Recalculate scan average excluding specific scans (noise-weighted or direct)</string>
                    </property>
                    <property name="styleSheet">
                     <string notr="true">
@@ -916,6 +916,19 @@ font: bold</string>
                    </property>
                    <property name="text">
                     <string>Recalc. Average</string>
+                   </property>
+                  </widget>
+                 </item>
+                 <item row="2" column="0" colspan="3">
+                  <widget class="QCheckBox" name="PP_NoiseWeighted_chk">
+                   <property name="toolTip">
+                    <string>Weight scans by inverse noise variance (uncheck for direct unweighted average)</string>
+                   </property>
+                   <property name="text">
+                    <string>Noise-weighted</string>
+                   </property>
+                   <property name="checked">
+                    <bool>true</bool>
                    </property>
                   </widget>
                  </item>
@@ -2345,7 +2358,7 @@ The magnitude sets the smoothing window width.</string>
                 <item row="1" column="1">
                  <widget class="QSpinBox" name="twoD_phase_fit_range">
                   <property name="suffix">
-                   <string> cm-1</string>
+                   <string> cm⁻¹</string>
                   </property>
                   <property name="maximum">
                    <number>10000</number>
@@ -2771,7 +2784,7 @@ The magnitude sets the smoothing window width.</string>
              <item row="0" column="1">
               <widget class="SciDoubleSpinBox" name="twoD_PC_pumpMin">
                <property name="suffix">
-                <string> cm-1</string>
+                <string> cm⁻¹</string>
                </property>
                <property name="minimumSize">
                 <size>
@@ -2802,7 +2815,7 @@ The magnitude sets the smoothing window width.</string>
              <item row="0" column="3">
               <widget class="SciDoubleSpinBox" name="twoD_PC_probeMin">
                <property name="suffix">
-                <string> cm-1</string>
+                <string> cm⁻¹</string>
                </property>
                <property name="minimumSize">
                 <size>
@@ -2880,7 +2893,7 @@ The magnitude sets the smoothing window width.</string>
              <item row="1" column="1">
               <widget class="SciDoubleSpinBox" name="twoD_PC_pumpMax">
                <property name="suffix">
-                <string> cm-1</string>
+                <string> cm⁻¹</string>
                </property>
                <property name="minimumSize">
                 <size>
@@ -2911,7 +2924,7 @@ The magnitude sets the smoothing window width.</string>
              <item row="1" column="3">
               <widget class="SciDoubleSpinBox" name="twoD_PC_probeMax">
                <property name="suffix">
-                <string> cm-1</string>
+                <string> cm⁻¹</string>
                </property>
                <property name="minimumSize">
                 <size>
@@ -3748,6 +3761,17 @@ The magnitude sets the smoothing window width.</string>
     <property name="title">
      <string>&amp;File</string>
     </property>
+    <widget class="QMenu" name="menuSteadyState">
+     <property name="title">
+      <string>&amp;Steady-State Spectra</string>
+     </property>
+     <addaction name="actionLoadAbsorption" />
+     <addaction name="actionLoadEmission" />
+     <addaction name="actionPlotSteadyState" />
+     <addaction name="actionClearSteadyState" />
+     <addaction name="separator" />
+     <addaction name="actionLoadSpectrum" />
+    </widget>
     <widget class="QMenu" name="menuExport">
      <property name="title">
       <string>&amp;Export</string>
@@ -3763,9 +3787,67 @@ The magnitude sets the smoothing window width.</string>
     <addaction name="actionSetRoot" />
     <addaction name="actionToday" />
     <addaction name="separator" />
+    <addaction name="menuSteadyState" />
+    <addaction name="separator" />
     <addaction name="menuExport" />
     <addaction name="separator" />
     <addaction name="actionQuit" />
+   </widget>
+   <widget class="QMenu" name="menuPreProcessing">
+    <property name="title">
+     <string>&amp;Pre-processing</string>
+    </property>
+    <widget class="QMenu" name="menuChirp">
+     <property name="title">
+      <string>&amp;Chirp / Dispersion Correction</string>
+     </property>
+     <addaction name="actionFitChirp" />
+     <addaction name="actionLoadChirpCorr" />
+    </widget>
+    <widget class="QMenu" name="menuStitch">
+     <property name="title">
+      <string>&amp;Stitch Datasets</string>
+     </property>
+     <addaction name="actionStitchWavelength" />
+     <addaction name="actionStitchTimescale" />
+    </widget>
+    <addaction name="actionShiftT0" />
+    <addaction name="menuChirp" />
+    <addaction name="separator" />
+    <addaction name="actionSubtractShockwave" />
+    <addaction name="actionTimeDerivative" />
+    <addaction name="separator" />
+    <addaction name="menuStitch" />
+   </widget>
+   <widget class="QMenu" name="menuAnalysis">
+    <property name="title">
+     <string>&amp;Analysis</string>
+    </property>
+    <widget class="QMenu" name="menuAnisotropy">
+     <property name="title">
+      <string>Polarization &amp;Anisotropy</string>
+     </property>
+     <addaction name="actionAnisotropy" />
+    </widget>
+    <widget class="QMenu" name="menuTwoDAnalysis">
+     <property name="title">
+      <string>&amp;2D Analysis</string>
+     </property>
+     <addaction name="actionTwoDGaussianFit" />
+     <addaction name="actionTwoDSubtraction" />
+     <addaction name="actionTwoDIntegralDynamics" />
+     <addaction name="separator" />
+     <addaction name="actionTwoDSpectralDiffusion" />
+     <addaction name="separator" />
+     <addaction name="actionTwoDMakeGif" />
+    </widget>
+    <addaction name="actionSVD" />
+    <addaction name="menuAnisotropy" />
+    <addaction name="separator" />
+    <addaction name="menuTwoDAnalysis" />
+    <addaction name="separator" />
+    <addaction name="actionSendToPyRATE" />
+    <addaction name="actionLaunchPyRATE" />
    </widget>
    <widget class="QMenu" name="menuView">
     <property name="title">
@@ -3774,22 +3856,6 @@ The magnitude sets the smoothing window width.</string>
     <addaction name="actionSettings" />
     <addaction name="separator" />
     <addaction name="actionRestoreWindowSize" />
-   </widget>
-   <widget class="QMenu" name="menuSpectra">
-    <property name="title">
-     <string>&amp;Spectra</string>
-    </property>
-    <addaction name="actionLoadSpectrum" />
-    <addaction name="actionSubtractShockwave" />
-    <addaction name="actionTimeDerivative" />
-    <addaction name="actionSVD" />
-    <addaction name="actionAnisotropy" />
-    <addaction name="actionStitchWavelength" />
-    <addaction name="actionStitchTimescale" />
-    <addaction name="separator" />
-    <addaction name="actionLoadAbsorption" />
-    <addaction name="actionLoadEmission" />
-    <addaction name="actionClearSteadyState" />
    </widget>
    <widget class="QMenu" name="menuHelp">
     <property name="title">
@@ -3800,8 +3866,9 @@ The magnitude sets the smoothing window width.</string>
     <addaction name="actionAbout" />
    </widget>
    <addaction name="menuFile" />
+   <addaction name="menuPreProcessing" />
+   <addaction name="menuAnalysis" />
    <addaction name="menuView" />
-   <addaction name="menuSpectra" />
    <addaction name="menuHelp" />
   </widget>
   <widget class="QStatusBar" name="statusbar">
@@ -3814,7 +3881,7 @@ The magnitude sets the smoothing window width.</string>
   </widget>
   <action name="actionOpen">
    <property name="text">
-    <string>&amp;Open Data File…</string>
+    <string>&amp;Open Data File...</string>
    </property>
    <property name="shortcut">
     <string>Ctrl+O</string>
@@ -3830,7 +3897,7 @@ The magnitude sets the smoothing window width.</string>
   </action>
   <action name="actionSetRoot">
    <property name="text">
-    <string>Set &amp;Root Folder…</string>
+    <string>Set &amp;Root Folder...</string>
    </property>
   </action>
   <action name="actionToday">
@@ -3840,7 +3907,7 @@ The magnitude sets the smoothing window width.</string>
   </action>
   <action name="actionSettings">
    <property name="text">
-    <string>&amp;Aesthetics / Settings…</string>
+    <string>&amp;Aesthetics / Settings...</string>
    </property>
   </action>
   <action name="actionRestoreWindowSize">
@@ -3864,7 +3931,7 @@ The magnitude sets the smoothing window width.</string>
   </action>
   <action name="actionLoadSpectrum">
    <property name="text">
-    <string>&amp;Load &amp;&amp; Plot Spectrum…</string>
+    <string>&amp;Load &amp;&amp; Plot Overlay Spectrum...</string>
    </property>
   </action>
   <action name="actionSubtractShockwave">
@@ -3901,7 +3968,7 @@ The magnitude sets the smoothing window width.</string>
   </action>
   <action name="actionStitchWavelength">
    <property name="text">
-    <string>Stitch &amp;wavelength regions (UV/Vis + NIR)...</string>
+    <string>Stitch &amp;Spectral Windows...</string>
    </property>
    <property name="toolTip">
     <string>Stitch spectra from different wavelength/wavenumber windows with overlap scaling and blending</string>
@@ -3909,7 +3976,7 @@ The magnitude sets the smoothing window width.</string>
   </action>
   <action name="actionStitchTimescale">
    <property name="text">
-    <string>Stitch &amp;timescales (fs + ns)...</string>
+    <string>Stitch Delay &amp;Timescales...</string>
    </property>
    <property name="toolTip">
     <string>Stitch transient absorption datasets across different timescales with wavelength alignment and quadratic scaling</string>
@@ -3917,7 +3984,7 @@ The magnitude sets the smoothing window width.</string>
   </action>
   <action name="actionLoadAbsorption">
    <property name="text">
-    <string>Load steady-state &amp;absorption…</string>
+    <string>Load Steady-State &amp;Absorption...</string>
    </property>
    <property name="toolTip">
     <string>Load a steady-state absorption spectrum, overlaid as a shaded area on transient spectra.</string>
@@ -3925,7 +3992,7 @@ The magnitude sets the smoothing window width.</string>
   </action>
   <action name="actionLoadEmission">
    <property name="text">
-    <string>Load steady-state &amp;emission…</string>
+    <string>Load Steady-State &amp;Emission...</string>
    </property>
    <property name="toolTip">
     <string>Load a steady-state emission spectrum, overlaid as a shaded area on transient spectra.</string>
@@ -3933,7 +4000,7 @@ The magnitude sets the smoothing window width.</string>
   </action>
   <action name="actionClearSteadyState">
    <property name="text">
-    <string>Clear steady-state overlays</string>
+    <string>Clear Steady-State Overlays</string>
    </property>
    <property name="toolTip">
     <string>Remove the loaded absorption / emission overlays.</string>
@@ -3941,17 +4008,17 @@ The magnitude sets the smoothing window width.</string>
   </action>
   <action name="actionExportFigure">
    <property name="text">
-    <string>Save Current &amp;Figure…</string>
+    <string>Save Current &amp;Figure...</string>
    </property>
   </action>
   <action name="actionExportData">
    <property name="text">
-    <string>Export Processed &amp;Data (CSV)…</string>
+    <string>Export Processed &amp;Data (CSV)...</string>
    </property>
   </action>
   <action name="actionExportPDAT">
    <property name="text">
-    <string>Export 1D Dataset as &amp;PDAT…</string>
+    <string>Export 1D Dataset as &amp;PDAT...</string>
    </property>
    <property name="shortcut">
     <string>Ctrl+1</string>
@@ -3959,7 +4026,7 @@ The magnitude sets the smoothing window width.</string>
   </action>
   <action name="actionExportP2DAT">
    <property name="text">
-    <string>Export 2D Dataset as &amp;P2DAT…</string>
+    <string>Export 2D Dataset as &amp;P2DAT...</string>
    </property>
    <property name="shortcut">
     <string>Ctrl+2</string>
@@ -3978,7 +4045,95 @@ The magnitude sets the smoothing window width.</string>
     <string>&amp;About PyMORGAN</string>
    </property>
   </action>
- </widget>
+   <action name="actionPlotSteadyState">
+   <property name="text">
+    <string>&amp;Plot Steady-State Spectra</string>
+   </property>
+   <property name="toolTip">
+    <string>Open a figure window displaying the loaded steady-state absorption and emission spectra</string>
+   </property>
+  </action>
+  <action name="actionShiftT0">
+   <property name="text">
+    <string>Shift &amp;Time Zero (t0)...</string>
+   </property>
+   <property name="toolTip">
+    <string>Shift the delay time axis so a chosen point becomes the new t0</string>
+   </property>
+  </action>
+  <action name="actionFitChirp">
+   <property name="text">
+    <string>&amp;Fit Chirp / Dispersion Curve...</string>
+   </property>
+   <property name="toolTip">
+    <string>Fit a chirp/dispersion correction curve to transient spectra</string>
+   </property>
+  </action>
+  <action name="actionLoadChirpCorr">
+   <property name="text">
+    <string>&amp;Load Chirp Correction File...</string>
+   </property>
+   <property name="toolTip">
+    <string>Load a saved chirp correction curve from file</string>
+   </property>
+  </action>
+  <action name="actionTwoDGaussianFit">
+   <property name="text">
+    <string>2D &amp;Gaussian Fitting...</string>
+   </property>
+   <property name="toolTip">
+    <string>Fit 2D Gaussian models with GSB/ESA pairs and cross-peaks</string>
+   </property>
+  </action>
+  <action name="actionTwoDSubtraction">
+   <property name="text">
+    <string>2D &amp;Dataset Subtraction...</string>
+   </property>
+   <property name="toolTip">
+    <string>Subtract reference 2D dataset spectrum with scaling</string>
+   </property>
+  </action>
+  <action name="actionTwoDIntegralDynamics">
+   <property name="text">
+    <string>2D &amp;Integral Dynamics...</string>
+   </property>
+   <property name="toolTip">
+    <string>Integrate 2D spectral volume ROI across population delays</string>
+   </property>
+  </action>
+  <action name="actionTwoDSpectralDiffusion">
+   <property name="text">
+    <string>&amp;Spectral Diffusion (CLS / Kubo)...</string>
+   </property>
+   <property name="toolTip">
+    <string>Analyze 2D spectral diffusion (centre line slope / Kubo lineshape) dynamics</string>
+   </property>
+  </action>
+  <action name="actionTwoDMakeGif">
+   <property name="text">
+    <string>Export 2D Delay &amp;Movie / GIF...</string>
+   </property>
+   <property name="toolTip">
+    <string>Export animated GIF or video movie of 2D contour plots vs delay</string>
+   </property>
+  </action>
+  <action name="actionSendToPyRATE">
+   <property name="text">
+    <string>Send Active Dataset to &amp;PyRATE-TA...</string>
+   </property>
+   <property name="toolTip">
+    <string>Send the active transient absorption dataset to PyRATE-TA for kinetic and target analysis</string>
+   </property>
+  </action>
+  <action name="actionLaunchPyRATE">
+   <property name="text">
+    <string>&amp;Launch PyRATE-TA (Kinetic Analysis)...</string>
+   </property>
+   <property name="toolTip">
+    <string>Launch the PyRATE-TA application for target and global kinetic analysis</string>
+   </property>
+  </action>
+</widget>
  <customwidgets>
   <customwidget>
    <class>WidgetPlot</class>

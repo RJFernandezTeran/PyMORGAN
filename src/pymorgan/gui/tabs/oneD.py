@@ -24,14 +24,18 @@ from PyQt6.QtGui import (
 )
 from PyQt6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QDialog,
+    QDialogButtonBox,
     QFileDialog,
     QHBoxLayout,
     QInputDialog,
     QLabel,
+    QLineEdit,
     QMenu,
     QMessageBox,
     QSpinBox,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -56,6 +60,48 @@ from ..mw_common import (
     _safe_set_limits,
     get_combo_datatype,
 )
+
+
+class RecalcAverageDialog(QDialog):
+    """Dialog to choose scans and averaging mode (noise-weighted vs direct)."""
+
+    def __init__(self, parent=None, n_scans: int = 1, default_weighted: bool = True):
+        super().__init__(parent)
+        self.setWindowTitle("Recalc. Average")
+        self.setModal(True)
+        self.resize(360, 150)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(10)
+
+        info_lbl = QLabel(f"Scans to combine (1-{n_scans}):", self)
+        layout.addWidget(info_lbl)
+
+        self.scans_edit = QLineEdit(f"1-{n_scans}", self)
+        self.scans_edit.setPlaceholderText(f"e.g. 1-{n_scans}, 1-3 5 {n_scans}")
+        self.scans_edit.selectAll()
+        layout.addWidget(self.scans_edit)
+
+        self.noise_weighted_chk = QCheckBox("Noise-weighted averaging", self)
+        self.noise_weighted_chk.setChecked(default_weighted)
+        self.noise_weighted_chk.setToolTip(
+            "Weight scans by inverse noise variance (uncheck for direct unweighted average)"
+        )
+        layout.addWidget(self.noise_weighted_chk)
+
+        button_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
+            self,
+        )
+        button_box.accepted.connect(self.accept)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+
+    def scan_text(self) -> str:
+        return self.scans_edit.text().strip()
+
+    def is_noise_weighted(self) -> bool:
+        return self.noise_weighted_chk.isChecked()
 
 
 class OneDTabMixin:
@@ -130,7 +176,7 @@ class OneDTabMixin:
         name = Path(path).name
         dt_display = DATA_TYPE_DISPLAY_NAMES.get(dt, dt)
         cal_str = self.dataset.calibration_status()
-        msg = f"Loaded {name} ({dt_display}) — Probe calibration: {cal_str}"
+        msg = f"Loaded {name} ({dt_display}) - Probe calibration: {cal_str}"
         self.statusBar().showMessage(msg)
         if getattr(self, "plot_controls", None) is not None:
             self.plot_controls.set_dataset(self.dataset)
@@ -139,23 +185,23 @@ class OneDTabMixin:
         self._update_sample_info()
         self._set_dataset_widgets_visible(True)
 
-        act_deriv = getattr(self, "actionTimeDerivative", None)
-        act_svd = getattr(self, "actionSVD", None)
-        act_aniso = getattr(self, "actionAnisotropy", None)
-        act_stitch_wl = getattr(self, "actionStitchWavelength", None)
-        act_stitch_t = getattr(self, "actionStitchTimescale", None)
         tab_idx = self.MainTabs.currentIndex() if hasattr(self, "MainTabs") and self.MainTabs is not None else 0
         has_ds = self.dataset is not None
-        if act_deriv is not None:
-            act_deriv.setEnabled(tab_idx == 0 and has_ds)
-        if act_svd is not None:
-            act_svd.setEnabled(tab_idx == 0 and has_ds)
-        if act_aniso is not None:
-            act_aniso.setEnabled(tab_idx == 0 and has_ds)
-        if act_stitch_wl is not None:
-            act_stitch_wl.setEnabled(tab_idx == 0 and has_ds)
-        if act_stitch_t is not None:
-            act_stitch_t.setEnabled(tab_idx == 0 and has_ds)
+        for act_name in (
+            "actionTimeDerivative",
+            "actionSVD",
+            "actionAnisotropy",
+            "actionStitchWavelength",
+            "actionStitchTimescale",
+            "actionSendToPyRATE",
+            "actionShiftT0",
+            "actionFitChirp",
+            "actionLoadChirpCorr",
+            "actionSubtractShockwave",
+        ):
+            act = getattr(self, act_name, None)
+            if act is not None:
+                act.setEnabled(tab_idx == 0 and has_ds)
 
         if self.dataset is not None:
             has_single = bool(np.isfinite(self.dataset.nscans) and self.dataset.nscans > 0)
@@ -249,8 +295,11 @@ class OneDTabMixin:
             led = getattr(self, "PP_led_SSem", None)
             if led is not None:
                 led.set_state("loaded")
+        act_plot_ss = getattr(self, "actionPlotSteadyState", None)
+        if act_plot_ss is not None:
+            act_plot_ss.setEnabled(True)
         self.statusBar().showMessage(
-            "Loaded steady-state %s (%s) — overlaid on new transient-spectra figures"
+            "Loaded steady-state %s (%s) - overlaid on new transient-spectra figures"
             % (kind, Path(path).name)
         )
 
@@ -264,6 +313,9 @@ class OneDTabMixin:
             led = getattr(self, led_name, None)
             if led is not None:
                 led.set_state("off")
+        act_plot_ss = getattr(self, "actionPlotSteadyState", None)
+        if act_plot_ss is not None:
+            act_plot_ss.setEnabled(False)
         self.statusBar().showMessage("Cleared steady-state overlays")
 
     def _show_steady_state(self):
@@ -355,29 +407,33 @@ class OneDTabMixin:
         self._build_anisotropy_menu()
 
     def _build_anisotropy_menu(self):
-        """Add a menu-bar 'Anisotropy' menu with unified interactive and direct calculations."""
+        """Configure the 'Polarization Anisotropy' menu under Analysis with interactive and direct calculations."""
         self._aniso_menu = None
         self._aniso_actions = {}
         self._quick_aniso_actions = []
-        menubar = self.menuBar()
-        if menubar is None:
-            return
 
-        menu_help = getattr(self, "menuHelp", None)
-        if menu_help is not None:
-            menu = QMenu("Anisotropy", self)
-            menubar.insertMenu(menu_help.menuAction(), menu)
-        else:
-            menu = menubar.addMenu("Anisotropy")
+        menu = getattr(self, "menuAnisotropy", None)
+        if menu is None:
+            menubar = self.menuBar()
+            if menubar is None:
+                return
+            menu_help = getattr(self, "menuHelp", None)
+            if menu_help is not None:
+                menu = QMenu("Polarization Anisotropy", self)
+                menubar.insertMenu(menu_help.menuAction(), menu)
+            else:
+                menu = menubar.addMenu("Polarization Anisotropy")
 
         # 1. Main interactive action (opens full AnisotropyDialog)
-        act_dialog = QAction("Calculate Polarization Anisotropy...", self)
+        act_dialog = getattr(self, "actionAnisotropy", None)
+        if act_dialog is None:
+            act_dialog = QAction("Calculate Polarization Anisotropy...", self)
+            act_dialog.triggered.connect(self._calculate_anisotropy)
+            menu.addAction(act_dialog)
+            self.actionAnisotropy = act_dialog
         act_dialog.setToolTip(
             "Open interactive dialog to preview r(t), adjust G-factor, threshold noise, and apply or export components"
         )
-        act_dialog.triggered.connect(self._calculate_anisotropy)
-        menu.addAction(act_dialog)
-        self.actionAnisotropy = act_dialog
 
         menu.addSeparator()
 
@@ -394,19 +450,19 @@ class OneDTabMixin:
         menu.addAction(act_quick_ma)
         self._quick_aniso_actions.append(act_quick_ma)
 
-        act_quick_diff = QAction("Calculate Polarization Difference: ΔI", self)
+        act_quick_diff = QAction("Calculate Polarization Difference: Delta I", self)
         act_quick_diff.setToolTip("Directly calculate and apply polarization difference (Par - G*Perp)")
         act_quick_diff.triggered.connect(lambda: self._apply_quick_anisotropy("difference"))
         menu.addAction(act_quick_diff)
         self._quick_aniso_actions.append(act_quick_diff)
 
-        act_extract_par = QAction("Extract Parallel Polarization (I_∥)", self)
+        act_extract_par = QAction("Extract Parallel Polarization (I_par)", self)
         act_extract_par.setToolTip("Extract parallel channel as a single-detector dataset")
         act_extract_par.triggered.connect(lambda: self._apply_quick_anisotropy("parallel"))
         menu.addAction(act_extract_par)
         self._quick_aniso_actions.append(act_extract_par)
 
-        act_extract_perp = QAction("Extract Perpendicular Polarization (I_⊥)", self)
+        act_extract_perp = QAction("Extract Perpendicular Polarization (I_perp)", self)
         act_extract_perp.setToolTip("Extract perpendicular channel as a single-detector dataset")
         act_extract_perp.triggered.connect(lambda: self._apply_quick_anisotropy("perpendicular"))
         menu.addAction(act_extract_perp)
@@ -953,14 +1009,14 @@ class OneDTabMixin:
 
     @busy_guard("Recalculating the scan average...")
     def _recalc_average(self):
-        """Recompute the noise-weighted average over a chosen subset of scans.
+        """Recompute the average over a chosen subset of scans (noise-weighted or direct).
 
-        Prompts for a 1-based scan selection (e.g. ``1-4 6 9``), reads the
-        per-scan signal and noise from the dataset's ``temp/`` folder, and
-        replaces the averaged signal/noise by their inverse-variance weighted
-        combination. Selecting every scan reproduces the original averaged data.
-        Available for MESS directory datasets with the un-combined signal
-        (anisotropy = NONE).
+        Prompts for a 1-based scan selection (e.g. ``1-4 6 9``) and averaging
+        mode (noise-weighted or direct arithmetic average). Reads the per-scan
+        signal and noise from the dataset's ``temp/`` folder and replaces the
+        averaged signal/noise by the combined result. Selecting every scan with
+        noise weighting reproduces the original averaged data. Available for
+        MESS directory datasets with un-combined signal (anisotropy = NONE).
         """
         if self.dataset is None:
             self.open_file()
@@ -987,14 +1043,33 @@ class OneDTabMixin:
             )
             return
         n = total_sc
-        text, ok = QInputDialog.getText(
-            self,
-            "Recalc. average",
-            f"Scans to combine (1-{n}), e.g. '1-{n}', '1-3 5 {n}':",
-            text=f"1-{n}",
-        )
-        if not ok or not text.strip():
-            return
+        chk_widget = getattr(self, "PP_NoiseWeighted_chk", None)
+        default_weighted = chk_widget.isChecked() if chk_widget is not None else True
+
+        import inspect
+
+        if not inspect.isbuiltin(QInputDialog.getText):
+            # Backward-compatibility fallback when QInputDialog.getText is mocked in tests
+            text, ok = QInputDialog.getText(
+                self,
+                "Recalc. average",
+                f"Scans to combine (1-{n}), e.g. '1-{n}', '1-3 5 {n}':",
+                text=f"1-{n}",
+            )
+            if not ok or not text.strip():
+                return
+            noise_weighted = default_weighted
+        else:
+            dlg = RecalcAverageDialog(self, n_scans=n, default_weighted=default_weighted)
+            if dlg.exec() != QDialog.DialogCode.Accepted:
+                return
+            text = dlg.scan_text()
+            if not text:
+                return
+            noise_weighted = dlg.is_noise_weighted()
+            if chk_widget is not None:
+                chk_widget.setChecked(noise_weighted)
+
         try:
             idx = parse_scan_selection(text, n)
         except ValueError as exc:
@@ -1008,6 +1083,7 @@ class OneDTabMixin:
                 idx,
                 spectrum=getattr(self, "_mess_spectrum", 0),
                 slowmod=getattr(self, "_mess_slowmod", 0),
+                noise_weighted=noise_weighted,
             )
         except Exception as exc:
             QMessageBox.warning(self, "Recalc. average", str(exc))
@@ -1021,9 +1097,12 @@ class OneDTabMixin:
         if btn_noise is not None:
             btn_noise.setEnabled(bool(self.dataset.has_noise))
         is_mess = self.dataset.data_type in ("MESS_TRIR", "MESS_TRUVIS")
-        avg_type = "noise-weighted average" if is_mess else "average"
+        if noise_weighted:
+            avg_type = "noise-weighted average" if is_mess else "average"
+        else:
+            avg_type = "direct average"
         self.statusBar().showMessage(
-            f"Recalculated {avg_type} over {len(idx)} scan(s): {text.strip()}"
+            f"Recalculated {avg_type} over {len(idx)} scan(s): {text}"
         )
 
     @busy_guard("Masking probe region...")
@@ -1385,7 +1464,8 @@ class OneDTabMixin:
             return
 
         try:
-            launch_pyrate(dataset_or_path=self.dataset)
+            det = getattr(self.plot_controls, "detector", 0) if hasattr(self, "plot_controls") and self.plot_controls is not None else 0
+            launch_pyrate(dataset_or_path=self.dataset, detector=det)
             self.statusBar().showMessage("Handed off active dataset to PyRATE-TA.", 5000)
         except Exception as exc:
             from PyQt6.QtWidgets import QMessageBox

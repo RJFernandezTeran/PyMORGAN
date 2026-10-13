@@ -18,15 +18,70 @@ from typing import TYPE_CHECKING, Any
 
 from pymorgan.log import get_logger
 
+import shutil
+
 if TYPE_CHECKING:
     from pymorgan.oneD.dataset import Dataset1D
 
 logger = get_logger(__name__)
 
 
+def find_pyrate_command() -> list[str] | None:
+    """Return command argv to execute PyRATE-TA, or None if not found."""
+    # 1. If frozen executable (PyInstaller / InnoSetup packaged app)
+    if getattr(sys, "frozen", False):
+        exe_dir = Path(sys.executable).parent
+        for name in ("PyRATE-TA.exe", "pyrate-ta.exe", "PyRATE-TA", "pyrate-ta"):
+            cand = exe_dir / name
+            if cand.is_file():
+                return [str(cand)]
+
+    # 2. Check if importable in current python interpreter
+    if importlib.util.find_spec("pyrate_ta") is not None:
+        py_exe = sys.executable
+        if sys.platform == "win32":
+            pyw = Path(py_exe).with_name("pythonw.exe")
+            if pyw.is_file():
+                py_exe = str(pyw)
+        return [py_exe, "-m", "pyrate_ta.gui.app"]
+
+    # 3. Check if pyrate-ta script exists in current venv Scripts/bin directory
+    venv_dir = Path(sys.executable).parent
+    for name in ("pyrate-ta.exe", "pyrate-ta", "pyrate_ta.exe"):
+        cand = venv_dir / name
+        if cand.is_file():
+            return [str(cand)]
+
+    # 4. Check system PATH for pyrate-ta
+    path_exe = shutil.which("pyrate-ta") or shutil.which("pyrate-ta.exe")
+    if path_exe:
+        return [path_exe]
+
+    # 5. Check sibling PyRATE-TA repository venv (development mode)
+    try:
+        cur_file = Path(__file__).resolve()
+        github_dir = cur_file.parents[4]
+        sibling_pyrate = github_dir / "PyRATE-TA"
+        if sibling_pyrate.is_dir():
+            for py_cand in (
+                sibling_pyrate / ".venv" / "Scripts" / "pythonw.exe",
+                sibling_pyrate / ".venv" / "Scripts" / "python.exe",
+                sibling_pyrate / ".venv" / "bin" / "python",
+                sibling_pyrate / ".venv" / "Scripts" / "pyrate-ta.exe",
+            ):
+                if py_cand.is_file():
+                    if "python" in py_cand.name.lower():
+                        return [str(py_cand), "-m", "pyrate_ta.gui.app"]
+                    return [str(py_cand)]
+    except Exception:
+        pass
+
+    return None
+
+
 def is_pyrate_installed() -> bool:
-    """Check if PyRATE-TA is installed and available in the current environment."""
-    return importlib.util.find_spec("pyrate_ta") is not None
+    """Check if PyRATE-TA is installed and available in the current or companion environment."""
+    return find_pyrate_command() is not None
 
 
 def get_pyrate_version() -> str | None:
@@ -47,6 +102,7 @@ def get_pyrate_version() -> str | None:
 def launch_pyrate(
     dataset_or_path: Dataset1D | str | Path | None = None,
     extra_args: list[str] | None = None,
+    detector: int | None = None,
 ) -> subprocess.Popen:
     """Launch the PyRATE-TA GUI, optionally passing a dataset file to load.
 
@@ -58,6 +114,8 @@ def launch_pyrate(
         so that PyRATE-TA can ingest it directly.
     extra_args : list[str], optional
         Additional CLI flags to pass to PyRATE-TA.
+    detector : int, optional
+        Detector channel index to export when handing off a multi-detector dataset.
 
     Returns
     -------
@@ -71,14 +129,15 @@ def launch_pyrate(
     """
     if not is_pyrate_installed():
         raise RuntimeError(
-            "PyRATE-TA is not installed in the active Python environment.\n\n"
+            "PyRATE-TA is not installed in the active or companion Python environment.\n\n"
             "Install it using:\n"
             "    uv pip install pyrate-ta\n"
             "or clone the companion repository:\n"
             "    https://github.com/RJFernandezTeran/PyRATE-TA"
         )
 
-    cmd = [sys.executable, "-m", "pyrate_ta.gui.app"]
+    base_cmd = find_pyrate_command() or [sys.executable, "-m", "pyrate_ta.gui.app"]
+    cmd = list(base_cmd)
 
     target_file: Path | None = None
     if dataset_or_path is not None:
@@ -94,8 +153,12 @@ def launch_pyrate(
             temp_dir.mkdir(parents=True, exist_ok=True)
             ds_name = getattr(dataset_or_path, "source", "dataset") or "dataset"
             safe_name = Path(ds_name).stem.replace(" ", "_")
+            if detector is not None and getattr(dataset_or_path, "n_detectors", 1) > 1:
+                safe_name = f"{safe_name}_det{detector + 1}"
             target_file = temp_dir / f"{safe_name}_for_kinetic_analysis.pdat"
-            export_pdat(dataset_or_path, target_file)
+            exported = export_pdat(dataset_or_path, target_file, detector=detector)
+            if exported:
+                target_file = exported[0]
             logger.info("Exported active dataset to %s for PyRATE-TA", target_file)
 
     if target_file is not None:

@@ -414,22 +414,22 @@ def test_twoD_gaussian_dialog(qapp, tmp_path):
     assert dlg.chk_constrain_signs.isChecked() is True
     assert dlg.cb_peak_shape.currentText() == "Gaussian"
     assert dlg.table_modes.columnCount() == 11
-    assert dlg.table_modes.horizontalHeaderItem(9).text() == "σ1"
-    assert dlg.table_modes.horizontalHeaderItem(10).text() == "σ3"
+    assert dlg.table_modes.horizontalHeaderItem(9).text() == "\u03c31"
+    assert dlg.table_modes.horizontalHeaderItem(10).text() == "\u03c33"
     assert dlg.chk_correlated.isEnabled() is True
 
-    # Switch to Lorentzian (correlated disabled and unchecked, headers Γ1, Γ3)
+    # Switch to Lorentzian (correlated disabled and unchecked, headers \u03931, \u03933)
     dlg.cb_peak_shape.setCurrentText("Lorentzian")
-    assert dlg.table_modes.horizontalHeaderItem(9).text() == "Γ1"
-    assert dlg.table_modes.horizontalHeaderItem(10).text() == "Γ3"
-    assert "Γ" in dlg.lbl_sigma.text()
+    assert dlg.table_modes.horizontalHeaderItem(9).text() == "\u03931"
+    assert dlg.table_modes.horizontalHeaderItem(10).text() == "\u03933"
+    assert "\u0393" in dlg.lbl_sigma.text()
     assert dlg.chk_correlated.isEnabled() is False
     assert dlg.chk_correlated.isChecked() is False
 
     # Switch back to Gaussian (correlated re-enabled)
     dlg.cb_peak_shape.setCurrentText("Gaussian")
-    assert dlg.table_modes.horizontalHeaderItem(9).text() == "σ1"
-    assert "σ" in dlg.lbl_sigma.text()
+    assert dlg.table_modes.horizontalHeaderItem(9).text() == "\u03c31"
+    assert "\u03c3" in dlg.lbl_sigma.text()
     assert dlg.chk_correlated.isEnabled() is True
 
     # Add 2 diagonal modes and 1 cross-peak manually
@@ -723,6 +723,223 @@ def test_gui_recalc_average_harpia(window, tmp_path, monkeypatch):
     window.PP_RecalcAvg_btn.click()
     assert window.dataset.nscans == 1
     assert window.dataset.total_scans == 3
+
+
+# --------------------------------------------------------------------------- #
+# Reorganized Menu Bar & Anisotropy Limits                                    #
+# --------------------------------------------------------------------------- #
+def test_reorganized_menus_structure(window, monkeypatch):
+    """Test that MainWindow creates the reorganized menu structure."""
+    monkeypatch.setattr(window, "_sync_dataset_lists", lambda idx: None)
+
+    # 1. Check top-level menus
+    assert hasattr(window, "menuFile")
+    assert hasattr(window, "menuPreProcessing")
+    assert hasattr(window, "menuAnalysis")
+    assert hasattr(window, "menuView")
+    assert hasattr(window, "menuHelp")
+
+    # 2. Check File menu submenus and actions
+    assert hasattr(window, "menuSteadyState")
+    assert hasattr(window, "actionLoadAbsorption")
+    assert hasattr(window, "actionLoadEmission")
+    assert hasattr(window, "actionPlotSteadyState")
+    assert hasattr(window, "actionClearSteadyState")
+    assert hasattr(window, "menuExport")
+    assert hasattr(window, "actionExportPDAT")
+    assert hasattr(window, "actionExportP2DAT")
+
+    # 3. Check Pre-processing menu
+    assert hasattr(window, "actionShiftT0")
+    assert hasattr(window, "menuChirp")
+    assert hasattr(window, "actionFitChirp")
+    assert hasattr(window, "actionLoadChirpCorr")
+    assert hasattr(window, "actionSubtractShockwave")
+    assert hasattr(window, "actionTimeDerivative")
+    assert hasattr(window, "menuStitch")
+    assert hasattr(window, "actionStitchWavelength")
+    assert hasattr(window, "actionStitchTimescale")
+
+    # 4. Check Analysis menu
+    assert hasattr(window, "actionSVD")
+    assert hasattr(window, "menuAnisotropy")
+    assert hasattr(window, "actionAnisotropy")
+    assert hasattr(window, "menuTwoDAnalysis")
+    assert hasattr(window, "actionTwoDGaussianFit")
+    assert hasattr(window, "actionTwoDSubtraction")
+    assert hasattr(window, "actionTwoDIntegralDynamics")
+    assert hasattr(window, "actionTwoDSpectralDiffusion")
+    assert hasattr(window, "actionTwoDMakeGif")
+    assert hasattr(window, "actionSendToPyRATE")
+    assert hasattr(window, "actionLaunchPyRATE")
+
+    # 5. Check no redundant top-level Anisotropy menu in menubar
+    top_menu_titles = [a.text().replace("&", "") for a in window.menubar.actions()]
+    assert "File" in top_menu_titles
+    assert "Pre-processing" in top_menu_titles
+    assert "Analysis" in top_menu_titles
+    assert "View" in top_menu_titles
+    assert "Help" in top_menu_titles
+    assert "Anisotropy" not in top_menu_titles
+    assert "Spectra" not in top_menu_titles
+
+
+def test_anisotropy_dialog_limits_and_components(window):
+    """Test that AnisotropyDialog restricts r(t) limits to [-1.0, 1.0]."""
+    from pymorgan.gui.anisotropy_dialog import AnisotropyDialog
+
+    t = np.linspace(-1, 20, 20)
+    p = np.linspace(400, 600, 25)
+    kin_par = np.where(t > 0, np.exp(-t / 5.0) * (1 + 2 * 0.4 * np.exp(-t / 10.0)), 0.0)
+    kin_perp = np.where(t > 0, np.exp(-t / 5.0) * (1 - 0.4 * np.exp(-t / 10.0)), 0.0)
+    spec = np.exp(-((p - 500) / 20.0) ** 2)
+    z_par = np.outer(kin_par, spec)
+    z_perp = np.outer(kin_perp, spec)
+    z_multi = np.stack([z_par, z_perp], axis=2)
+    units = {
+        "unitsT_lbl": "Delay",
+        "unitsT_ltx": "ps",
+        "unitsL_lbl": "Wavelength",
+        "unitsL_ltx": "nm",
+        "unitsZ_lbl": r"$\Delta$A",
+        "unitsZ_ltx": "mOD",
+    }
+    ds = pm.Dataset1D(Zavg_R=z_multi, delays=t, probe=p, units=units)
+
+    dlg = AnisotropyDialog(window, ds)
+    assert dlg.canvas.figure.axes[1].get_ylim() == (-1.0, 1.0)
+    dlg.close()
+
+
+def test_oneD_plot_anisotropy_limits():
+    """Test that plot_spectra and plot_kinetics restrict limits to [-1.0, 1.0] when anisotropy=True."""
+    t = np.linspace(-1, 20, 20)
+    p = np.linspace(400, 600, 25)
+    kin_par = np.where(t > 0, np.exp(-t / 5.0) * (1 + 2 * 0.4 * np.exp(-t / 10.0)), 0.0)
+    kin_perp = np.where(t > 0, np.exp(-t / 5.0) * (1 - 0.4 * np.exp(-t / 10.0)), 0.0)
+    spec = np.exp(-((p - 500) / 20.0) ** 2)
+    z_par = np.outer(kin_par, spec)
+    z_perp = np.outer(kin_perp, spec)
+    z_multi = np.stack([z_par, z_perp], axis=2)
+    units = {
+        "unitsT_lbl": "Delay",
+        "unitsT_ltx": "ps",
+        "unitsL_lbl": "Wavelength",
+        "unitsL_ltx": "nm",
+        "unitsZ_lbl": r"$\Delta$A",
+        "unitsZ_ltx": "mOD",
+    }
+    multi_ds = pm.Dataset1D(Zavg_R=z_multi, delays=t, probe=p, units=units)
+    comps = multi_ds.calculate_anisotropy(return_components=True)
+    aniso_ds = comps["anisotropy"]
+
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots()
+    aniso_ds.plot_spectra([1.0, 5.0], ax=ax)
+    assert ax.get_ylim() == (-1.0, 1.0)
+    plt.close(fig)
+
+    fig, ax = plt.subplots()
+    aniso_ds.plot_kinetics([500.0], ax=ax)
+    assert ax.get_ylim() == (-1.0, 1.0)
+    plt.close(fig)
+
+
+def test_gui_recalc_average_checkbox(window, monkeypatch):
+    """Test PP_NoiseWeighted_chk checkbox and its wiring in _recalc_average."""
+    from PyQt6.QtWidgets import QDialog
+    from pymorgan.gui.tabs.oneD import RecalcAverageDialog
+
+    # Checkbox exists and is checked by default
+    assert hasattr(window, "PP_NoiseWeighted_chk")
+    assert window.PP_NoiseWeighted_chk.isChecked() is True
+
+    # Setup mock dataset with single scans
+    t = np.linspace(-2, 20, 15)
+    p = np.linspace(500, 600, 10)
+    zss = np.zeros((15, 10, 1, 4))
+    zss[:, :, 0, 0] = 2.0
+    zss[:, :, 0, 1] = 4.0
+    zss[:, :, 0, 2] = 6.0
+    zss[:, :, 0, 3] = 8.0
+    units = {
+        "unitsT_lbl": "Delay",
+        "unitsT_ltx": "ps",
+        "unitsL_lbl": "Wavelength",
+        "unitsL_ltx": "nm",
+        "unitsZ_lbl": r"$\Delta$A",
+        "unitsZ_ltx": "mOD",
+    }
+    ds = pm.Dataset1D(Zavg_R=np.mean(zss, axis=-1), delays=t, probe=p, units=units)
+    ds.Zss_R = zss
+    window.dataset = ds
+
+    captured_args = {}
+
+    def mock_recalc_average(scan_indices, *, spectrum=0, slowmod=0, noise_weighted=True):
+        captured_args["scans"] = scan_indices
+        captured_args["noise_weighted"] = noise_weighted
+        ds.Zavg_R = np.mean(zss[:, :, :, scan_indices], axis=-1)
+        ds.nscans = len(scan_indices)
+        return ds
+
+    monkeypatch.setattr(ds, "recalc_average", mock_recalc_average)
+
+    # Mock RecalcAverageDialog to return scans "1-2" with noise_weighted=False
+    class MockDlg:
+        def __init__(self, parent, n_scans, default_weighted):
+            captured_args["dlg_default_weighted"] = default_weighted
+        def exec(self):
+            return QDialog.DialogCode.Accepted
+        def scan_text(self):
+            return "1-2"
+        def is_noise_weighted(self):
+            return False
+
+    monkeypatch.setattr("pymorgan.gui.tabs.oneD.RecalcAverageDialog", MockDlg)
+
+    window._recalc_average()
+
+    assert captured_args["dlg_default_weighted"] is True
+    assert captured_args["scans"] == [0, 1]
+    assert captured_args["noise_weighted"] is False
+    # Sidebar checkbox should now be synchronized to False
+    assert window.PP_NoiseWeighted_chk.isChecked() is False
+
+
+def test_gui_send_to_pyrate_ta(window, tmp_path, monkeypatch):
+    """Test that actionSendToPyRATE is enabled on dataset load and hands off properly."""
+    from unittest.mock import patch
+    from pathlib import Path
+    import synthetic
+
+    # Initially disabled before loading dataset
+    assert window.actionSendToPyRATE.isEnabled() is False
+
+    # Load dataset
+    info = synthetic.make_synthetic_pdat(tmp_path / "pyrate_handoff.pdat")
+    window.load_path(info["path"], "PDAT")
+
+    # Should now be enabled
+    assert window.actionSendToPyRATE.isEnabled() is True
+
+    captured = {}
+
+    def mock_launch_pyrate(dataset_or_path=None, extra_args=None, detector=None):
+        captured["dataset"] = dataset_or_path
+        captured["detector"] = detector
+
+    monkeypatch.setattr("pymorgan.integrations.pyrate_bridge.launch_pyrate", mock_launch_pyrate)
+
+    window.actionSendToPyRATE.trigger()
+
+    assert captured.get("dataset") is window.dataset
+    assert captured.get("detector") == 0
+    assert "Handed off active dataset to PyRATE-TA" in window.statusBar().currentMessage()
+
+
+
 
 
 

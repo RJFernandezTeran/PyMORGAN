@@ -81,7 +81,10 @@ _ACTION_ICONS = {
     "actionExportData": "save_md.png",
     "actionExportPDAT": "savefile_md.png",
     "actionLoadSpectrum": "upload_md.png",
+    "actionPlotSteadyState": "gui.png",
     "actionAbout": "gui.png",
+    "actionSendToPyRATE": "pyrate_ta.ico",
+    "actionLaunchPyRATE": "pyrate_ta.ico",
 }
 
 
@@ -238,6 +241,7 @@ class MainWindow(
             "PP_ScanKinetics_btn": "Plot kinetics across individual dataset scans",
             "PP_ScanSpectra_btn": "Plot transient spectra across individual dataset scans",
             "PP_RecalcAvg_btn": "Recalculate dataset average excluding unselected scans",
+            "PP_NoiseWeighted_chk": "Weight scans by inverse noise variance (uncheck for direct unweighted average)",
             "PP_LoadSSabs_btn": "Load steady-state absorption spectrum from file",
             "PP_LoadSSem_btn": "Load steady-state emission spectrum from file",
             "PP_ShowSSbutton": "Plot loaded steady-state absorption and/or emission spectra",
@@ -246,7 +250,7 @@ class MainWindow(
             "twoD_reloadData_btn": "Reload current 2D dataset from file",
             "twoD_apply_changes_btn": "Apply phase and FT settings and reload 2D dataset",
             "twoD_save_probe_cal_btn": "Save probe wavelength calibration to file",
-            "twoD_contour_btn": "Open 2D contour plot window at current t₂ delay",
+            "twoD_contour_btn": "Open 2D contour plot window at current t2 delay",
             "twoD_kinetics_btn": "Plot 2D kinetics at selected pump/probe peak coordinates",
             "twoD_surf_btn": "Open 3D surface plot window of 2D spectrum",
             "twoD_slices_btn": "Plot 1D pump/probe slices at cursor position",
@@ -254,7 +258,7 @@ class MainWindow(
             "twoD_plot_sd_kinetics_btn": "Plot spectral diffusion centre line slope (CLS) kinetics",
             "twoD_timedomain_fit_btn": "Fit 2D time-domain signals",
             "twoD_spectral_diffusion_btn": "Analyze 2D spectral diffusion (CLS/ellipticity) dynamics",
-            "twoD_make_gif_btn": "Export animated GIF or video movie of 2D contour plots vs t₂ delay",
+            "twoD_make_gif_btn": "Export animated GIF or video movie of 2D contour plots vs t2 delay",
             "twoD_gaussian_fit_btn": "Fit 2D Gaussian models with GSB/ESA pairs and cross-peaks",
             "twoD_subtract_spectra_btn": "Subtract reference 2D dataset spectrum with scaling",
             "twoD_integral_dynamics_btn": "Integrate 2D spectral volume ROI across population delays",
@@ -710,7 +714,7 @@ class MainWindow(
         # Set t2 delay field title
         delay_lbl = getattr(self, "twoD_t2delay_lbl", None)
         if delay_lbl is not None:
-            delay_lbl.setText("t₂ delay")
+            delay_lbl.setText("t2 delay")
 
         # Set gap spacing in selectors layout
         selectors_layout = getattr(self, "twoD_selectors_layout", None)
@@ -833,31 +837,47 @@ class MainWindow(
         """Connect the menu actions defined in the .ui to their handlers.
 
         The actions, shortcuts, separators and menu structure now live in
-        ``main_window.ui``; here we only wire each action (bound by objectName
-        via ``uic.loadUi``) to its slot.
+        ``main_window.ui``; here we wire each action (bound by objectName
+        via ``uic.loadUi`` or compiled UI) to its slot.
         """
         wiring = {
+            # File
             "actionOpen": self.open_file,
             "actionReload": self.handle_reload,
             "actionSetRoot": self.browse_rootdir,
             "actionToday": self._go_to_today,
-            "actionSettings": self._open_settings_dialog,
-            "actionRestoreWindowSize": self._restore_default_window_size,
-            "actionQuit": self.close,
             "actionLoadSpectrum": self._load_spectrum,
-            "actionSubtractShockwave": self._subtract_shockwave,
-            "actionTimeDerivative": self._calculate_time_derivative,
-            "actionSVD": self._run_svd,
-            "actionAnisotropy": self._calculate_anisotropy,
-            "actionStitchWavelength": self._stitch_wavelength,
-            "actionStitchTimescale": self._stitch_timescale,
             "actionLoadAbsorption": lambda _=False: self._load_steady_state("absorption"),
             "actionLoadEmission": lambda _=False: self._load_steady_state("emission"),
+            "actionPlotSteadyState": self._show_steady_state,
             "actionClearSteadyState": self._clear_steady_state,
             "actionExportFigure": self._export_figure,
             "actionExportData": self._export_data,
             "actionExportPDAT": self._export_pdat,
             "actionExportP2DAT": self._export_p2dat,
+            "actionQuit": self.close,
+            # Pre-processing
+            "actionShiftT0": self._shift_t0,
+            "actionFitChirp": self._fit_chirp,
+            "actionLoadChirpCorr": self._load_chirp_corr,
+            "actionSubtractShockwave": self._subtract_shockwave,
+            "actionTimeDerivative": self._calculate_time_derivative,
+            "actionStitchWavelength": self._stitch_wavelength,
+            "actionStitchTimescale": self._stitch_timescale,
+            # Analysis
+            "actionSVD": self._run_svd,
+            "actionAnisotropy": self._calculate_anisotropy,
+            "actionTwoDGaussianFit": self._open_2d_gaussian_fit_dialog,
+            "actionTwoDSubtraction": self._open_2d_subtraction_dialog,
+            "actionTwoDIntegralDynamics": self._open_2d_integral_dynamics_dialog,
+            "actionTwoDSpectralDiffusion": self._on_twoD_spectral_diffusion_clicked,
+            "actionTwoDMakeGif": self._on_twoD_make_gif_clicked,
+            "actionSendToPyRATE": self._send_to_pyrate_ta,
+            "actionLaunchPyRATE": self._launch_pyrate_ta,
+            # View
+            "actionSettings": self._open_settings_dialog,
+            "actionRestoreWindowSize": self._restore_default_window_size,
+            # Help
             "actionManual": self._open_manual,
             "actionAbout": self._about,
         }
@@ -866,55 +886,9 @@ class MainWindow(
             if action is not None:
                 action.triggered.connect(slot)
 
-        # Ensure analysis and stitching actions are in menuSpectra even if not defined in .ui
-        menu_spec = getattr(self, "menuSpectra", None)
-        if menu_spec is not None:
-            from PyQt6.QtGui import QAction
-
-            if getattr(self, "actionSVD", None) is None:
-                act_svd = QAction("Singular Value Decomposition (SVD)...", self)
-                act_svd.triggered.connect(self._run_svd)
-                menu_spec.addAction(act_svd)
-                self.actionSVD = act_svd
-            if getattr(self, "actionAnisotropy", None) is None:
-                act_aniso = QAction("Calculate Polarization Anisotropy...", self)
-                act_aniso.triggered.connect(self._calculate_anisotropy)
-                menu_spec.addAction(act_aniso)
-                self.actionAnisotropy = act_aniso
-            from PyQt6.QtWidgets import QMenu
-
-            menu_stitch = QMenu("Stitch Datasets", menu_spec)
-            menu_spec.addMenu(menu_stitch)
-
-            act_stitch_wl = getattr(self, "actionStitchWavelength", None)
-            if act_stitch_wl is None:
-                act_stitch_wl = QAction("Stitch Wavelength Windows (UV/Vis + NIR)...", self)
-                act_stitch_wl.triggered.connect(self._stitch_wavelength)
-                self.actionStitchWavelength = act_stitch_wl
-            else:
-                menu_spec.removeAction(act_stitch_wl)
-            menu_stitch.addAction(act_stitch_wl)
-
-            act_stitch_t = getattr(self, "actionStitchTimescale", None)
-            if act_stitch_t is None:
-                act_stitch_t = QAction("Stitch Timescales (fs + ns)...", self)
-                act_stitch_t.triggered.connect(self._stitch_timescale)
-                self.actionStitchTimescale = act_stitch_t
-            else:
-                menu_spec.removeAction(act_stitch_t)
-            menu_stitch.addAction(act_stitch_t)
-
-            if getattr(self, "actionSendToPyRATE", None) is None:
-                menu_spec.addSeparator()
-                act_send_pyrate = QAction("Send Active Dataset to PyRATE-TA (Kinetic Analysis)...", self)
-                act_send_pyrate.triggered.connect(self._send_to_pyrate_ta)
-                menu_spec.addAction(act_send_pyrate)
-                self.actionSendToPyRATE = act_send_pyrate
-            if getattr(self, "actionLaunchPyRATE", None) is None:
-                act_launch_pyrate = QAction("Launch PyRATE-TA...", self)
-                act_launch_pyrate.triggered.connect(self._launch_pyrate_ta)
-                menu_spec.addAction(act_launch_pyrate)
-                self.actionLaunchPyRATE = act_launch_pyrate
+        # Backward compatibility alias for legacy references to menuSpectra
+        if not hasattr(self, "menuSpectra") or self.menuSpectra is None:
+            self.menuSpectra = getattr(self, "menuPreProcessing", None)
 
         if hasattr(self, "actionReload") and self.actionReload is not None:
             self.actionReload.setShortcut(QKeySequence(Qt.Key.Key_F5))
@@ -1151,35 +1125,54 @@ class MainWindow(
             QMessageBox.warning(self, "Export failed", str(exc))
 
     def _on_main_tabs_changed(self, index: int):
-        """Enable / disable PDAT / P2DAT / oneD actions based on current tab index."""
+        """Enable / disable actions and menus based on current tab index."""
         act_1d = getattr(self, "actionExportPDAT", None)
         act_2d = getattr(self, "actionExportP2DAT", None)
-        act_deriv = getattr(self, "actionTimeDerivative", None)
-        act_svd = getattr(self, "actionSVD", None)
-        act_aniso = getattr(self, "actionAnisotropy", None)
-        act_stitch_wl = getattr(self, "actionStitchWavelength", None)
-        act_stitch_t = getattr(self, "actionStitchTimescale", None)
-        act_send_pyrate = getattr(self, "actionSendToPyRATE", None)
         if act_1d is not None:
             act_1d.setEnabled(index == 0)
         if act_2d is not None:
             act_2d.setEnabled(index == 1)
+
         has_1d_ds = index == 0 and getattr(self, "dataset", None) is not None
-        if act_deriv is not None:
-            act_deriv.setEnabled(has_1d_ds)
-        if act_svd is not None:
-            act_svd.setEnabled(has_1d_ds)
-        if act_aniso is not None:
-            act_aniso.setEnabled(has_1d_ds)
-        if act_stitch_wl is not None:
-            act_stitch_wl.setEnabled(has_1d_ds)
-        if act_stitch_t is not None:
-            act_stitch_t.setEnabled(has_1d_ds)
-        if act_send_pyrate is not None:
-            act_send_pyrate.setEnabled(has_1d_ds)
+        for act_name in (
+            "actionTimeDerivative",
+            "actionSVD",
+            "actionAnisotropy",
+            "actionStitchWavelength",
+            "actionStitchTimescale",
+            "actionSendToPyRATE",
+            "actionShiftT0",
+            "actionFitChirp",
+            "actionLoadChirpCorr",
+            "actionSubtractShockwave",
+        ):
+            act = getattr(self, act_name, None)
+            if act is not None:
+                act.setEnabled(has_1d_ds)
+
         menu_aniso = getattr(self, "_aniso_menu", None)
         if menu_aniso is not None:
             menu_aniso.setEnabled(has_1d_ds)
+
+        menu_2d = getattr(self, "menuTwoDAnalysis", None)
+        if menu_2d is not None:
+            menu_2d.setEnabled(index == 1)
+        for act_name in (
+            "actionTwoDGaussianFit",
+            "actionTwoDSubtraction",
+            "actionTwoDIntegralDynamics",
+            "actionTwoDSpectralDiffusion",
+            "actionTwoDMakeGif",
+        ):
+            act = getattr(self, act_name, None)
+            if act is not None:
+                act.setEnabled(index == 1)
+
+        act_plot_ss = getattr(self, "actionPlotSteadyState", None)
+        if act_plot_ss is not None:
+            has_ss = getattr(self, "_ss_abs_spectrum", None) is not None or getattr(self, "_ss_em_spectrum", None) is not None
+            act_plot_ss.setEnabled(has_ss)
+
         if index == 0 and getattr(self, "plot_controls", None) is not None:
             self.plot_controls.sync_from_settings()
         elif index == 2:

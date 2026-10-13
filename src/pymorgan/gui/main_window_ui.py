@@ -95,40 +95,75 @@ class Ui_MainWindow(object):
         self.centralLayout.addWidget(self.RootDir_grp)
         self.MainTabs = QtWidgets.QTabWidget(parent=self.centralwidget)
         self.MainTabs.setStyleSheet("QTabWidget#MainTabs::pane { /* The tab widget frame */\n"
+"\n"
 "    border-top: 1px solid #C2C7CB;\n"
+"\n"
 "}\n"
+"\n"
+"\n"
 "\n"
 "QTabWidget#MainTabs::tab-bar {\n"
+"\n"
 "    left: 5px; /* move to the right by 5px */\n"
+"\n"
 "}\n"
+"\n"
+"\n"
 "\n"
 "/* Style the tab using the tab sub-control. Note that\n"
+"\n"
 "    it reads QTabBar _not_ QTabWidget */\n"
+"\n"
 "QTabWidget#MainTabs > QTabBar::tab {\n"
+"\n"
 "    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,\n"
+"\n"
 "                                stop: 0 #E1E1E1, stop: 0.4 #EEEEEE,\n"
+"\n"
 "                                stop: 0.5 #EFEFEF, stop: 1.0 #D3D3D3);\n"
+"\n"
 "    border: 1px solid #C4C4C3;\n"
+"\n"
 "    border-bottom-color: #C2C7CB; /* same as the pane color */\n"
+"\n"
 "    border-top-left-radius: 5px;\n"
+"\n"
 "    border-top-right-radius: 5px;\n"
+"\n"
 "    min-width: 30ex;\n"
+"\n"
 "    padding:4px;\n"
+"\n"
 "}\n"
+"\n"
+"\n"
 "\n"
 "QTabWidget#MainTabs > QTabBar::tab:selected, QTabWidget#MainTabs > QTabBar::tab:hover {\n"
+"\n"
 "    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,\n"
+"\n"
 "                                stop: 0 #fafafa, stop: 0.4 #f4f4f4,\n"
+"\n"
 "                                stop: 0.5 #e7e7e7, stop: 1.0 #fafafa);\n"
+"\n"
 "}\n"
+"\n"
+"\n"
 "\n"
 "QTabWidget#MainTabs > QTabBar::tab:selected {\n"
+"\n"
 "    border-color: #9B9B9B;\n"
+"\n"
 "    border-bottom-color: #C2C7CB; /* same as pane color */\n"
+"\n"
 "}\n"
 "\n"
+"\n"
+"\n"
 "QTabWidget#MainTabs > QTabBar::tab:!selected {\n"
+"\n"
 "    margin-top: 2px; /* make non-selected tabs look smaller */\n"
+"\n"
 "}")
         self.MainTabs.setObjectName("MainTabs")
         self.PP_tab = QtWidgets.QWidget()
@@ -155,8 +190,6 @@ class Ui_MainWindow(object):
         self.PP_datatype_cbx.setSizePolicy(sizePolicy)
         self.PP_datatype_cbx.setStyleSheet("font: normal")
         self.PP_datatype_cbx.setObjectName("PP_datatype_cbx")
-        self.PP_datatype_cbx.addItem("")
-        self.PP_datatype_cbx.addItem("")
         self.PP_datatype_cbx.addItem("")
         self.PP_datatype_cbx.addItem("")
         self.PP_datatype_cbx.addItem("")
@@ -203,8 +236,11 @@ class Ui_MainWindow(object):
         sizePolicy.setHeightForWidth(self.PP_fitChirp_btn.sizePolicy().hasHeightForWidth())
         self.PP_fitChirp_btn.setSizePolicy(sizePolicy)
         self.PP_fitChirp_btn.setStyleSheet("font: bold;\n"
+"\n"
 "color: white;\n"
+"\n"
 "background-color: Black\n"
+"\n"
 "")
         self.PP_fitChirp_btn.setObjectName("PP_fitChirp_btn")
         self.horizontalLayout_3.addWidget(self.PP_fitChirp_btn)
@@ -215,8 +251,11 @@ class Ui_MainWindow(object):
         sizePolicy.setHeightForWidth(self.PP_loadChirpCorr_btn.sizePolicy().hasHeightForWidth())
         self.PP_loadChirpCorr_btn.setSizePolicy(sizePolicy)
         self.PP_loadChirpCorr_btn.setStyleSheet("font: bold;\n"
+"\n"
 "color: white;\n"
+"\n"
 "background-color: Purple\n"
+"\n"
 "")
         self.PP_loadChirpCorr_btn.setObjectName("PP_loadChirpCorr_btn")
         self.horizontalLayout_3.addWidget(self.PP_loadChirpCorr_btn)
@@ -227,8 +266,11 @@ class Ui_MainWindow(object):
         sizePolicy.setHeightForWidth(self.PP_subtractSolvent_btn.sizePolicy().hasHeightForWidth())
         self.PP_subtractSolvent_btn.setSizePolicy(sizePolicy)
         self.PP_subtractSolvent_btn.setStyleSheet("font: bold;\n"
+"\n"
 "color: white;\n"
+"\n"
 "background-color: Gray\n"
+"\n"
 "")
         self.PP_subtractSolvent_btn.setObjectName("PP_subtractSolvent_btn")
         self.horizontalLayout_3.addWidget(self.PP_subtractSolvent_btn)
@@ -239,8 +281,11 @@ class Ui_MainWindow(object):
         sizePolicy.setHeightForWidth(self.PP_subtractShockwave_btn.sizePolicy().hasHeightForWidth())
         self.PP_subtractShockwave_btn.setSizePolicy(sizePolicy)
         self.PP_subtractShockwave_btn.setStyleSheet("font: bold;\n"
+"\n"
 "color: white;\n"
+"\n"
 "background-color: DarkSlateGray\n"
+"\n"
 "")
         self.PP_subtractShockwave_btn.setObjectName("PP_subtractShockwave_btn")
         self.horizontalLayout_3.addWidget(self.PP_subtractShockwave_btn)
@@ -340,38 +385,55 @@ class Ui_MainWindow(object):
         self.gridLayout_2.setObjectName("gridLayout_2")
         self.PP_CtrPlot_btn = QtWidgets.QPushButton(parent=self.oneD_PlotsCuts_box)
         self.PP_CtrPlot_btn.setStyleSheet("font: bold;\n"
+"\n"
 "font-size: 12px;\n"
+"\n"
 "color: white;\n"
+"\n"
 "background-color: DarkBlue\n"
+"\n"
 "")
         self.PP_CtrPlot_btn.setObjectName("PP_CtrPlot_btn")
         self.gridLayout_2.addWidget(self.PP_CtrPlot_btn, 0, 0, 1, 1)
         self.PP_kineticsPlot_btn = QtWidgets.QPushButton(parent=self.oneD_PlotsCuts_box)
         self.PP_kineticsPlot_btn.setStyleSheet("font: bold;\n"
+"\n"
 "font-size: 12px;\n"
+"\n"
 "color: white;\n"
+"\n"
 "background-color: ForestGreen;\n"
+"\n"
 "")
         self.PP_kineticsPlot_btn.setObjectName("PP_kineticsPlot_btn")
         self.gridLayout_2.addWidget(self.PP_kineticsPlot_btn, 0, 1, 1, 1)
         self.PP_SurfPlot_btn = QtWidgets.QPushButton(parent=self.oneD_PlotsCuts_box)
         self.PP_SurfPlot_btn.setStyleSheet("font: bold;\n"
+"\n"
 "font-size: 12px;\n"
+"\n"
 "color: white;\n"
+"\n"
 "background-color: DarkRed\n"
+"\n"
 "")
         self.PP_SurfPlot_btn.setObjectName("PP_SurfPlot_btn")
         self.gridLayout_2.addWidget(self.PP_SurfPlot_btn, 1, 0, 1, 1)
         self.PP_trSpecPlot_btn = QtWidgets.QPushButton(parent=self.oneD_PlotsCuts_box)
         self.PP_trSpecPlot_btn.setStyleSheet("font: bold;\n"
+"\n"
 "font-size: 12px;\n"
+"\n"
 "color: white;\n"
+"\n"
 "background-color: RoyalBlue\n"
+"\n"
 "")
         self.PP_trSpecPlot_btn.setObjectName("PP_trSpecPlot_btn")
         self.gridLayout_2.addWidget(self.PP_trSpecPlot_btn, 1, 1, 1, 1)
         self.PP_Normalise_chk = QtWidgets.QCheckBox(parent=self.oneD_PlotsCuts_box)
         self.PP_Normalise_chk.setStyleSheet("\n"
+"\n"
 "font: bold")
         self.PP_Normalise_chk.setObjectName("PP_Normalise_chk")
         self.gridLayout_2.addWidget(self.PP_Normalise_chk, 2, 1, 1, 1)
@@ -382,9 +444,13 @@ class Ui_MainWindow(object):
         self.ppCutsColumn.addWidget(self.oneD_PlotsCuts_box)
         self.PP_plotCounts_btn = QtWidgets.QPushButton(parent=self.PP_tab)
         self.PP_plotCounts_btn.setStyleSheet("font: bold;\n"
+"\n"
 "font-size: 12px;\n"
+"\n"
 "color: white;\n"
+"\n"
 "background-color: #0284c7;\n"
+"\n"
 "")
         self.PP_plotCounts_btn.setObjectName("PP_plotCounts_btn")
         self.ppCutsColumn.addWidget(self.PP_plotCounts_btn)
@@ -402,8 +468,11 @@ class Ui_MainWindow(object):
         sizePolicy.setHeightForWidth(self.PP_ScanKinetics_btn.sizePolicy().hasHeightForWidth())
         self.PP_ScanKinetics_btn.setSizePolicy(sizePolicy)
         self.PP_ScanKinetics_btn.setStyleSheet("font-size: 12px;\n"
+"\n"
 "color: black;\n"
+"\n"
 "background-color: PaleGreen;\n"
+"\n"
 "")
         self.PP_ScanKinetics_btn.setObjectName("PP_ScanKinetics_btn")
         self._2.addWidget(self.PP_ScanKinetics_btn, 0, 0, 1, 1)
@@ -433,8 +502,11 @@ class Ui_MainWindow(object):
         sizePolicy.setHeightForWidth(self.PP_ScanSpectra_btn.sizePolicy().hasHeightForWidth())
         self.PP_ScanSpectra_btn.setSizePolicy(sizePolicy)
         self.PP_ScanSpectra_btn.setStyleSheet("font-size: 12px;\n"
+"\n"
 "color: black;\n"
+"\n"
 "background-color: PaleTurquoise\n"
+"\n"
 "")
         self.PP_ScanSpectra_btn.setObjectName("PP_ScanSpectra_btn")
         self._2.addWidget(self.PP_ScanSpectra_btn, 1, 0, 1, 1)
@@ -445,9 +517,14 @@ class Ui_MainWindow(object):
         sizePolicy.setHeightForWidth(self.PP_RecalcAvg_btn.sizePolicy().hasHeightForWidth())
         self.PP_RecalcAvg_btn.setSizePolicy(sizePolicy)
         self.PP_RecalcAvg_btn.setStyleSheet("\n"
+"\n"
 "font: bold")
         self.PP_RecalcAvg_btn.setObjectName("PP_RecalcAvg_btn")
         self._2.addWidget(self.PP_RecalcAvg_btn, 1, 1, 1, 2)
+        self.PP_NoiseWeighted_chk = QtWidgets.QCheckBox(parent=self.oneD_singleScan_box)
+        self.PP_NoiseWeighted_chk.setChecked(True)
+        self.PP_NoiseWeighted_chk.setObjectName("PP_NoiseWeighted_chk")
+        self._2.addWidget(self.PP_NoiseWeighted_chk, 2, 0, 1, 3)
         self.ppCutsColumn.addWidget(self.oneD_singleScan_box)
         self.ppCutsCluster.addLayout(self.ppCutsColumn)
         self.PP_tracesOverlay_grp = QtWidgets.QGroupBox(parent=self.PP_tab)
@@ -1634,12 +1711,24 @@ class Ui_MainWindow(object):
         self.menubar.setObjectName("menubar")
         self.menuFile = QtWidgets.QMenu(parent=self.menubar)
         self.menuFile.setObjectName("menuFile")
+        self.menuSteadyState = QtWidgets.QMenu(parent=self.menuFile)
+        self.menuSteadyState.setObjectName("menuSteadyState")
         self.menuExport = QtWidgets.QMenu(parent=self.menuFile)
         self.menuExport.setObjectName("menuExport")
+        self.menuPreProcessing = QtWidgets.QMenu(parent=self.menubar)
+        self.menuPreProcessing.setObjectName("menuPreProcessing")
+        self.menuChirp = QtWidgets.QMenu(parent=self.menuPreProcessing)
+        self.menuChirp.setObjectName("menuChirp")
+        self.menuStitch = QtWidgets.QMenu(parent=self.menuPreProcessing)
+        self.menuStitch.setObjectName("menuStitch")
+        self.menuAnalysis = QtWidgets.QMenu(parent=self.menubar)
+        self.menuAnalysis.setObjectName("menuAnalysis")
+        self.menuAnisotropy = QtWidgets.QMenu(parent=self.menuAnalysis)
+        self.menuAnisotropy.setObjectName("menuAnisotropy")
+        self.menuTwoDAnalysis = QtWidgets.QMenu(parent=self.menuAnalysis)
+        self.menuTwoDAnalysis.setObjectName("menuTwoDAnalysis")
         self.menuView = QtWidgets.QMenu(parent=self.menubar)
         self.menuView.setObjectName("menuView")
-        self.menuSpectra = QtWidgets.QMenu(parent=self.menubar)
-        self.menuSpectra.setObjectName("menuSpectra")
         self.menuHelp = QtWidgets.QMenu(parent=self.menubar)
         self.menuHelp.setObjectName("menuHelp")
         MainWindow.setMenuBar(self.menubar)
@@ -1694,6 +1783,34 @@ class Ui_MainWindow(object):
         self.actionManual.setObjectName("actionManual")
         self.actionAbout = QtGui.QAction(parent=MainWindow)
         self.actionAbout.setObjectName("actionAbout")
+        self.actionPlotSteadyState = QtGui.QAction(parent=MainWindow)
+        self.actionPlotSteadyState.setObjectName("actionPlotSteadyState")
+        self.actionShiftT0 = QtGui.QAction(parent=MainWindow)
+        self.actionShiftT0.setObjectName("actionShiftT0")
+        self.actionFitChirp = QtGui.QAction(parent=MainWindow)
+        self.actionFitChirp.setObjectName("actionFitChirp")
+        self.actionLoadChirpCorr = QtGui.QAction(parent=MainWindow)
+        self.actionLoadChirpCorr.setObjectName("actionLoadChirpCorr")
+        self.actionTwoDGaussianFit = QtGui.QAction(parent=MainWindow)
+        self.actionTwoDGaussianFit.setObjectName("actionTwoDGaussianFit")
+        self.actionTwoDSubtraction = QtGui.QAction(parent=MainWindow)
+        self.actionTwoDSubtraction.setObjectName("actionTwoDSubtraction")
+        self.actionTwoDIntegralDynamics = QtGui.QAction(parent=MainWindow)
+        self.actionTwoDIntegralDynamics.setObjectName("actionTwoDIntegralDynamics")
+        self.actionTwoDSpectralDiffusion = QtGui.QAction(parent=MainWindow)
+        self.actionTwoDSpectralDiffusion.setObjectName("actionTwoDSpectralDiffusion")
+        self.actionTwoDMakeGif = QtGui.QAction(parent=MainWindow)
+        self.actionTwoDMakeGif.setObjectName("actionTwoDMakeGif")
+        self.actionSendToPyRATE = QtGui.QAction(parent=MainWindow)
+        self.actionSendToPyRATE.setObjectName("actionSendToPyRATE")
+        self.actionLaunchPyRATE = QtGui.QAction(parent=MainWindow)
+        self.actionLaunchPyRATE.setObjectName("actionLaunchPyRATE")
+        self.menuSteadyState.addAction(self.actionLoadAbsorption)
+        self.menuSteadyState.addAction(self.actionLoadEmission)
+        self.menuSteadyState.addAction(self.actionPlotSteadyState)
+        self.menuSteadyState.addAction(self.actionClearSteadyState)
+        self.menuSteadyState.addSeparator()
+        self.menuSteadyState.addAction(self.actionLoadSpectrum)
         self.menuExport.addAction(self.actionExportFigure)
         self.menuExport.addAction(self.actionExportData)
         self.menuExport.addAction(self.actionExportPDAT)
@@ -1704,29 +1821,47 @@ class Ui_MainWindow(object):
         self.menuFile.addAction(self.actionSetRoot)
         self.menuFile.addAction(self.actionToday)
         self.menuFile.addSeparator()
+        self.menuFile.addAction(self.menuSteadyState.menuAction())
+        self.menuFile.addSeparator()
         self.menuFile.addAction(self.menuExport.menuAction())
         self.menuFile.addSeparator()
         self.menuFile.addAction(self.actionQuit)
+        self.menuChirp.addAction(self.actionFitChirp)
+        self.menuChirp.addAction(self.actionLoadChirpCorr)
+        self.menuStitch.addAction(self.actionStitchWavelength)
+        self.menuStitch.addAction(self.actionStitchTimescale)
+        self.menuPreProcessing.addAction(self.actionShiftT0)
+        self.menuPreProcessing.addAction(self.menuChirp.menuAction())
+        self.menuPreProcessing.addSeparator()
+        self.menuPreProcessing.addAction(self.actionSubtractShockwave)
+        self.menuPreProcessing.addAction(self.actionTimeDerivative)
+        self.menuPreProcessing.addSeparator()
+        self.menuPreProcessing.addAction(self.menuStitch.menuAction())
+        self.menuAnisotropy.addAction(self.actionAnisotropy)
+        self.menuTwoDAnalysis.addAction(self.actionTwoDGaussianFit)
+        self.menuTwoDAnalysis.addAction(self.actionTwoDSubtraction)
+        self.menuTwoDAnalysis.addAction(self.actionTwoDIntegralDynamics)
+        self.menuTwoDAnalysis.addSeparator()
+        self.menuTwoDAnalysis.addAction(self.actionTwoDSpectralDiffusion)
+        self.menuTwoDAnalysis.addSeparator()
+        self.menuTwoDAnalysis.addAction(self.actionTwoDMakeGif)
+        self.menuAnalysis.addAction(self.actionSVD)
+        self.menuAnalysis.addAction(self.menuAnisotropy.menuAction())
+        self.menuAnalysis.addSeparator()
+        self.menuAnalysis.addAction(self.menuTwoDAnalysis.menuAction())
+        self.menuAnalysis.addSeparator()
+        self.menuAnalysis.addAction(self.actionSendToPyRATE)
+        self.menuAnalysis.addAction(self.actionLaunchPyRATE)
         self.menuView.addAction(self.actionSettings)
         self.menuView.addSeparator()
         self.menuView.addAction(self.actionRestoreWindowSize)
-        self.menuSpectra.addAction(self.actionLoadSpectrum)
-        self.menuSpectra.addAction(self.actionSubtractShockwave)
-        self.menuSpectra.addAction(self.actionTimeDerivative)
-        self.menuSpectra.addAction(self.actionSVD)
-        self.menuSpectra.addAction(self.actionAnisotropy)
-        self.menuSpectra.addAction(self.actionStitchWavelength)
-        self.menuSpectra.addAction(self.actionStitchTimescale)
-        self.menuSpectra.addSeparator()
-        self.menuSpectra.addAction(self.actionLoadAbsorption)
-        self.menuSpectra.addAction(self.actionLoadEmission)
-        self.menuSpectra.addAction(self.actionClearSteadyState)
         self.menuHelp.addAction(self.actionManual)
         self.menuHelp.addSeparator()
         self.menuHelp.addAction(self.actionAbout)
         self.menubar.addAction(self.menuFile.menuAction())
+        self.menubar.addAction(self.menuPreProcessing.menuAction())
+        self.menubar.addAction(self.menuAnalysis.menuAction())
         self.menubar.addAction(self.menuView.menuAction())
-        self.menubar.addAction(self.menuSpectra.menuAction())
         self.menubar.addAction(self.menuHelp.menuAction())
 
         self.retranslateUi(MainWindow)
@@ -1753,8 +1888,8 @@ class Ui_MainWindow(object):
         self.PP_datatype_cbx.setItemText(2, _translate("MainWindow", "UniGE nsTA"))
         self.PP_datatype_cbx.setItemText(3, _translate("MainWindow", "UniGE Transient IR (MESS)"))
         self.PP_datatype_cbx.setItemText(4, _translate("MainWindow", "UniGE Transient UV-Vis (MESS)"))
-        self.PP_datatype_cbx.setItemText(7, _translate("MainWindow", "Helios TA (Ultrafast Systems)"))
-        self.PP_datatype_cbx.setItemText(8, _translate("MainWindow", "U. of Sheffield IR Pump-Probe"))
+        self.PP_datatype_cbx.setItemText(5, _translate("MainWindow", "Helios TA (Ultrafast Systems)"))
+        self.PP_datatype_cbx.setItemText(6, _translate("MainWindow", "U. of Sheffield IR Pump-Probe"))
         self.PP_reloadData_btn.setToolTip(_translate("MainWindow", "Reload the current dataset from disk"))
         self.PP_reloadData_btn.setText(_translate("MainWindow", "Reload"))
         self.oneD_PreProcessing_box.setTitle(_translate("MainWindow", "Pre-processing"))
@@ -1796,8 +1931,10 @@ class Ui_MainWindow(object):
         self.BinScans_lbl.setText(_translate("MainWindow", "Bin?"))
         self.PP_ScanSpectra_btn.setToolTip(_translate("MainWindow", "Plot spectra for individual scans (or binned groups of scans)"))
         self.PP_ScanSpectra_btn.setText(_translate("MainWindow", "Plot Spectra"))
-        self.PP_RecalcAvg_btn.setToolTip(_translate("MainWindow", "Recalculate noise-weighted average excluding specific scans"))
+        self.PP_RecalcAvg_btn.setToolTip(_translate("MainWindow", "Recalculate scan average excluding specific scans (noise-weighted or direct)"))
         self.PP_RecalcAvg_btn.setText(_translate("MainWindow", "Recalc. Average"))
+        self.PP_NoiseWeighted_chk.setToolTip(_translate("MainWindow", "Weight scans by inverse noise variance (uncheck for direct unweighted average)"))
+        self.PP_NoiseWeighted_chk.setText(_translate("MainWindow", "Noise-weighted"))
         self.PP_tracesOverlay_grp.setTitle(_translate("MainWindow", "Traces && Overlay"))
         self.PP_Interactive_TickBox.setText(_translate("MainWindow", "Interactive"))
         self.PP_QuickPlots_chk.setToolTip(_translate("MainWindow", "Use fast raster plots (imshow) instead of contour lines for faster redraws"))
@@ -1858,9 +1995,13 @@ class Ui_MainWindow(object):
         self.PC_xUnit.setItemText(4, _translate("MainWindow", "THz"))
         self.PC_lblScalePct.setText(_translate("MainWindow", "Scale %"))
         self.PC_smooth.setToolTip(_translate("MainWindow", "Smoothing for transient-spectra / kinetic cuts (opened in a new figure):\n"
+"\n"
 "0 = no smoothing;\n"
+"\n"
 ">0 = smoothed data only;\n"
+"\n"
 "<0 = smoothed data plus the original semitransparent.\n"
+"\n"
 "The magnitude sets the smoothing window width."))
         self.PC_filled.setText(_translate("MainWindow", "Filled contours"))
         self.PC_symmetric.setText(_translate("MainWindow", "Symmetric colour scale"))
@@ -1895,7 +2036,7 @@ class Ui_MainWindow(object):
         self.twoD_phase_fit_cbx.setItemText(1, _translate("MainWindow", "Constant"))
         self.twoD_phase_fit_cbx.setItemText(2, _translate("MainWindow", "Quadratic"))
         self.twoD_phase_fit_range_lbl.setText(_translate("MainWindow", "+/-"))
-        self.twoD_phase_fit_range.setSuffix(_translate("MainWindow", " cm-1"))
+        self.twoD_phase_fit_range.setSuffix(_translate("MainWindow", " cm⁻¹"))
         self.twoD_phase_coeffs_lbl.setText(_translate("MainWindow", "Phase coeffs."))
         self.twoD_phase_coeffs.setText(_translate("MainWindow", "—"))
         self.twoD_apodisation_lbl.setText(_translate("MainWindow", "Apodisation"))
@@ -1926,7 +2067,9 @@ class Ui_MainWindow(object):
         self.twoD_spectral_diffusion_btn.setText(_translate("MainWindow", "Spectral diffusion"))
         self.twoD_make_gif_btn.setText(_translate("MainWindow", "Make GIF movie"))
         self.twoD_SampleInfo_text.setHtml(_translate("MainWindow", "<!DOCTYPE HTML PUBLIC \"-//W3C//DTD HTML 4.0//EN\" \"http://www.w3.org/TR/REC-html40/strict.dtd\">\n"
+"\n"
 "<html><head><meta name=\"qrichtext\" content=\"1\" /></head><body>\n"
+"\n"
 "<p>No additional sample info available.</p></body></html>"))
         self.twoD_PC_box.setTitle(_translate("MainWindow", "Plot Controls"))
         self.twoD_PC_lblPumpWl.setText(_translate("MainWindow", "Min probe"))
@@ -1939,14 +2082,14 @@ class Ui_MainWindow(object):
         self.twoD_PC_cmap.setItemText(4, _translate("MainWindow", "vik"))
         self.twoD_PC_cmap.setItemText(5, _translate("MainWindow", "berlin"))
         self.twoD_PC_lblMin.setText(_translate("MainWindow", "Min pump"))
-        self.twoD_PC_pumpMin.setSuffix(_translate("MainWindow", " cm-1"))
-        self.twoD_PC_probeMin.setSuffix(_translate("MainWindow", " cm-1"))
+        self.twoD_PC_pumpMin.setSuffix(_translate("MainWindow", " cm⁻¹"))
+        self.twoD_PC_probeMin.setSuffix(_translate("MainWindow", " cm⁻¹"))
         self.twoD_PC_lblNContours.setText(_translate("MainWindow", "N° of contours"))
         self.twoD_PC_cutPlot.setText(_translate("MainWindow", "Cut plot"))
         self.twoD_PC_symmetric.setText(_translate("MainWindow", "Symmetric colour scale"))
         self.twoD_PC_lblMax.setText(_translate("MainWindow", "Max pump"))
-        self.twoD_PC_pumpMax.setSuffix(_translate("MainWindow", " cm-1"))
-        self.twoD_PC_probeMax.setSuffix(_translate("MainWindow", " cm-1"))
+        self.twoD_PC_pumpMax.setSuffix(_translate("MainWindow", " cm⁻¹"))
+        self.twoD_PC_probeMax.setSuffix(_translate("MainWindow", " cm⁻¹"))
         self.twoD_PC_lblWhiteLevels.setText(_translate("MainWindow", "N° of white lvls."))
         self.twoD_PC_textWhiteBg.setText(_translate("MainWindow", "Text white background"))
         self.twoD_PC_filled.setText(_translate("MainWindow", "Filled contours"))
@@ -2031,23 +2174,29 @@ class Ui_MainWindow(object):
         self.cal_detector_tabWidget.setTabText(self.cal_detector_tabWidget.indexOf(self.cal_settings_tab), _translate("MainWindow", "Fit Settings"))
         self.MainTabs.setTabText(self.MainTabs.indexOf(self.Cal_tab), _translate("MainWindow", "Spectrometer and Shaper Calibration"))
         self.menuFile.setTitle(_translate("MainWindow", "&File"))
+        self.menuSteadyState.setTitle(_translate("MainWindow", "&Steady-State Spectra"))
         self.menuExport.setTitle(_translate("MainWindow", "&Export"))
+        self.menuPreProcessing.setTitle(_translate("MainWindow", "&Pre-processing"))
+        self.menuChirp.setTitle(_translate("MainWindow", "&Chirp / Dispersion Correction"))
+        self.menuStitch.setTitle(_translate("MainWindow", "&Stitch Datasets"))
+        self.menuAnalysis.setTitle(_translate("MainWindow", "&Analysis"))
+        self.menuAnisotropy.setTitle(_translate("MainWindow", "Polarization &Anisotropy"))
+        self.menuTwoDAnalysis.setTitle(_translate("MainWindow", "&2D Analysis"))
         self.menuView.setTitle(_translate("MainWindow", "&View"))
-        self.menuSpectra.setTitle(_translate("MainWindow", "&Spectra"))
         self.menuHelp.setTitle(_translate("MainWindow", "&Help"))
-        self.actionOpen.setText(_translate("MainWindow", "&Open Data File…"))
+        self.actionOpen.setText(_translate("MainWindow", "&Open Data File..."))
         self.actionOpen.setShortcut(_translate("MainWindow", "Ctrl+O"))
         self.actionReload.setText(_translate("MainWindow", "&Reload Dataset"))
         self.actionReload.setShortcut(_translate("MainWindow", "Ctrl+R"))
-        self.actionSetRoot.setText(_translate("MainWindow", "Set &Root Folder…"))
+        self.actionSetRoot.setText(_translate("MainWindow", "Set &Root Folder..."))
         self.actionToday.setText(_translate("MainWindow", "Go to &Today\'s Folder"))
-        self.actionSettings.setText(_translate("MainWindow", "&Aesthetics / Settings…"))
+        self.actionSettings.setText(_translate("MainWindow", "&Aesthetics / Settings..."))
         self.actionRestoreWindowSize.setText(_translate("MainWindow", "Restore &Default Window Size"))
         self.actionRestoreWindowSize.setToolTip(_translate("MainWindow", "Reset the main window to its default size and centre it on the current screen"))
         self.actionRestoreWindowSize.setShortcut(_translate("MainWindow", "Ctrl+Shift+R"))
         self.actionQuit.setText(_translate("MainWindow", "&Quit"))
         self.actionQuit.setShortcut(_translate("MainWindow", "Ctrl+Q"))
-        self.actionLoadSpectrum.setText(_translate("MainWindow", "&Load && Plot Spectrum…"))
+        self.actionLoadSpectrum.setText(_translate("MainWindow", "&Load && Plot Overlay Spectrum..."))
         self.actionSubtractShockwave.setText(_translate("MainWindow", "Subtract &shock wave..."))
         self.actionSubtractShockwave.setToolTip(_translate("MainWindow", "Subtract an average kinetic trace calculated over selected pixels from all dataset pixels"))
         self.actionTimeDerivative.setText(_translate("MainWindow", "&Time derivative of spectra..."))
@@ -2056,24 +2205,46 @@ class Ui_MainWindow(object):
         self.actionSVD.setToolTip(_translate("MainWindow", "Compute SVD factorization, component extraction, scree analysis, and rank-k recomposition"))
         self.actionAnisotropy.setText(_translate("MainWindow", "Calculate polarization &anisotropy..."))
         self.actionAnisotropy.setToolTip(_translate("MainWindow", "Calculate transient polarization anisotropy r(t) from parallel and perpendicular signals"))
-        self.actionStitchWavelength.setText(_translate("MainWindow", "Stitch &wavelength regions (UV/Vis + NIR)..."))
+        self.actionStitchWavelength.setText(_translate("MainWindow", "Stitch &Spectral Windows..."))
         self.actionStitchWavelength.setToolTip(_translate("MainWindow", "Stitch spectra from different wavelength/wavenumber windows with overlap scaling and blending"))
-        self.actionStitchTimescale.setText(_translate("MainWindow", "Stitch &timescales (fs + ns)..."))
+        self.actionStitchTimescale.setText(_translate("MainWindow", "Stitch Delay &Timescales..."))
         self.actionStitchTimescale.setToolTip(_translate("MainWindow", "Stitch transient absorption datasets across different timescales with wavelength alignment and quadratic scaling"))
-        self.actionLoadAbsorption.setText(_translate("MainWindow", "Load steady-state &absorption…"))
+        self.actionLoadAbsorption.setText(_translate("MainWindow", "Load Steady-State &Absorption..."))
         self.actionLoadAbsorption.setToolTip(_translate("MainWindow", "Load a steady-state absorption spectrum, overlaid as a shaded area on transient spectra."))
-        self.actionLoadEmission.setText(_translate("MainWindow", "Load steady-state &emission…"))
+        self.actionLoadEmission.setText(_translate("MainWindow", "Load Steady-State &Emission..."))
         self.actionLoadEmission.setToolTip(_translate("MainWindow", "Load a steady-state emission spectrum, overlaid as a shaded area on transient spectra."))
-        self.actionClearSteadyState.setText(_translate("MainWindow", "Clear steady-state overlays"))
+        self.actionClearSteadyState.setText(_translate("MainWindow", "Clear Steady-State Overlays"))
         self.actionClearSteadyState.setToolTip(_translate("MainWindow", "Remove the loaded absorption / emission overlays."))
-        self.actionExportFigure.setText(_translate("MainWindow", "Save Current &Figure…"))
-        self.actionExportData.setText(_translate("MainWindow", "Export Processed &Data (CSV)…"))
-        self.actionExportPDAT.setText(_translate("MainWindow", "Export 1D Dataset as &PDAT…"))
+        self.actionExportFigure.setText(_translate("MainWindow", "Save Current &Figure..."))
+        self.actionExportData.setText(_translate("MainWindow", "Export Processed &Data (CSV)..."))
+        self.actionExportPDAT.setText(_translate("MainWindow", "Export 1D Dataset as &PDAT..."))
         self.actionExportPDAT.setShortcut(_translate("MainWindow", "Ctrl+1"))
-        self.actionExportP2DAT.setText(_translate("MainWindow", "Export 2D Dataset as &P2DAT…"))
+        self.actionExportP2DAT.setText(_translate("MainWindow", "Export 2D Dataset as &P2DAT..."))
         self.actionExportP2DAT.setShortcut(_translate("MainWindow", "Ctrl+2"))
         self.actionManual.setText(_translate("MainWindow", "Open &Manual (PDF)"))
         self.actionManual.setShortcut(_translate("MainWindow", "F1"))
         self.actionAbout.setText(_translate("MainWindow", "&About PyMORGAN"))
+        self.actionPlotSteadyState.setText(_translate("MainWindow", "&Plot Steady-State Spectra"))
+        self.actionPlotSteadyState.setToolTip(_translate("MainWindow", "Open a figure window displaying the loaded steady-state absorption and emission spectra"))
+        self.actionShiftT0.setText(_translate("MainWindow", "Shift &Time Zero (t0)..."))
+        self.actionShiftT0.setToolTip(_translate("MainWindow", "Shift the delay time axis so a chosen point becomes the new t0"))
+        self.actionFitChirp.setText(_translate("MainWindow", "&Fit Chirp / Dispersion Curve..."))
+        self.actionFitChirp.setToolTip(_translate("MainWindow", "Fit a chirp/dispersion correction curve to transient spectra"))
+        self.actionLoadChirpCorr.setText(_translate("MainWindow", "&Load Chirp Correction File..."))
+        self.actionLoadChirpCorr.setToolTip(_translate("MainWindow", "Load a saved chirp correction curve from file"))
+        self.actionTwoDGaussianFit.setText(_translate("MainWindow", "2D &Gaussian Fitting..."))
+        self.actionTwoDGaussianFit.setToolTip(_translate("MainWindow", "Fit 2D Gaussian models with GSB/ESA pairs and cross-peaks"))
+        self.actionTwoDSubtraction.setText(_translate("MainWindow", "2D &Dataset Subtraction..."))
+        self.actionTwoDSubtraction.setToolTip(_translate("MainWindow", "Subtract reference 2D dataset spectrum with scaling"))
+        self.actionTwoDIntegralDynamics.setText(_translate("MainWindow", "2D &Integral Dynamics..."))
+        self.actionTwoDIntegralDynamics.setToolTip(_translate("MainWindow", "Integrate 2D spectral volume ROI across population delays"))
+        self.actionTwoDSpectralDiffusion.setText(_translate("MainWindow", "&Spectral Diffusion (CLS / Kubo)..."))
+        self.actionTwoDSpectralDiffusion.setToolTip(_translate("MainWindow", "Analyze 2D spectral diffusion (centre line slope / Kubo lineshape) dynamics"))
+        self.actionTwoDMakeGif.setText(_translate("MainWindow", "Export 2D Delay &Movie / GIF..."))
+        self.actionTwoDMakeGif.setToolTip(_translate("MainWindow", "Export animated GIF or video movie of 2D contour plots vs delay"))
+        self.actionSendToPyRATE.setText(_translate("MainWindow", "Send Active Dataset to &PyRATE-TA..."))
+        self.actionSendToPyRATE.setToolTip(_translate("MainWindow", "Send the active transient absorption dataset to PyRATE-TA for kinetic and target analysis"))
+        self.actionLaunchPyRATE.setText(_translate("MainWindow", "&Launch PyRATE-TA (Kinetic Analysis)..."))
+        self.actionLaunchPyRATE.setToolTip(_translate("MainWindow", "Launch the PyRATE-TA application for target and global kinetic analysis"))
 from pymorgan.gui.widgetplot import WidgetPlot
 from pymorgan.gui.widgets import LEDIndicator, SciDoubleSpinBox
