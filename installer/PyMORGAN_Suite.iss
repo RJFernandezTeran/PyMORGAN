@@ -2,7 +2,7 @@
 ; Generates a professional, self-contained Windows Installer (.exe)
 
 #define MyAppName "PyMORGAN Suite"
-#define MyAppVersion "1.261011.2"
+#define MyAppVersion "1.261018.1"
 #define MyAppPublisher "Dr. Ricardo J. Fernández-Terán"
 #define MyAppURL "https://github.com/RJFernandezTeran/PyMORGAN"
 #define MyAppExeName "PyMORGAN_Suite.exe"
@@ -84,4 +84,6 @@ Root: HKA; Subkey: "Software\Classes\PyMORGAN.p2dat\DefaultIcon"; ValueType: str
 Root: HKA; Subkey: "Software\Classes\PyMORGAN.p2dat\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\PyMORGAN.exe"" ""%1"""; Tasks: assoc_p2dat
 
 [Run]
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--install-fonts"; StatusMsg: "Configuring TeX Gyre Heros fonts in Matplotlib (Pass 1/2)..."; Flags: runhidden waituntilterminated
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--install-fonts"; StatusMsg: "Verifying TeX Gyre Heros font cache (Pass 2/2)..."; Flags: runhidden waituntilterminated
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent

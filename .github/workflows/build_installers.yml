@@ -30,12 +30,21 @@ jobs:
         with:
           enable-cache: true
 
+      - name: Set up Python
+        run: uv python install 3.12
+
       - name: Install Inno Setup
         run: choco install innosetup --no-progress
 
+      - name: Install Build Dependencies
+        working-directory: PyMORGAN
+        run: |
+          uv venv --python 3.12
+          uv pip install -e . -e ../PyRATE-TA pillow pyinstaller
+
       - name: Build Windows Installer & Portable Zip
         working-directory: PyMORGAN
-        run: uv run python scripts/build_installer.py --platform windows
+        run: .venv\Scripts\python.exe scripts/build_installer.py --platform windows
 
       - name: Upload Windows Artifacts
         uses: actions/upload-artifact@v4
@@ -63,12 +72,21 @@ jobs:
         with:
           enable-cache: true
 
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install Build Dependencies
+        working-directory: PyMORGAN
+        run: |
+          uv venv --python 3.12
+          uv pip install -e . -e ../PyRATE-TA pillow pyinstaller
+
       - name: Make Scripts Executable
         run: chmod +x PyMORGAN/installer/build_macos.sh
 
       - name: Build macOS DMG & App
         working-directory: PyMORGAN
-        run: uv run python scripts/build_installer.py --platform macos
+        run: .venv/bin/python scripts/build_installer.py --platform macos
 
       - name: Upload macOS Artifacts
         uses: actions/upload-artifact@v4
@@ -96,12 +114,22 @@ jobs:
         with:
           enable-cache: true
 
+      - name: Set up Python
+        run: uv python install 3.12
+
       - name: Install Linux Dependencies for Qt6
         run: |
           sudo apt-get update
-          sudo apt-get install -y libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 \
+          sudo apt-get install -y --no-install-recommends \
+            libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 \
             libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 \
-            libxcb-shape0 libxcb-xfixes0 libegl1-mesa
+            libxcb-shape0 libxcb-xfixes0 libgl1 libegl1 || true
+
+      - name: Install Build Dependencies
+        working-directory: PyMORGAN
+        run: |
+          uv venv --python 3.12
+          uv pip install -e . -e ../PyRATE-TA pillow pyinstaller
 
       - name: Make Scripts Executable
         run: |
@@ -111,7 +139,7 @@ jobs:
 
       - name: Build Linux Package
         working-directory: PyMORGAN
-        run: uv run python scripts/build_installer.py --platform linux
+        run: .venv/bin/python scripts/build_installer.py --platform linux
 
       - name: Upload Linux Artifacts
         uses: actions/upload-artifact@v4
@@ -129,9 +157,10 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: release_artifacts
+          merge-multiple: true
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: release_artifacts/**/*
+          files: release_artifacts/*
           generate_release_notes: true

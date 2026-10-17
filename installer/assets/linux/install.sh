@@ -40,6 +40,12 @@ if compgen -G "$INSTALL_DIR/_internal/pymorgan/assets/fonts/*.otf" > /dev/null |
         fc-cache -f "$FONT_DIR" >/dev/null 2>&1 || true
     fi
 fi
+if [ -x "$INSTALL_DIR/PyMORGAN_Suite" ]; then
+    echo "Configuring Matplotlib font cache (Pass 1/2)..."
+    "$INSTALL_DIR/PyMORGAN_Suite" --install-fonts >/dev/null 2>&1 || true
+    echo "Verifying Matplotlib font cache (Pass 2/2)..."
+    "$INSTALL_DIR/PyMORGAN_Suite" --install-fonts >/dev/null 2>&1 || true
+fi
 
 # Install icons
 echo "Installing application icons..."

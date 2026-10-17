@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib.metadata
 import importlib.util
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -17,8 +18,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from pymorgan.log import get_logger
-
-import shutil
 
 if TYPE_CHECKING:
     from pymorgan.oneD.dataset import Dataset1D
@@ -35,6 +34,11 @@ def find_pyrate_command() -> list[str] | None:
             cand = exe_dir / name
             if cand.is_file():
                 return [str(cand)]
+        if importlib.util.find_spec("pyrate_ta") is not None:
+            for name in ("PyMORGAN_Suite.exe", "PyMORGAN_Suite"):
+                cand = exe_dir / name
+                if cand.is_file():
+                    return [str(cand), "--pyrate"]
 
     # 2. Check if importable in current python interpreter
     if importlib.util.find_spec("pyrate_ta") is not None:
@@ -89,14 +93,17 @@ def get_pyrate_version() -> str | None:
     if not is_pyrate_installed():
         return None
     try:
+        import pyrate_ta
+
+        ver = getattr(pyrate_ta, "__version__", None)
+        if ver:
+            return str(ver)
+    except Exception:
+        pass
+    try:
         return importlib.metadata.version("pyrate-ta")
     except Exception:
-        try:
-            import pyrate_ta
-
-            return getattr(pyrate_ta, "__version__", "unknown")
-        except Exception:
-            return "unknown"
+        return "unknown"
 
 
 def launch_pyrate(
@@ -167,12 +174,16 @@ def launch_pyrate(
     if extra_args:
         cmd.extend(extra_args)
 
-    kwargs: dict[str, Any] = {}
+    kwargs: dict[str, Any] = {
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+    }
     if sys.platform == "win32":
-        kwargs["creationflags"] = (
-            subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) | getattr(
+            subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200
         )
-        kwargs["close_fds"] = True
+        kwargs["creationflags"] = flags
     else:
         kwargs["start_new_session"] = True
 

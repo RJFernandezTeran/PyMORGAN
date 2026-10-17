@@ -3,6 +3,9 @@ name: Upload Python Package
 on:
   release:
     types: [published]
+  push:
+    tags:
+      - 'v*'
   workflow_dispatch:  # This adds a "Run workflow" button in the Actions tab
 
 permissions:
@@ -52,3 +55,4 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/
+          skip-existing: true

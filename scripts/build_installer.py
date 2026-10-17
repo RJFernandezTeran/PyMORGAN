@@ -17,6 +17,7 @@ import argparse
 import os
 import shutil
 import subprocess
+import sys
 import zipfile
 from pathlib import Path
 
@@ -29,7 +30,11 @@ OUTPUT_DIR = REPO_ROOT / "dist_installer"
 def ensure_icons():
     """Ensure multi-resolution .ico files exist for Windows executables."""
     print("[1/5] Verifying application icons...")
-    from PIL import Image
+    try:
+        from PIL import Image
+    except ImportError:
+        print("      [NOTE] Pillow not installed, skipping icon regeneration (existing icons will be used).")
+        return
 
     icon_dir = REPO_ROOT / "src" / "pymorgan" / "gui" / "icons"
     hat_png = icon_dir / "pirate-hat.png"
@@ -98,11 +103,9 @@ def run_pyinstaller(clean: bool = False):
         raise FileNotFoundError(f"Spec file not found: {spec_file}")
 
     cmd = [
-        "uv",
-        "run",
-        "--with",
-        "pyinstaller",
-        "pyinstaller",
+        sys.executable,
+        "-m",
+        "PyInstaller",
         "--noconfirm",
     ]
     if clean:
@@ -112,14 +115,56 @@ def run_pyinstaller(clean: bool = False):
     print(f"      Executing: {' '.join(cmd)}")
     subprocess.run(cmd, cwd=REPO_ROOT, check=True)
 
-    # Verify produced executables
-    expected_exes = ["PyMORGAN_Suite.exe", "PyMORGAN.exe"]
+    # Verify produced executables exist and start cleanly without tracebacks
+    suffix = ".exe" if sys.platform.startswith("win") else ""
+    expected_exes = [f"PyMORGAN_Suite{suffix}", f"PyMORGAN{suffix}"]
+    if (REPO_ROOT.parent / "PyRATE-TA" / "src").exists():
+        expected_exes.append(f"PyRATE-TA{suffix}")
     for exe in expected_exes:
         exe_path = DIST_DIR / exe
         if not exe_path.exists():
             raise RuntimeError(f"Expected executable not found after build: {exe_path}")
 
-    print("      PyInstaller build successful.")
+    suite_exe = DIST_DIR / f"PyMORGAN_Suite{suffix}"
+    print("      Running post-build font installation check (2 passes)...")
+    res = subprocess.run(
+        [str(suite_exe), "--install-fonts"],
+        cwd=DIST_DIR,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if res.returncode != 0 or "Traceback (most recent call last):" in (res.stderr or ""):
+        raise RuntimeError(
+            f"Smoke test failed for {suite_exe} --install-fonts:\nSTDOUT: {res.stdout}\nSTDERR: {res.stderr}"
+        )
+
+    import time
+
+    smoke_env = os.environ.copy()
+    smoke_env["QT_QPA_PLATFORM"] = "offscreen"
+    for exe in expected_exes:
+        exe_path = DIST_DIR / exe
+        print(f"      Smoke-testing GUI startup of {exe}...")
+        proc = subprocess.Popen(
+            [str(exe_path)],
+            cwd=DIST_DIR,
+            env=smoke_env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        time.sleep(3.5)
+        proc.terminate()
+        try:
+            out, err = proc.communicate(timeout=5)
+        except Exception:
+            proc.kill()
+            out, err = proc.communicate()
+        if "Traceback (most recent call last):" in (err or ""):
+            raise RuntimeError(f"Startup traceback detected in {exe}:\n{err}")
+
+    print("      PyInstaller build and startup smoke tests successful.")
     print(f"      Output directory: {DIST_DIR}")
 
 
@@ -155,6 +200,9 @@ def find_iscc() -> Path | None:
 
     # Common installation paths on Windows
     candidates = [
+        Path(r"C:\ProgramData\chocolatey\bin\iscc.exe"),
+        Path(r"C:\Program Files (x86)\Inno Setup 6\ISCC.exe"),
+        Path(r"C:\Program Files\Inno Setup 6\ISCC.exe"),
         Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")) / "Inno Setup 6" / "ISCC.exe",
         Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Inno Setup 6" / "ISCC.exe",
         Path(os.environ.get("LocalAppData", "")) / "Programs" / "Inno Setup 6" / "ISCC.exe",
@@ -203,13 +251,30 @@ def build_linux_package(version: str) -> Path:
     bin_dir.mkdir(parents=True, exist_ok=True)
     desktop_dir.mkdir(parents=True, exist_ok=True)
 
-    # Copy binary files
+    # Copy binary files preserving symlinks
     if DIST_DIR.exists():
         for item in DIST_DIR.iterdir():
-            if item.is_dir():
-                shutil.copytree(item, bin_dir / item.name)
+            if item.is_dir() and not item.is_symlink():
+                shutil.copytree(item, bin_dir / item.name, symlinks=True)
             else:
-                shutil.copy2(item, bin_dir / item.name)
+                shutil.copy2(item, bin_dir / item.name, follow_symlinks=False)
+
+    # Copy icons for Linux desktop integration
+    icons_src = REPO_ROOT / "src" / "pymorgan" / "gui" / "icons"
+    icons_dst = bin_dir / "icons"
+    icons_dst.mkdir(parents=True, exist_ok=True)
+    for icon_name in ["pirate-hat.png", "pirate_ship.png"]:
+        if (icons_src / icon_name).exists():
+            shutil.copy2(icons_src / icon_name, icons_dst / icon_name)
+
+    # Ensure executable permissions on main binaries
+    for bin_name in ["PyMORGAN_Suite", "PyMORGAN", "PyRATE-TA"]:
+        target_bin = bin_dir / bin_name
+        if target_bin.exists():
+            try:
+                os.chmod(target_bin, 0o755)
+            except Exception:
+                pass
 
     # Copy installer and desktop assets
     linux_assets = INSTALLER_DIR / "assets" / "linux"
@@ -261,7 +326,6 @@ def main():
 
     target_os = args.platform
     if target_os == "auto":
-        import sys
         if sys.platform.startswith("win"):
             target_os = "windows"
         elif sys.platform.startswith("darwin"):

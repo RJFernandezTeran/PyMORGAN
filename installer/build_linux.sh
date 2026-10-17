@@ -20,14 +20,22 @@ mkdir -p "$BUILD_TMP"
 mkdir -p "$OUTPUT_DIR"
 
 # 2. Extract version
-VERSION=$(uv run python -c "import pymorgan; print(getattr(pymorgan, '__version__', '1.0.0'))")
+PYTHON_BIN="${VIRTUAL_ENV}/bin/python"
+if [ ! -f "$PYTHON_BIN" ]; then
+    PYTHON_BIN="$REPO_ROOT/.venv/bin/python"
+fi
+if [ ! -f "$PYTHON_BIN" ]; then
+    PYTHON_BIN="python3"
+fi
+
+VERSION=$("$PYTHON_BIN" -c "import pymorgan; print(getattr(pymorgan, '__version__', '1.0.0'))")
 echo "Building version: v$VERSION"
 
 # 3. Run PyInstaller if dist not already present or --rebuild requested
 if [ ! -d "$DIST_DIR" ] || [ "$1" == "--rebuild" ]; then
     echo "Running PyInstaller..."
     cd "$REPO_ROOT"
-    uv run --with pyinstaller pyinstaller --noconfirm "$REPO_ROOT/installer/PyMORGAN_Suite.spec"
+    "$PYTHON_BIN" -m PyInstaller --noconfirm "$REPO_ROOT/installer/PyMORGAN_Suite.spec"
 fi
 
 # 4. Assemble distribution layout

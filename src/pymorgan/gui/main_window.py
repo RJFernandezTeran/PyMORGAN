@@ -886,6 +886,23 @@ class MainWindow(
             if action is not None:
                 action.triggered.connect(slot)
 
+        menu_help = getattr(self, "menuHelp", None)
+        if menu_help is not None and not hasattr(self, "actionCheckUpdates"):
+            from PyQt6.QtGui import QAction
+
+            act_upd = QAction("Check for Updates (Release / Bleeding Edge)...", self)
+            act_upd.setToolTip(
+                "Check GitHub for new releases or sync bleeding-edge updates from the main branch"
+            )
+            act_upd.triggered.connect(self._check_for_updates)
+            about_act = getattr(self, "actionAbout", None)
+            if about_act is not None:
+                menu_help.insertAction(about_act, act_upd)
+                menu_help.insertSeparator(about_act)
+            else:
+                menu_help.addAction(act_upd)
+            self.actionCheckUpdates = act_upd
+
         # Backward compatibility alias for legacy references to menuSpectra
         if not hasattr(self, "menuSpectra") or self.menuSpectra is None:
             self.menuSpectra = getattr(self, "menuPreProcessing", None)
@@ -1188,6 +1205,20 @@ class MainWindow(
             QMessageBox.information(self, "Manual", f"Manual not found at {manual}.")
             return
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(manual)))
+
+    def _check_for_updates(self):
+        """Interactive check for new GitHub releases or bleeding-edge main branch updates."""
+        from .updater import check_for_updates_interactive
+
+        check_for_updates_interactive(
+            self,
+            github_url="https://github.com/RJFernandezTeran/PyMORGAN",
+            current_version=pm.__version__,
+            app_name="PyMORGAN",
+            status_callback=lambda msg: (
+                self.statusBar().showMessage(msg, 4000) if msg else self.statusBar().clearMessage()
+            ),
+        )
 
     def _about(self):
         """Show the modern dark-themed About dialog."""

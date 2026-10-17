@@ -191,6 +191,19 @@ def install_fonts(quiet: bool = False) -> None:
             print("\nFonts copied but not yet detected. Restart your Python session.")
 
 
+def install_fonts_twice(quiet: bool = False) -> bool:
+    """Run font installation twice back-to-back to ensure Matplotlib font cache is rebuilt and verified."""
+    for attempt in (1, 2):
+        if not quiet:
+            print(f"[PyMORGAN] Font installation pass {attempt}/2...")
+        try:
+            install_fonts(quiet=quiet)
+        except Exception as exc:
+            if not quiet:
+                print(f"[PyMORGAN] Pass {attempt}/2 warning: {exc}")
+    return are_fonts_installed()
+
+
 def are_fonts_installed() -> bool:
     """Check whether TeX Gyre Heros fonts have already been installed for Matplotlib.
 
@@ -231,8 +244,9 @@ def are_fonts_installed() -> bool:
 def ensure_fonts_installed(quiet: bool = True) -> bool:
     """Ensure TeX Gyre Heros fonts are available in Matplotlib.
 
-    If fonts are already verified, does nothing. Otherwise, installs them from
-    the bundled package assets, rinoh dependency, or system TeX installations.
+    If fonts are already verified, does nothing. Otherwise, runs the font
+    installation twice from bundled package assets, rinoh dependency, or
+    system TeX installations to ensure the font cache is completely rebuilt.
 
     Returns True if at least one preferred font is available, False otherwise.
     """
@@ -253,7 +267,7 @@ def ensure_fonts_installed(quiet: bool = True) -> bool:
         return True
 
     try:
-        install_fonts(quiet=quiet)
+        install_fonts_twice(quiet=quiet)
     except Exception:
         pass
 
@@ -261,7 +275,7 @@ def ensure_fonts_installed(quiet: bool = True) -> bool:
 
 
 def main() -> None:
-    install_fonts(quiet=False)
+    install_fonts_twice(quiet=False)
 
 
 if __name__ == "__main__":
