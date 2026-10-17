@@ -144,6 +144,7 @@ class MainWindow(
         """Perform a quiet, non-blocking background check for updates."""
         try:
             from .updater import check_for_updates_background
+
             check_for_updates_background(
                 self,
                 github_url="https://github.com/RJFernandezTeran/PyMORGAN",
@@ -156,56 +157,51 @@ class MainWindow(
     def _load_ui(self):
         """Load the Qt Designer UI, using a compiled module when possible.
 
-        If ``main_window_ui.py`` exists and is up-to-date it is imported
-        directly (fastest path).  If ``main_window.ui`` has been modified since
-        the compiled file was last written, ``pyuic6`` is run automatically to
-        regenerate it, after which the fresh compiled module is imported.
-        If compilation fails for any reason the raw XML is parsed via
-        ``uic.loadUi`` as a transparent fallback.
+        If ``main_window_ui.py`` is available (including inside a frozen
+        PyInstaller archive) it is imported directly (fastest path).  In an
+        editable git checkout, if ``main_window.ui`` has been modified since
+        ``main_window_ui.py`` was last written, ``PyQt6.uic.compileUi`` is run
+        in-process to regenerate it without spawning any subprocess.
         """
-        ui_compiled = Path(__file__).with_name("main_window_ui.py")
+        import sys
 
-        # Auto-recompile when the .ui file is newer than the compiled module.
-        if _UI_FILE.stat().st_mtime > (ui_compiled.stat().st_mtime if ui_compiled.exists() else 0):
-            try:
-                import subprocess
-                import sys
-
-                result = subprocess.run(
-                    [sys.executable, "-m", "PyQt6.uic.pyuic", str(_UI_FILE), "-o", str(ui_compiled)],
-                    capture_output=True,
-                    text=True,
+        if not getattr(sys, "frozen", False):
+            ui_compiled = Path(__file__).with_name("main_window_ui.py")
+            repo_root = Path(__file__).resolve().parents[3]
+            is_dev_checkout = (repo_root / "pyproject.toml").is_file() and (
+                repo_root / ".git"
+            ).exists()
+            if (
+                is_dev_checkout
+                and _UI_FILE.exists()
+                and (
+                    not ui_compiled.exists()
+                    or _UI_FILE.stat().st_mtime > ui_compiled.stat().st_mtime
                 )
-                if result.returncode != 0:
-                    logger.warning(
-                        "pyuic6 recompile failed (rc=%d): %s",
-                        result.returncode,
-                        result.stderr.strip(),
-                    )
-                    ui_compiled = Path("__nonexistent__")  # force fallback
-                else:
-                    logger.debug("main_window_ui.py recompiled from main_window.ui")
-                    # Invalidate any cached import of the stale compiled module.
-                    import sys as _sys
-
+            ):
+                try:
+                    with open(ui_compiled, "w", encoding="utf-8") as fh:
+                        uic.compileUi(str(_UI_FILE), fh)
+                    logger.debug("main_window_ui.py recompiled in-process from main_window.ui")
                     mod_name = f"{__package__}.main_window_ui"
-                    if mod_name in _sys.modules:
-                        del _sys.modules[mod_name]
-            except Exception:
-                logger.warning("Could not recompile main_window.ui; falling back to uic.loadUi.", exc_info=True)
-                ui_compiled = Path("__nonexistent__")  # force fallback
+                    if mod_name in sys.modules:
+                        del sys.modules[mod_name]
+                except Exception:
+                    logger.warning(
+                        "Could not recompile main_window.ui in-process; falling back.",
+                        exc_info=True,
+                    )
 
-        if ui_compiled.exists():
-            try:
-                from .main_window_ui import Ui_MainWindow
+        try:
+            from .main_window_ui import Ui_MainWindow
 
-                ui = Ui_MainWindow()
-                ui.setupUi(self)
-                for attr, val in ui.__dict__.items():
-                    setattr(self, attr, val)
-                return
-            except Exception:
-                logger.warning("Could not load compiled UI; falling back to uic.loadUi.", exc_info=True)
+            ui = Ui_MainWindow()
+            ui.setupUi(self)
+            for attr, val in ui.__dict__.items():
+                setattr(self, attr, val)
+            return
+        except Exception:
+            logger.warning("Could not load compiled UI; falling back to uic.loadUi.", exc_info=True)
         uic.loadUi(str(_UI_FILE), self)
 
     def _apply_button_tooltips_and_states(self):
@@ -273,11 +269,20 @@ class MainWindow(
     def _apply_button_aesthetics(self):
         """Apply theme-responsive signature stylesheets for every individual button based on light/dark mode."""
         from .theme import is_dark_palette
+
         dark = is_dark_palette()
 
-        def style(light_bg: str, light_text: str, light_border: str, light_hover: str,
-                  dark_bg: str, dark_text: str, dark_border: str, dark_hover: str,
-                  font_size: str = "11px") -> str:
+        def style(
+            light_bg: str,
+            light_text: str,
+            light_border: str,
+            light_hover: str,
+            dark_bg: str,
+            dark_text: str,
+            dark_border: str,
+            dark_hover: str,
+            font_size: str = "11px",
+        ) -> str:
             # A disabled button keeps its per-button colours unless the sheet
             # says otherwise, so every style ends with a neutral grey
             # :disabled rule (also killing the hover effect).
@@ -297,8 +302,12 @@ class MainWindow(
                 )
 
         def toggle_style(
-            l_bg: str, l_txt: str, l_border: str,
-            d_bg: str, d_txt: str, d_border: str,
+            l_bg: str,
+            l_txt: str,
+            l_border: str,
+            d_bg: str,
+            d_txt: str,
+            d_border: str,
             font_size: str = "11px",
         ) -> str:
             if dark:
@@ -321,6 +330,7 @@ class MainWindow(
         import colorsys
 
         from matplotlib.colors import to_hex, to_rgb
+
         s = pm.get_settings()
 
         def ss_style(color_spec: str, font_size: str = "11px") -> str:
@@ -341,7 +351,9 @@ class MainWindow(
                 hov_a = min(1.0, alpha + 0.12)
                 hov = tuple(c * hov_a + base[i] * (1.0 - hov_a) for i, c in enumerate((r, g, b)))
                 press_a = min(1.0, alpha + 0.20)
-                press = tuple(c * press_a + base[i] * (1.0 - press_a) for i, c in enumerate((r, g, b)))
+                press = tuple(
+                    c * press_a + base[i] * (1.0 - press_a) for i, c in enumerate((r, g, b))
+                )
                 text_color = to_hex(colorsys.hls_to_rgb(h, 0.80, min(1.0, max(0.4, s_val))))
             else:
                 base = (1.0, 1.0, 1.0)
@@ -371,95 +383,656 @@ class MainWindow(
         # Signature distinct colour for every button function
         button_map = {
             # --- 2D Other Plots Mode Toggle Buttons ---
-            "twoD_other_btn_TD": toggle_style("#dbeafe", "#1e40af", "#3b82f6", "#1e3a8a", "#93c5fd", "#3b82f6"),
-            "twoD_other_btn_PH": toggle_style("#f3e8ff", "#6b21a8", "#a855f7", "#3b0764", "#e9d5ff", "#a855f7"),
-            "twoD_other_btn_CAL": toggle_style("#d1fae5", "#065f46", "#10b981", "#064e3b", "#6ee7b7", "#10b981"),
+            "twoD_other_btn_TD": toggle_style(
+                "#dbeafe", "#1e40af", "#3b82f6", "#1e3a8a", "#93c5fd", "#3b82f6"
+            ),
+            "twoD_other_btn_PH": toggle_style(
+                "#f3e8ff", "#6b21a8", "#a855f7", "#3b0764", "#e9d5ff", "#a855f7"
+            ),
+            "twoD_other_btn_CAL": toggle_style(
+                "#d1fae5", "#065f46", "#10b981", "#064e3b", "#6ee7b7", "#10b981"
+            ),
             # --- Main Plots & Cuts Buttons ---
             # 1. Contour Plot: Dark Navy (Light: Sky Blue tint, Dark: Slate Navy with Sky Cyan text)
-            "PP_CtrPlot_btn": style("#d6eaf8", "#1b4f72", "#aed6f1", "#aed6f1", "#1e293b", "#38bdf8", "#0284c7", "#0369a1", "12px"),
-            "twoD_contour_btn": style("#d6eaf8", "#1b4f72", "#aed6f1", "#aed6f1", "#1e293b", "#38bdf8", "#0284c7", "#0369a1", "12px"),
-
+            "PP_CtrPlot_btn": style(
+                "#d6eaf8",
+                "#1b4f72",
+                "#aed6f1",
+                "#aed6f1",
+                "#1e293b",
+                "#38bdf8",
+                "#0284c7",
+                "#0369a1",
+                "12px",
+            ),
+            "twoD_contour_btn": style(
+                "#d6eaf8",
+                "#1b4f72",
+                "#aed6f1",
+                "#aed6f1",
+                "#1e293b",
+                "#38bdf8",
+                "#0284c7",
+                "#0369a1",
+                "12px",
+            ),
             # 2. Plot Kinetics: Forest Green (Light: Mint tint, Dark: Emerald Slate with Mint text)
-            "PP_kineticsPlot_btn": style("#d5f5e3", "#196f3d", "#abebc6", "#abebc6", "#064e3b", "#6ee7b7", "#059669", "#047857", "12px"),
-            "twoD_kinetics_btn": style("#d5f5e3", "#196f3d", "#abebc6", "#abebc6", "#064e3b", "#6ee7b7", "#059669", "#047857", "12px"),
-            "twoD_plot_sd_kinetics_btn": style("#d5f5e3", "#196f3d", "#abebc6", "#abebc6", "#064e3b", "#6ee7b7", "#059669", "#047857"),
-
+            "PP_kineticsPlot_btn": style(
+                "#d5f5e3",
+                "#196f3d",
+                "#abebc6",
+                "#abebc6",
+                "#064e3b",
+                "#6ee7b7",
+                "#059669",
+                "#047857",
+                "12px",
+            ),
+            "twoD_kinetics_btn": style(
+                "#d5f5e3",
+                "#196f3d",
+                "#abebc6",
+                "#abebc6",
+                "#064e3b",
+                "#6ee7b7",
+                "#059669",
+                "#047857",
+                "12px",
+            ),
+            "twoD_plot_sd_kinetics_btn": style(
+                "#d5f5e3",
+                "#196f3d",
+                "#abebc6",
+                "#abebc6",
+                "#064e3b",
+                "#6ee7b7",
+                "#059669",
+                "#047857",
+            ),
             # 3. 3D Surface Plot: Dark Red / Crimson (Light: Rose tint, Dark: Crimson Slate with Coral text)
-            "PP_SurfPlot_btn": style("#fadbd8", "#78281f", "#f5b7b1", "#f5b7b1", "#450a0a", "#fca5a5", "#dc2626", "#b91c1c", "12px"),
-            "twoD_surf_btn": style("#fadbd8", "#78281f", "#f5b7b1", "#f5b7b1", "#450a0a", "#fca5a5", "#dc2626", "#b91c1c", "12px"),
-
+            "PP_SurfPlot_btn": style(
+                "#fadbd8",
+                "#78281f",
+                "#f5b7b1",
+                "#f5b7b1",
+                "#450a0a",
+                "#fca5a5",
+                "#dc2626",
+                "#b91c1c",
+                "12px",
+            ),
+            "twoD_surf_btn": style(
+                "#fadbd8",
+                "#78281f",
+                "#f5b7b1",
+                "#f5b7b1",
+                "#450a0a",
+                "#fca5a5",
+                "#dc2626",
+                "#b91c1c",
+                "12px",
+            ),
             # 4. Plot Spectra / Slices: Royal Blue (Light: Soft Royal tint, Dark: Indigo Slate with Blue text)
-            "PP_trSpecPlot_btn": style("#ebf5fb", "#21618c", "#aed6f1", "#aed6f1", "#172554", "#93c5fd", "#3b82f6", "#1d4ed8", "12px"),
-            "twoD_slices_btn": style("#ebf5fb", "#21618c", "#aed6f1", "#aed6f1", "#172554", "#93c5fd", "#3b82f6", "#1d4ed8", "12px"),
-
+            "PP_trSpecPlot_btn": style(
+                "#ebf5fb",
+                "#21618c",
+                "#aed6f1",
+                "#aed6f1",
+                "#172554",
+                "#93c5fd",
+                "#3b82f6",
+                "#1d4ed8",
+                "12px",
+            ),
+            "twoD_slices_btn": style(
+                "#ebf5fb",
+                "#21618c",
+                "#aed6f1",
+                "#aed6f1",
+                "#172554",
+                "#93c5fd",
+                "#3b82f6",
+                "#1d4ed8",
+                "12px",
+            ),
             # --- 1D Preprocess & Utility Buttons ---
-            "PP_reloadData_btn": style("#e6f4f1", "#115e59", "#99f6e4", "#ccfbf1", "#134e4a", "#5eead4", "#14b8a6", "#0f766e"),
-            "PP_fitChirp_btn": style("#f3e8ff", "#6b21a8", "#e9d5ff", "#ddd6fe", "#3b0764", "#e9d5ff", "#a855f7", "#7e22ce"),
-            "PP_loadChirpCorr_btn": style("#ebdef0", "#5b2c6f", "#d7bde2", "#d7bde2", "#2e1065", "#ddd6fe", "#8b5cf6", "#6d28d9"),
-            "PP_subtractSolvent_btn": style("#f1f5f9", "#334155", "#cbd5e1", "#e2e8f0", "#334155", "#e2e8f0", "#64748b", "#475569"),
-            "PP_subtractShockwave_btn": style("#e2e8f0", "#1e293b", "#94a3b8", "#cbd5e1", "#1e293b", "#cbd5e1", "#475569", "#334155"),
-            "PP_plotBkg_btn": style("#e0f2fe", "#0369a1", "#bae6fd", "#bae6fd", "#0c4a6e", "#7dd3fc", "#0284c7", "#0369a1"),
-            "PP_maskProbe_btn": style("#ffedd5", "#9a3412", "#fed7aa", "#fed7aa", "#431407", "#fdba74", "#ea580c", "#c2410c"),
-            "PP_shiftT0_btn": style("#ffedd5", "#9a3412", "#fed7aa", "#fed7aa", "#431407", "#fdba74", "#ea580c", "#c2410c"),
-            "PP_plotNoise_btn": style("#f5f3ff", "#6d28d9", "#ddd6fe", "#ddd6fe", "#3b0764", "#c084fc", "#9333ea", "#7e22ce"),
-            "PP_plotCounts_btn": style("#e0f2fe", "#0369a1", "#bae6fd", "#bae6fd", "#0c4a6e", "#38bdf8", "#0284c7", "#0369a1"),
-
-            "PP_ScanKinetics_btn": style("#e6f4f1", "#115e59", "#99f6e4", "#ccfbf1", "#134e4a", "#5eead4", "#14b8a6", "#0f766e"),
-            "PP_ScanSpectra_btn": style("#e0f2fe", "#075985", "#bae6fd", "#bae6fd", "#0c4a6e", "#38bdf8", "#0284c7", "#0369a1"),
-            "PP_RecalcAvg_btn": style("#d1fae5", "#065f46", "#a7f3d0", "#a7f3d0", "#064e3b", "#34d399", "#10b981", "#059669"),
-
+            "PP_reloadData_btn": style(
+                "#e6f4f1",
+                "#115e59",
+                "#99f6e4",
+                "#ccfbf1",
+                "#134e4a",
+                "#5eead4",
+                "#14b8a6",
+                "#0f766e",
+            ),
+            "PP_fitChirp_btn": style(
+                "#f3e8ff",
+                "#6b21a8",
+                "#e9d5ff",
+                "#ddd6fe",
+                "#3b0764",
+                "#e9d5ff",
+                "#a855f7",
+                "#7e22ce",
+            ),
+            "PP_loadChirpCorr_btn": style(
+                "#ebdef0",
+                "#5b2c6f",
+                "#d7bde2",
+                "#d7bde2",
+                "#2e1065",
+                "#ddd6fe",
+                "#8b5cf6",
+                "#6d28d9",
+            ),
+            "PP_subtractSolvent_btn": style(
+                "#f1f5f9",
+                "#334155",
+                "#cbd5e1",
+                "#e2e8f0",
+                "#334155",
+                "#e2e8f0",
+                "#64748b",
+                "#475569",
+            ),
+            "PP_subtractShockwave_btn": style(
+                "#e2e8f0",
+                "#1e293b",
+                "#94a3b8",
+                "#cbd5e1",
+                "#1e293b",
+                "#cbd5e1",
+                "#475569",
+                "#334155",
+            ),
+            "PP_plotBkg_btn": style(
+                "#e0f2fe",
+                "#0369a1",
+                "#bae6fd",
+                "#bae6fd",
+                "#0c4a6e",
+                "#7dd3fc",
+                "#0284c7",
+                "#0369a1",
+            ),
+            "PP_maskProbe_btn": style(
+                "#ffedd5",
+                "#9a3412",
+                "#fed7aa",
+                "#fed7aa",
+                "#431407",
+                "#fdba74",
+                "#ea580c",
+                "#c2410c",
+            ),
+            "PP_shiftT0_btn": style(
+                "#ffedd5",
+                "#9a3412",
+                "#fed7aa",
+                "#fed7aa",
+                "#431407",
+                "#fdba74",
+                "#ea580c",
+                "#c2410c",
+            ),
+            "PP_plotNoise_btn": style(
+                "#f5f3ff",
+                "#6d28d9",
+                "#ddd6fe",
+                "#ddd6fe",
+                "#3b0764",
+                "#c084fc",
+                "#9333ea",
+                "#7e22ce",
+            ),
+            "PP_plotCounts_btn": style(
+                "#e0f2fe",
+                "#0369a1",
+                "#bae6fd",
+                "#bae6fd",
+                "#0c4a6e",
+                "#38bdf8",
+                "#0284c7",
+                "#0369a1",
+            ),
+            "PP_ScanKinetics_btn": style(
+                "#e6f4f1",
+                "#115e59",
+                "#99f6e4",
+                "#ccfbf1",
+                "#134e4a",
+                "#5eead4",
+                "#14b8a6",
+                "#0f766e",
+            ),
+            "PP_ScanSpectra_btn": style(
+                "#e0f2fe",
+                "#075985",
+                "#bae6fd",
+                "#bae6fd",
+                "#0c4a6e",
+                "#38bdf8",
+                "#0284c7",
+                "#0369a1",
+            ),
+            "PP_RecalcAvg_btn": style(
+                "#d1fae5",
+                "#065f46",
+                "#a7f3d0",
+                "#a7f3d0",
+                "#064e3b",
+                "#34d399",
+                "#10b981",
+                "#059669",
+            ),
             "PP_LoadSSabs_btn": ss_style(getattr(s, "ss_abs_color", "b")),
             "PP_LoadSSem_btn": ss_style(getattr(s, "ss_em_color", "r")),
-            "PP_ShowSSbutton": style("#dbeafe", "#1e40af", "#bfdbfe", "#bfdbfe", "#1e3a8a", "#60a5fa", "#3b82f6", "#1d4ed8"),
-            "PP_ClearSSbutton": style("#ffe4e6", "#9f1239", "#fecdd3", "#fecdd3", "#4c0519", "#fda4af", "#f43f5e", "#e11d48"),
-
+            "PP_ShowSSbutton": style(
+                "#dbeafe",
+                "#1e40af",
+                "#bfdbfe",
+                "#bfdbfe",
+                "#1e3a8a",
+                "#60a5fa",
+                "#3b82f6",
+                "#1d4ed8",
+            ),
+            "PP_ClearSSbutton": style(
+                "#ffe4e6",
+                "#9f1239",
+                "#fecdd3",
+                "#fecdd3",
+                "#4c0519",
+                "#fda4af",
+                "#f43f5e",
+                "#e11d48",
+            ),
             # --- 2D Preprocess & Phasing ---
-            "twoD_reloadData_btn": style("#e6f4f1", "#115e59", "#99f6e4", "#ccfbf1", "#134e4a", "#5eead4", "#14b8a6", "#0f766e"),
-            "twoD_apply_changes_btn": style("#d5f5e3", "#196f3d", "#abebc6", "#abebc6", "#064e3b", "#6ee7b7", "#059669", "#047857"),
-            "twoD_save_probe_cal_btn": style("#ccfbf1", "#0f766e", "#99f6e4", "#99f6e4", "#134e4a", "#2dd4bf", "#14b8a6", "#0f766e"),
-            "twoD_apply_reprocess_btn": style("#d5f5e3", "#196f3d", "#abebc6", "#abebc6", "#064e3b", "#6ee7b7", "#059669", "#047857"),
-
+            "twoD_reloadData_btn": style(
+                "#e6f4f1",
+                "#115e59",
+                "#99f6e4",
+                "#ccfbf1",
+                "#134e4a",
+                "#5eead4",
+                "#14b8a6",
+                "#0f766e",
+            ),
+            "twoD_apply_changes_btn": style(
+                "#d5f5e3",
+                "#196f3d",
+                "#abebc6",
+                "#abebc6",
+                "#064e3b",
+                "#6ee7b7",
+                "#059669",
+                "#047857",
+            ),
+            "twoD_save_probe_cal_btn": style(
+                "#ccfbf1",
+                "#0f766e",
+                "#99f6e4",
+                "#99f6e4",
+                "#134e4a",
+                "#2dd4bf",
+                "#14b8a6",
+                "#0f766e",
+            ),
+            "twoD_apply_reprocess_btn": style(
+                "#d5f5e3",
+                "#196f3d",
+                "#abebc6",
+                "#abebc6",
+                "#064e3b",
+                "#6ee7b7",
+                "#059669",
+                "#047857",
+            ),
             # --- 2D Analysis Group ---
-            "twoD_integral_dynamics_btn": style("#d5f5e3", "#196f3d", "#abebc6", "#abebc6", "#064e3b", "#6ee7b7", "#059669", "#047857"),
-            "twoD_gaussian_fit_btn": style("#d6eaf8", "#1b4f72", "#aed6f1", "#aed6f1", "#1e293b", "#38bdf8", "#0284c7", "#0369a1"),
-            "twoD_timedomain_fit_btn": style("#ebdef0", "#5b2c6f", "#d7bde2", "#d7bde2", "#2e1065", "#ddd6fe", "#8b5cf6", "#6d28d9"),
-            "twoD_subtract_spectra_btn": style("#fadbd8", "#78281f", "#f5b7b1", "#f5b7b1", "#450a0a", "#fca5a5", "#dc2626", "#b91c1c"),
-            "twoD_spectral_diffusion_btn": style("#fdebd0", "#7e5109", "#f9e79f", "#f9e79f", "#451a03", "#fde047", "#ca8a04", "#a16207"),
-            "twoD_make_gif_btn": style("#e5e8e8", "#2c3e50", "#d5dbdb", "#d5dbdb", "#334155", "#e2e8f0", "#64748b", "#475569"),
-
+            "twoD_integral_dynamics_btn": style(
+                "#d5f5e3",
+                "#196f3d",
+                "#abebc6",
+                "#abebc6",
+                "#064e3b",
+                "#6ee7b7",
+                "#059669",
+                "#047857",
+            ),
+            "twoD_gaussian_fit_btn": style(
+                "#d6eaf8",
+                "#1b4f72",
+                "#aed6f1",
+                "#aed6f1",
+                "#1e293b",
+                "#38bdf8",
+                "#0284c7",
+                "#0369a1",
+            ),
+            "twoD_timedomain_fit_btn": style(
+                "#ebdef0",
+                "#5b2c6f",
+                "#d7bde2",
+                "#d7bde2",
+                "#2e1065",
+                "#ddd6fe",
+                "#8b5cf6",
+                "#6d28d9",
+            ),
+            "twoD_subtract_spectra_btn": style(
+                "#fadbd8",
+                "#78281f",
+                "#f5b7b1",
+                "#f5b7b1",
+                "#450a0a",
+                "#fca5a5",
+                "#dc2626",
+                "#b91c1c",
+            ),
+            "twoD_spectral_diffusion_btn": style(
+                "#fdebd0",
+                "#7e5109",
+                "#f9e79f",
+                "#f9e79f",
+                "#451a03",
+                "#fde047",
+                "#ca8a04",
+                "#a16207",
+            ),
+            "twoD_make_gif_btn": style(
+                "#e5e8e8",
+                "#2c3e50",
+                "#d5dbdb",
+                "#d5dbdb",
+                "#334155",
+                "#e2e8f0",
+                "#64748b",
+                "#475569",
+            ),
             # --- Calibration Files & Aux ---
-            "cal_spec_btn_load_probe": style("#fdebd0", "#7e5109", "#f9e79f", "#f9e79f", "#451a03", "#fde047", "#ca8a04", "#a16207"),
-            "cal_spec_btn_load_solvent": style("#fdebd0", "#7e5109", "#f9e79f", "#f9e79f", "#451a03", "#fde047", "#ca8a04", "#a16207"),
-            "cal_spec_btn_load_cal": style("#fdebd0", "#7e5109", "#f9e79f", "#f9e79f", "#451a03", "#fde047", "#ca8a04", "#a16207"),
-            "cal_shaper_btn_load_pump": style("#fdebd0", "#7e5109", "#f9e79f", "#f9e79f", "#451a03", "#fde047", "#ca8a04", "#a16207"),
-            "cal_shaper_btn_load_solvent": style("#fdebd0", "#7e5109", "#f9e79f", "#f9e79f", "#451a03", "#fde047", "#ca8a04", "#a16207"),
-            "cal_shaper_btn_load_cal": style("#fdebd0", "#7e5109", "#f9e79f", "#f9e79f", "#451a03", "#fde047", "#ca8a04", "#a16207"),
-            "cal_shaper_btn_load_masks": style("#fdebd0", "#7e5109", "#f9e79f", "#f9e79f", "#451a03", "#fde047", "#ca8a04", "#a16207"),
-            "cal_btn_merge": style("#fdebd0", "#7e5109", "#f9e79f", "#f9e79f", "#451a03", "#fde047", "#ca8a04", "#a16207"),
-            "cal_btn_split": style("#fdebd0", "#7e5109", "#f9e79f", "#f9e79f", "#451a03", "#fde047", "#ca8a04", "#a16207"),
-            "cal_btn_add_w0": style("#fdebd0", "#7e5109", "#f9e79f", "#f9e79f", "#451a03", "#fde047", "#ca8a04", "#a16207"),
-            "cal_btn_del_w0": style("#fdebd0", "#7e5109", "#f9e79f", "#f9e79f", "#451a03", "#fde047", "#ca8a04", "#a16207"),
-            "cal_btn_save_csv": style("#fdebd0", "#7e5109", "#f9e79f", "#f9e79f", "#451a03", "#fde047", "#ca8a04", "#a16207"),
-            "cal_spec_btn_do_fit": style("#ebdef0", "#5b2c6f", "#d7bde2", "#d7bde2", "#2e1065", "#ddd6fe", "#8b5cf6", "#6d28d9"),
-            "cal_shaper_btn_do_fit": style("#ebdef0", "#5b2c6f", "#d7bde2", "#d7bde2", "#2e1065", "#ddd6fe", "#8b5cf6", "#6d28d9"),
-            "cal_spec_btn_save": style("#d5f5e3", "#196f3d", "#abebc6", "#abebc6", "#064e3b", "#6ee7b7", "#059669", "#047857"),
-            "cal_shaper_btn_save": style("#d5f5e3", "#196f3d", "#abebc6", "#abebc6", "#064e3b", "#6ee7b7", "#059669", "#047857"),
-            "cal_apply_probe_btn": style("#d5f5e3", "#196f3d", "#abebc6", "#abebc6", "#064e3b", "#6ee7b7", "#059669", "#047857"),
-            "cal_apply_shaper_btn": style("#d5f5e3", "#196f3d", "#abebc6", "#abebc6", "#064e3b", "#6ee7b7", "#059669", "#047857"),
-            "cal_save_settings_btn": style("#d5f5e3", "#196f3d", "#abebc6", "#abebc6", "#064e3b", "#6ee7b7", "#059669", "#047857"),
-
+            "cal_spec_btn_load_probe": style(
+                "#fdebd0",
+                "#7e5109",
+                "#f9e79f",
+                "#f9e79f",
+                "#451a03",
+                "#fde047",
+                "#ca8a04",
+                "#a16207",
+            ),
+            "cal_spec_btn_load_solvent": style(
+                "#fdebd0",
+                "#7e5109",
+                "#f9e79f",
+                "#f9e79f",
+                "#451a03",
+                "#fde047",
+                "#ca8a04",
+                "#a16207",
+            ),
+            "cal_spec_btn_load_cal": style(
+                "#fdebd0",
+                "#7e5109",
+                "#f9e79f",
+                "#f9e79f",
+                "#451a03",
+                "#fde047",
+                "#ca8a04",
+                "#a16207",
+            ),
+            "cal_shaper_btn_load_pump": style(
+                "#fdebd0",
+                "#7e5109",
+                "#f9e79f",
+                "#f9e79f",
+                "#451a03",
+                "#fde047",
+                "#ca8a04",
+                "#a16207",
+            ),
+            "cal_shaper_btn_load_solvent": style(
+                "#fdebd0",
+                "#7e5109",
+                "#f9e79f",
+                "#f9e79f",
+                "#451a03",
+                "#fde047",
+                "#ca8a04",
+                "#a16207",
+            ),
+            "cal_shaper_btn_load_cal": style(
+                "#fdebd0",
+                "#7e5109",
+                "#f9e79f",
+                "#f9e79f",
+                "#451a03",
+                "#fde047",
+                "#ca8a04",
+                "#a16207",
+            ),
+            "cal_shaper_btn_load_masks": style(
+                "#fdebd0",
+                "#7e5109",
+                "#f9e79f",
+                "#f9e79f",
+                "#451a03",
+                "#fde047",
+                "#ca8a04",
+                "#a16207",
+            ),
+            "cal_btn_merge": style(
+                "#fdebd0",
+                "#7e5109",
+                "#f9e79f",
+                "#f9e79f",
+                "#451a03",
+                "#fde047",
+                "#ca8a04",
+                "#a16207",
+            ),
+            "cal_btn_split": style(
+                "#fdebd0",
+                "#7e5109",
+                "#f9e79f",
+                "#f9e79f",
+                "#451a03",
+                "#fde047",
+                "#ca8a04",
+                "#a16207",
+            ),
+            "cal_btn_add_w0": style(
+                "#fdebd0",
+                "#7e5109",
+                "#f9e79f",
+                "#f9e79f",
+                "#451a03",
+                "#fde047",
+                "#ca8a04",
+                "#a16207",
+            ),
+            "cal_btn_del_w0": style(
+                "#fdebd0",
+                "#7e5109",
+                "#f9e79f",
+                "#f9e79f",
+                "#451a03",
+                "#fde047",
+                "#ca8a04",
+                "#a16207",
+            ),
+            "cal_btn_save_csv": style(
+                "#fdebd0",
+                "#7e5109",
+                "#f9e79f",
+                "#f9e79f",
+                "#451a03",
+                "#fde047",
+                "#ca8a04",
+                "#a16207",
+            ),
+            "cal_spec_btn_do_fit": style(
+                "#ebdef0",
+                "#5b2c6f",
+                "#d7bde2",
+                "#d7bde2",
+                "#2e1065",
+                "#ddd6fe",
+                "#8b5cf6",
+                "#6d28d9",
+            ),
+            "cal_shaper_btn_do_fit": style(
+                "#ebdef0",
+                "#5b2c6f",
+                "#d7bde2",
+                "#d7bde2",
+                "#2e1065",
+                "#ddd6fe",
+                "#8b5cf6",
+                "#6d28d9",
+            ),
+            "cal_spec_btn_save": style(
+                "#d5f5e3",
+                "#196f3d",
+                "#abebc6",
+                "#abebc6",
+                "#064e3b",
+                "#6ee7b7",
+                "#059669",
+                "#047857",
+            ),
+            "cal_shaper_btn_save": style(
+                "#d5f5e3",
+                "#196f3d",
+                "#abebc6",
+                "#abebc6",
+                "#064e3b",
+                "#6ee7b7",
+                "#059669",
+                "#047857",
+            ),
+            "cal_apply_probe_btn": style(
+                "#d5f5e3",
+                "#196f3d",
+                "#abebc6",
+                "#abebc6",
+                "#064e3b",
+                "#6ee7b7",
+                "#059669",
+                "#047857",
+            ),
+            "cal_apply_shaper_btn": style(
+                "#d5f5e3",
+                "#196f3d",
+                "#abebc6",
+                "#abebc6",
+                "#064e3b",
+                "#6ee7b7",
+                "#059669",
+                "#047857",
+            ),
+            "cal_save_settings_btn": style(
+                "#d5f5e3",
+                "#196f3d",
+                "#abebc6",
+                "#abebc6",
+                "#064e3b",
+                "#6ee7b7",
+                "#059669",
+                "#047857",
+            ),
             # --- Subtractions & Reset ---
-            "cal_spec_btn_reset": style("#fadbd8", "#78281f", "#f5b7b1", "#f5b7b1", "#450a0a", "#fca5a5", "#dc2626", "#b91c1c"),
-            "cal_shaper_btn_reset": style("#fadbd8", "#78281f", "#f5b7b1", "#f5b7b1", "#450a0a", "#fca5a5", "#dc2626", "#b91c1c"),
-
+            "cal_spec_btn_reset": style(
+                "#fadbd8",
+                "#78281f",
+                "#f5b7b1",
+                "#f5b7b1",
+                "#450a0a",
+                "#fca5a5",
+                "#dc2626",
+                "#b91c1c",
+            ),
+            "cal_shaper_btn_reset": style(
+                "#fadbd8",
+                "#78281f",
+                "#f5b7b1",
+                "#f5b7b1",
+                "#450a0a",
+                "#fca5a5",
+                "#dc2626",
+                "#b91c1c",
+            ),
             # --- Navigation & Restores ---
-            "RefreshDir_btn": style("#f1f5f9", "#334155", "#cbd5e1", "#e2e8f0", "#334155", "#e2e8f0", "#64748b", "#475569"),
-            "GoToToday_btn": style("#f1f5f9", "#334155", "#cbd5e1", "#e2e8f0", "#334155", "#e2e8f0", "#64748b", "#475569"),
-            "UpDir_btn": style("#f1f5f9", "#334155", "#cbd5e1", "#e2e8f0", "#334155", "#e2e8f0", "#64748b", "#475569"),
-            "BrowseRootdir_btn": style("#f1f5f9", "#334155", "#cbd5e1", "#e2e8f0", "#334155", "#e2e8f0", "#64748b", "#475569"),
-            "PC_restore": style("#f1f5f9", "#334155", "#cbd5e1", "#e2e8f0", "#334155", "#e2e8f0", "#64748b", "#475569"),
-            "twoD_PC_restore": style("#f1f5f9", "#334155", "#cbd5e1", "#e2e8f0", "#334155", "#e2e8f0", "#64748b", "#475569"),
-            "twoD_PC_sync": style("#f1f5f9", "#334155", "#cbd5e1", "#e2e8f0", "#334155", "#e2e8f0", "#64748b", "#475569"),
+            "RefreshDir_btn": style(
+                "#f1f5f9",
+                "#334155",
+                "#cbd5e1",
+                "#e2e8f0",
+                "#334155",
+                "#e2e8f0",
+                "#64748b",
+                "#475569",
+            ),
+            "GoToToday_btn": style(
+                "#f1f5f9",
+                "#334155",
+                "#cbd5e1",
+                "#e2e8f0",
+                "#334155",
+                "#e2e8f0",
+                "#64748b",
+                "#475569",
+            ),
+            "UpDir_btn": style(
+                "#f1f5f9",
+                "#334155",
+                "#cbd5e1",
+                "#e2e8f0",
+                "#334155",
+                "#e2e8f0",
+                "#64748b",
+                "#475569",
+            ),
+            "BrowseRootdir_btn": style(
+                "#f1f5f9",
+                "#334155",
+                "#cbd5e1",
+                "#e2e8f0",
+                "#334155",
+                "#e2e8f0",
+                "#64748b",
+                "#475569",
+            ),
+            "PC_restore": style(
+                "#f1f5f9",
+                "#334155",
+                "#cbd5e1",
+                "#e2e8f0",
+                "#334155",
+                "#e2e8f0",
+                "#64748b",
+                "#475569",
+            ),
+            "twoD_PC_restore": style(
+                "#f1f5f9",
+                "#334155",
+                "#cbd5e1",
+                "#e2e8f0",
+                "#334155",
+                "#e2e8f0",
+                "#64748b",
+                "#475569",
+            ),
+            "twoD_PC_sync": style(
+                "#f1f5f9",
+                "#334155",
+                "#cbd5e1",
+                "#e2e8f0",
+                "#334155",
+                "#e2e8f0",
+                "#64748b",
+                "#475569",
+            ),
         }
 
         # Apply mapped styles
@@ -469,7 +1042,9 @@ class MainWindow(
                 btn.setStyleSheet(st)
 
         # Fallback for any unmapped QPushButtons
-        fallback_style = style("#f1f5f9", "#334155", "#cbd5e1", "#e2e8f0", "#334155", "#e2e8f0", "#64748b", "#475569")
+        fallback_style = style(
+            "#f1f5f9", "#334155", "#cbd5e1", "#e2e8f0", "#334155", "#e2e8f0", "#64748b", "#475569"
+        )
         for btn in self.findChildren(QPushButton):
             if not btn.styleSheet():
                 btn.setStyleSheet(fallback_style)
@@ -520,7 +1095,10 @@ class MainWindow(
                         QPlainTextEdit,
                         QTextEdit,
                     )
-                    if focus_w is not None and isinstance(focus_w, (QLineEdit, QTextEdit, QPlainTextEdit, QAbstractSpinBox, QComboBox)):
+
+                    if focus_w is not None and isinstance(
+                        focus_w, (QLineEdit, QTextEdit, QPlainTextEdit, QAbstractSpinBox, QComboBox)
+                    ):
                         return False
 
                     lst_1d = getattr(self, "PP_datafolderlist_lst", None)
@@ -546,7 +1124,10 @@ class MainWindow(
                 QPlainTextEdit,
                 QTextEdit,
             )
-            if focus_w is not None and isinstance(focus_w, (QLineEdit, QTextEdit, QPlainTextEdit, QAbstractSpinBox, QComboBox)):
+
+            if focus_w is not None and isinstance(
+                focus_w, (QLineEdit, QTextEdit, QPlainTextEdit, QAbstractSpinBox, QComboBox)
+            ):
                 super().keyPressEvent(event)
                 return
 
@@ -886,6 +1467,23 @@ class MainWindow(
             if action is not None:
                 action.triggered.connect(slot)
 
+        menu_help = getattr(self, "menuHelp", None)
+        if menu_help is not None and not hasattr(self, "actionCheckUpdates"):
+            from PyQt6.QtGui import QAction
+
+            act_upd = QAction("Check for Updates (Release / Bleeding Edge)...", self)
+            act_upd.setToolTip(
+                "Check GitHub for new releases or sync bleeding-edge updates from the main branch"
+            )
+            act_upd.triggered.connect(self._check_for_updates)
+            about_act = getattr(self, "actionAbout", None)
+            if about_act is not None:
+                menu_help.insertAction(about_act, act_upd)
+                menu_help.insertSeparator(about_act)
+            else:
+                menu_help.addAction(act_upd)
+            self.actionCheckUpdates = act_upd
+
         # Backward compatibility alias for legacy references to menuSpectra
         if not hasattr(self, "menuSpectra") or self.menuSpectra is None:
             self.menuSpectra = getattr(self, "menuPreProcessing", None)
@@ -1071,7 +1669,9 @@ class MainWindow(
             self._apply_background()
             exported_paths = self.dataset.to_pdat(path, use_corrected=True)
             msg_path = "\n".join(str(p) for p in exported_paths)
-            QMessageBox.information(self, "Export complete", f"PDAT file(s) exported at:\n{msg_path}")
+            QMessageBox.information(
+                self, "Export complete", f"PDAT file(s) exported at:\n{msg_path}"
+            )
             self.statusBar().showMessage(f"Exported PDAT to {exported_paths[0]}")
         except Exception as exc:
             QMessageBox.warning(self, "Export failed", str(exc))
@@ -1170,7 +1770,10 @@ class MainWindow(
 
         act_plot_ss = getattr(self, "actionPlotSteadyState", None)
         if act_plot_ss is not None:
-            has_ss = getattr(self, "_ss_abs_spectrum", None) is not None or getattr(self, "_ss_em_spectrum", None) is not None
+            has_ss = (
+                getattr(self, "_ss_abs_spectrum", None) is not None
+                or getattr(self, "_ss_em_spectrum", None) is not None
+            )
             act_plot_ss.setEnabled(has_ss)
 
         if index == 0 and getattr(self, "plot_controls", None) is not None:
@@ -1188,6 +1791,20 @@ class MainWindow(
             QMessageBox.information(self, "Manual", f"Manual not found at {manual}.")
             return
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(manual)))
+
+    def _check_for_updates(self):
+        """Interactive check for new GitHub releases or bleeding-edge main branch updates."""
+        from .updater import check_for_updates_interactive
+
+        check_for_updates_interactive(
+            self,
+            github_url="https://github.com/RJFernandezTeran/PyMORGAN",
+            current_version=pm.__version__,
+            app_name="PyMORGAN",
+            status_callback=lambda msg: (
+                self.statusBar().showMessage(msg, 4000) if msg else self.statusBar().clearMessage()
+            ),
+        )
 
     def _about(self):
         """Show the modern dark-themed About dialog."""

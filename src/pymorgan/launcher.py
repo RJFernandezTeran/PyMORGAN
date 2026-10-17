@@ -10,16 +10,27 @@ from __future__ import annotations
 
 import sys
 
-from .fonts import are_fonts_installed, install_fonts
+from .fonts import are_fonts_installed, install_fonts_twice
 
 
 def main(argv: list[str] | None = None) -> int:
     """Run font check-and-install on first run, then launch the PyMORGAN GUI."""
+    if getattr(sys, "frozen", False):
+        import multiprocessing
+
+        multiprocessing.freeze_support()
+    args = list(argv) if argv is not None else sys.argv[1:]
+    if getattr(sys, "frozen", False) and args and args[0] in ("-m", "-c"):
+        return 2
+    if "--install-fonts" in args:
+        install_fonts_twice(quiet=False)
+        return 0
+
     if not are_fonts_installed():
         print("[PyMORGAN] First-time startup: TeX Gyre Heros fonts not detected.")
-        print("[PyMORGAN] Automatically configuring fonts into Matplotlib...")
+        print("[PyMORGAN] Automatically configuring fonts into Matplotlib (2 passes)...")
         try:
-            install_fonts(quiet=False)
+            install_fonts_twice(quiet=False)
             print("[PyMORGAN] Font configuration complete.\n")
         except Exception as exc:
             print(f"[PyMORGAN] Warning: font installation failed ({exc}). Continuing...\n")

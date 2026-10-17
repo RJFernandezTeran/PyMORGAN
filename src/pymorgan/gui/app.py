@@ -111,8 +111,12 @@ def main(argv: list[str] | None = None) -> int:
     cli_dark = "--dark" in args
     if cli_dark:
         args = [a for a in args if a != "--dark"]
-    # Ignore the OS dark theme on Windows.
-    if sys.platform.startswith("win") and "-platform" not in args:
+    # Ignore the OS dark theme on Windows unless a specific QPA platform (e.g. offscreen) is set.
+    if (
+        sys.platform.startswith("win")
+        and "-platform" not in args
+        and not os.environ.get("QT_QPA_PLATFORM")
+    ):
         args += ["-platform", "windows:darkmode=0"]
         # Distinct AppUserModelID so Windows shows our taskbar icon instead of
         # inheriting the host python.exe icon/grouping.
@@ -223,7 +227,7 @@ def main(argv: list[str] | None = None) -> int:
         window.show()
 
     elapsed = time.perf_counter() - t_start
-    print(f"[PyMORGAN] GUI loaded in {elapsed:.2f} s")
+    print(f"[PyMORGAN] GUI loaded in {elapsed:.2f} s", flush=True)
     from .console import hide_console
 
     hide_console()
@@ -232,4 +236,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

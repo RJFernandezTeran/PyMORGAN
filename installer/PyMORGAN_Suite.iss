@@ -2,7 +2,7 @@
 ; Generates a professional, self-contained Windows Installer (.exe)
 
 #define MyAppName "PyMORGAN Suite"
-#define MyAppVersion "1.261011.2"
+#define MyAppVersion "1.261018.1"
 #define MyAppPublisher "Dr. Ricardo J. Fernández-Terán"
 #define MyAppURL "https://github.com/RJFernandezTeran/PyMORGAN"
 #define MyAppExeName "PyMORGAN_Suite.exe"
@@ -53,10 +53,10 @@ Source: "..\src\pymorgan\gui\icons\pymorgan.ico"; DestDir: "{app}\icons"; Flags:
 Source: "..\src\pymorgan\gui\icons\pyrate_ta.ico"; DestDir: "{app}\icons"; Flags: ignoreversion
 Source: "..\src\pymorgan\gui\icons\pirate-hat.png"; DestDir: "{app}\icons"; Flags: ignoreversion
 Source: "..\src\pymorgan\gui\icons\pirate_ship.png"; DestDir: "{app}\icons"; Flags: ignoreversion
-Source: "..\src\pymorgan\assets\fonts\texgyreheros-regular.otf"; DestDir: "{autofonts}"; FontInstall: "TeX Gyre Heros Regular (OpenType)"; Flags: onlyifdestfileexists uninsneveruninstall
-Source: "..\src\pymorgan\assets\fonts\texgyreheros-bold.otf"; DestDir: "{autofonts}"; FontInstall: "TeX Gyre Heros Bold (OpenType)"; Flags: onlyifdestfileexists uninsneveruninstall
-Source: "..\src\pymorgan\assets\fonts\texgyreheros-italic.otf"; DestDir: "{autofonts}"; FontInstall: "TeX Gyre Heros Italic (OpenType)"; Flags: onlyifdestfileexists uninsneveruninstall
-Source: "..\src\pymorgan\assets\fonts\texgyreheros-bolditalic.otf"; DestDir: "{autofonts}"; FontInstall: "TeX Gyre Heros Bold Italic (OpenType)"; Flags: onlyifdestfileexists uninsneveruninstall
+Source: "..\src\pymorgan\assets\fonts\texgyreheros-regular.otf"; DestDir: "{autofonts}"; FontInstall: "TeX Gyre Heros Regular (OpenType)"; Flags: onlyifdoesntexist uninsneveruninstall
+Source: "..\src\pymorgan\assets\fonts\texgyreheros-bold.otf"; DestDir: "{autofonts}"; FontInstall: "TeX Gyre Heros Bold (OpenType)"; Flags: onlyifdoesntexist uninsneveruninstall
+Source: "..\src\pymorgan\assets\fonts\texgyreheros-italic.otf"; DestDir: "{autofonts}"; FontInstall: "TeX Gyre Heros Italic (OpenType)"; Flags: onlyifdoesntexist uninsneveruninstall
+Source: "..\src\pymorgan\assets\fonts\texgyreheros-bolditalic.otf"; DestDir: "{autofonts}"; FontInstall: "TeX Gyre Heros Bold Italic (OpenType)"; Flags: onlyifdoesntexist uninsneveruninstall
 
 [Icons]
 ; Start Menu Shortcuts with program-specific logos
@@ -84,4 +84,6 @@ Root: HKA; Subkey: "Software\Classes\PyMORGAN.p2dat\DefaultIcon"; ValueType: str
 Root: HKA; Subkey: "Software\Classes\PyMORGAN.p2dat\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\PyMORGAN.exe"" ""%1"""; Tasks: assoc_p2dat
 
 [Run]
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--install-fonts"; StatusMsg: "Configuring TeX Gyre Heros fonts in Matplotlib (Pass 1/2)..."; Flags: runhidden waituntilterminated
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--install-fonts"; StatusMsg: "Verifying TeX Gyre Heros font cache (Pass 2/2)..."; Flags: runhidden waituntilterminated
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent

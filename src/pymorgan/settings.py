@@ -1267,15 +1267,20 @@ def settings_path() -> Path:
     """Locate or determine the standard path for ``settings.toml``.
 
     Checks the current working directory first. If not found, checks the
-    project root (if running from a repository source tree). Defaults to the
-    repository root (if in a repo) or ``./settings.toml``.
+    project root (if running from a repository source tree). When running as a
+    packaged standalone executable without a local ``settings.toml``, uses
+    ``~/.config/pymorgan/settings.toml``.
     """
+    import sys
+
     cfg = Path("settings.toml")
     if cfg.is_file():
         return cfg.resolve()
     repo_root = Path(__file__).resolve().parent.parent.parent
     if (repo_root / "pyproject.toml").is_file() or (repo_root / ".git").is_dir():
         return (repo_root / "settings.toml").resolve()
+    if getattr(sys, "frozen", False):
+        return (Path.home() / ".config" / "pymorgan" / "settings.toml").resolve()
     return cfg.resolve()
 
 
@@ -1295,8 +1300,14 @@ def ensure_settings_file(path: str | Path | None = None) -> Path:
     if not target.exists():
         import warnings
 
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(default_text, encoding="utf-8")
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(default_text, encoding="utf-8")
+        except OSError:
+            target = (Path.home() / ".config" / "pymorgan" / "settings.toml").resolve()
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if not target.exists():
+                target.write_text(default_text, encoding="utf-8")
         warnings.warn(
             f"Created default settings file at '{target}'. "
             "You can run `pymorgan-settings` to configure your preferences interactively, "

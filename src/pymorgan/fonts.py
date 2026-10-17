@@ -18,12 +18,28 @@ Or from Python::
 
 from __future__ import annotations
 
+import os
 import shutil
+import sys
 from functools import cache
 from pathlib import Path
 
 # Preferred fonts, in priority order.
 PREFERRED_FONTS = ["TeX Gyre Heros", "Helvetica"]
+
+
+def ensure_persistent_mplconfigdir() -> None:
+    """Override PyInstaller's ephemeral MPLCONFIGDIR so Matplotlib's font cache persists."""
+    if getattr(sys, "frozen", False):
+        try:
+            mpl_cfg = Path.home() / ".config" / "pymorgan" / "mplconfig"
+            mpl_cfg.mkdir(parents=True, exist_ok=True)
+            os.environ["MPLCONFIGDIR"] = str(mpl_cfg)
+        except Exception:
+            pass
+
+
+ensure_persistent_mplconfigdir()
 
 
 @cache
@@ -103,10 +119,10 @@ def find_heros_fonts() -> list[Path]:
     return _find_rinoh_heros()
 
 
-def install_fonts(quiet: bool = False) -> None:
-    """Copy TeX Gyre Heros fonts into Matplotlib's font directory and clear the cache."""
+def install_fonts(quiet: bool = False, force_rebuild: bool = True) -> None:
+    """Copy TeX Gyre Heros fonts into Matplotlib's font directory and update the cache."""
+    ensure_persistent_mplconfigdir()
     import matplotlib
-    import matplotlib.font_manager as fm
 
     fonts_bundled = _find_bundled_heros()
     if fonts_bundled:
@@ -140,6 +156,10 @@ def install_fonts(quiet: bool = False) -> None:
 
         for src in fonts:
             dst = mpl_font_dir / src.name
+            if dst.exists() and (
+                dst.resolve() == src.resolve() or dst.stat().st_size == src.stat().st_size
+            ):
+                continue
             shutil.copy2(src, dst)
             if not quiet:
                 print(f"  Copied: {src.name}")
@@ -147,33 +167,44 @@ def install_fonts(quiet: bool = False) -> None:
         if not quiet:
             print(f"Could not copy font files to {mpl_font_dir}: {exc}")
 
-    # Register directly with Matplotlib's font manager in this session
-    for font_file in fonts:
+    cache_dir = Path(matplotlib.get_cachedir())
+    if force_rebuild:
         try:
-            fm.fontManager.addfont(str(font_file))
+            for f in cache_dir.glob("fontlist-*.json"):
+                try:
+                    f.unlink()
+                    if not quiet:
+                        print(f"  Deleted cache: {f.name}")
+                except OSError:
+                    pass
         except Exception:
             pass
 
-    # Clear font cache so Matplotlib picks up the new files.
-    try:
-        cache_dir = Path(matplotlib.get_cachedir())
-        for f in cache_dir.glob("fontlist-*.json"):
-            try:
-                f.unlink()
-                if not quiet:
-                    print(f"  Deleted cache: {f.name}")
-            except OSError:
-                pass
-    except Exception:
-        pass
+    import matplotlib.font_manager as fm
 
-    # Rebuild in this session and update module singleton.
+    # Rebuild or reload in this session and update module singleton.
     try:
-        new_fm = fm._load_fontmanager(try_read_cache=False)
+        new_fm = fm._load_fontmanager(try_read_cache=not force_rebuild)
         if new_fm is not None:
             fm.fontManager = new_fm
     except Exception:
         pass
+
+    # Ensure directly registered with Matplotlib's active fontManager and persisted
+    if not any("Heros" in f.name for f in fm.fontManager.ttflist):
+        for font_file in fonts:
+            try:
+                fm.fontManager.addfont(str(font_file))
+            except Exception:
+                pass
+        try:
+            fm_path = Path(
+                matplotlib.get_cachedir(), f"fontlist-v{fm.FontManager.__version__}.json"
+            )
+            fm.json_dump(fm.fontManager, fm_path)
+        except Exception:
+            pass
+
     available_preferred_fonts.cache_clear()
 
     # Record receipt flag in cache dir for fast subsequent checks
@@ -189,6 +220,19 @@ def install_fonts(quiet: bool = False) -> None:
             print(f"\nSuccess - Matplotlib now sees: {found}")
         else:
             print("\nFonts copied but not yet detected. Restart your Python session.")
+
+
+def install_fonts_twice(quiet: bool = False) -> bool:
+    """Run font installation twice back-to-back to ensure Matplotlib font cache is rebuilt and verified."""
+    for attempt, rebuild in ((1, True), (2, False)):
+        if not quiet:
+            print(f"[PyMORGAN] Font installation pass {attempt}/2...")
+        try:
+            install_fonts(quiet=quiet, force_rebuild=rebuild)
+        except Exception as exc:
+            if not quiet:
+                print(f"[PyMORGAN] Pass {attempt}/2 warning: {exc}")
+    return are_fonts_installed()
 
 
 def are_fonts_installed() -> bool:
@@ -231,8 +275,9 @@ def are_fonts_installed() -> bool:
 def ensure_fonts_installed(quiet: bool = True) -> bool:
     """Ensure TeX Gyre Heros fonts are available in Matplotlib.
 
-    If fonts are already verified, does nothing. Otherwise, installs them from
-    the bundled package assets, rinoh dependency, or system TeX installations.
+    If fonts are already verified, does nothing. Otherwise, runs the font
+    installation twice from bundled package assets, rinoh dependency, or
+    system TeX installations to ensure the font cache is completely rebuilt.
 
     Returns True if at least one preferred font is available, False otherwise.
     """
@@ -253,7 +298,7 @@ def ensure_fonts_installed(quiet: bool = True) -> bool:
         return True
 
     try:
-        install_fonts(quiet=quiet)
+        install_fonts_twice(quiet=quiet)
     except Exception:
         pass
 
@@ -261,7 +306,7 @@ def ensure_fonts_installed(quiet: bool = True) -> bool:
 
 
 def main() -> None:
-    install_fonts(quiet=False)
+    install_fonts_twice(quiet=False)
 
 
 if __name__ == "__main__":
