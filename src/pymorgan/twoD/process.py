@@ -196,6 +196,40 @@ def process(
     """
     from scipy.signal import medfilt
 
+    if getattr(dataset, "is_frequency_domain", False) or getattr(dataset, "datatype", None) == "FreqDomain":
+        proc_2d = (
+            np.asarray(dataset.raw_signal, dtype=float).copy()
+            if dataset.raw_signal is not None
+            else np.asarray(dataset.Z_R, dtype=float).copy()
+        )
+        if dataset.raw_t1delays is not None and len(dataset.raw_t1delays) == proc_2d.shape[0]:
+            dataset.pump = np.asarray(dataset.raw_t1delays, dtype=float).copy()
+
+        Npump, Nprobe, Ndelays = proc_2d.shape
+        if autocalibrate_probe:
+            if cal_probe_vector is not None and len(cal_probe_vector) == Nprobe:
+                dataset.probe = np.asarray(cal_probe_vector, dtype=float)
+                dataset.cal_level = "autocalibrated"
+            elif len(dataset.pump) > 2:
+                max_indices = np.argmax(np.abs(proc_2d[:, :, 0]), axis=0)
+                scattering_maxima = dataset.pump[max_indices]
+                pixels = np.arange(1, Nprobe + 1)
+                cal_coeff = robust_polyfit(pixels, scattering_maxima, 2)
+                dataset.probe = np.polyval(cal_coeff, pixels)
+                dataset.cal_level = "autocalibrated"
+
+        if bkg_sub and Ndelays > 1:
+            ref = max(0, min(int(bkgIdx), Ndelays - 1))
+            bkg_data = proc_2d[:, :, ref].copy()
+            for m in range(Ndelays):
+                if m != ref:
+                    proc_2d[:, :, m] = proc_2d[:, :, m] - bkg_data
+
+        dataset.Z_R = proc_2d
+        dataset.Z_C = None
+        dataset._is_corrected = False
+        return
+
     if dataset.raw_signal is None or dataset.raw_interferogram is None or dataset.raw_t1delays is None:
         return
 
@@ -248,7 +282,12 @@ def process(
             w0_csv = None
             if dataset.source:
                 folder_path = Path(dataset.source)
-                for path in [folder_path / "w0.csv", folder_path.parent / "w0.csv"]:
+                cands = (
+                    [folder_path / "w0.csv", folder_path.parent / "w0.csv"]
+                    if folder_path.is_dir()
+                    else [folder_path.parent / "w0.csv"]
+                )
+                for path in cands:
                     if path.exists():
                         try:
                             vals = np.loadtxt(path)
@@ -263,8 +302,10 @@ def process(
             if w0_csv is not None:
                 w0_val, dt1_val = w0_csv
             else:
-                w0_val = 0.0
-                dt1_val = np.nanmean(np.abs(np.diff(raw_t1delays))) if len(raw_t1delays) > 1 else 1.0
+                w0_val = float(getattr(dataset, "w0_cm1", 0.0) or 0.0)
+                dt1_val = float(getattr(dataset, "dt1_fs", 0.0) or 0.0)
+                if dt1_val <= 0.0:
+                    dt1_val = float(np.nanmean(np.abs(np.diff(raw_t1delays)))) if len(raw_t1delays) > 1 else 1.0
 
             w0 = w0_val if w0 is None else w0
             dt1 = dt1_val if dt1 is None else dt1

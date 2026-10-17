@@ -121,68 +121,15 @@ class TwoDTabMixin:
                     sub_chk.setChecked(False)
                     sub_chk.blockSignals(False)
 
-            if self.twoD_dataset is not None and self.twoD_dataset.datatype in (
-                "shaper",
-                "interferometer",
+            if self.twoD_dataset is not None and (
+                self.twoD_dataset.datatype in ("shaper", "interferometer", "FreqDomain")
+                or getattr(self.twoD_dataset, "is_frequency_domain", False)
             ):
-                # Get apodization method
-                apod_cbx = getattr(self, "twoD_apodisation_cbx", None)
-                apodise_method = apod_cbx.currentText() if apod_cbx is not None else "0"
-
-                # Get zero-padding parameters
-                pad_chk = getattr(self, "twoD_zeropad_chk", None)
-                zeropad_enable = pad_chk.isChecked() if pad_chk is not None else True
-                pad_factor = getattr(self, "twoD_zeropad_factor", None)
-                zeropad_factor = pad_factor.value() if pad_factor is not None else 1
-                pad_next2k = getattr(self, "twoD_zeropad_next2k_chk", None)
-                zeropad_next2k = pad_next2k.isChecked() if pad_next2k is not None else False
-
-                # Get phase parameters
-                phase_cbx = getattr(self, "twoD_phase_fit_cbx", None)
-                phase_method = phase_cbx.currentText() if phase_cbx is not None else "No fit"
-                phase_range = getattr(self, "twoD_phase_fit_range", None)
-                phase_points = phase_range.value() if phase_range is not None else 10
-
-                # Get pump correction
-                pump_corr = getattr(self, "twoD_pump_corr_chk", None)
-                pumpcorrection = pump_corr.isChecked() if pump_corr is not None else False
-
-                # Get background scattering subtraction
-                sub_chk = getattr(self, "twoD_sub_scat_chk", None)
-                sub_delay = getattr(self, "twoD_sub_scat_delay", None)
-                bkg_sub = sub_chk.isChecked() if sub_chk is not None else False
-                bkgIdx = (sub_delay.value() - 1) if (sub_delay is not None and bkg_sub) else 0
-                if bkgIdx < 0:
-                    bkgIdx = 0
-
-                self._twoD_raw_probe = self.twoD_dataset.probe.copy() if hasattr(self.twoD_dataset, "probe") and self.twoD_dataset.probe is not None else None
-                self._twoD_raw_cal_level = getattr(self.twoD_dataset, "cal_level", None)
-
-                # Get probe autocalibration
-                auto_cal = getattr(self, "twoD_auto_cal_chk", None)
-                autocalibrate_probe = auto_cal.isChecked() if auto_cal is not None else False
-                cal_probe_vec = self._get_cal_tab_probe_curve(len(self.twoD_dataset.probe)) if autocalibrate_probe else None
-
-                self.twoD_dataset.process(
-                    apodise_method=apodise_method,
-                    zeropad_enable=zeropad_enable,
-                    zeropad_factor=zeropad_factor,
-                    zeropad_next2k=zeropad_next2k,
-                    phase_method=phase_method,
-                    phase_points=phase_points,
-                    pumpcorrection=pumpcorrection,
-                    bkg_sub=False,
-                    bkgIdx=bkgIdx,
-                    autocalibrate_probe=autocalibrate_probe,
-                    cal_probe_vector=cal_probe_vec,
-                    progress_tracker=progress,
-                )
-                if autocalibrate_probe and cal_probe_vec is not None:
-                    self.twoD_dataset.probe = cal_probe_vec.copy()
-                    self.twoD_dataset.cal_level = "autocalibrated"
+                self._run_twoD_dataset_process(progress_tracker=progress)
         except Exception as exc:
             QMessageBox.critical(self, "Load failed", str(exc))
             self.twoD_dataset = None
+            self._update_twoD_state_selector()
             self._update_spectral_diffusion_controls_state()
             self._set_twoD_dataset_widgets_visible(False)
             self._update_twoD_sample_info()
@@ -206,8 +153,15 @@ class TwoDTabMixin:
         msg = f"Loaded 2D ({dt_type}): {name} — Probe calibration: {cal_str}"
         self.statusBar().showMessage(msg)
 
+        is_freq_domain = bool(
+            getattr(self.twoD_dataset, "is_frequency_domain", False)
+            or getattr(self.twoD_dataset, "datatype", None) == "FreqDomain"
+        )
+        has_time_domain = dt not in ("P2DAT", "RAL_Proc") and not is_freq_domain
+
+        self._update_twoD_state_selector()
         self._update_twoD_delay_list(prev_delay, prev_idx)
-        self._set_twoD_phasing_tab_visible(dt not in ("P2DAT", "RAL_Proc"))
+        self._set_twoD_phasing_tab_visible(has_time_domain)
         self._update_spectral_diffusion_controls_state()
 
         if self.twoD_plot_controls is not None:
@@ -227,9 +181,8 @@ class TwoDTabMixin:
 
         # Configure TD/PH/CAL buttons and spinner range
         if hasattr(self, "twoD_other_btn_TD"):
-            has_shaper = dt not in ("P2DAT", "RAL_Proc")
-            self.twoD_other_btn_TD.setEnabled(has_shaper)
-            self.twoD_other_btn_PH.setEnabled(has_shaper)
+            self.twoD_other_btn_TD.setEnabled(has_time_domain)
+            self.twoD_other_btn_PH.setEnabled(has_time_domain)
 
             n_pixels = self.twoD_dataset.Z_R.shape[1]
             self.twoD_other_pixel_spin.blockSignals(True)
@@ -237,7 +190,7 @@ class TwoDTabMixin:
             self.twoD_other_pixel_spin.setValue(0)
             self.twoD_other_pixel_spin.blockSignals(False)
 
-            if not has_shaper:
+            if not has_time_domain:
                 self.twoD_other_btn_CAL.setChecked(True)
 
         self._twoD_preview_contour()
@@ -248,6 +201,130 @@ class TwoDTabMixin:
             self._twoD_update_other_plot()
 
         self._set_twoD_dataset_widgets_visible(True)
+
+    def _run_twoD_dataset_process(self, progress_tracker=None):
+        """Run self.twoD_dataset.process(...) using the current GUI control values."""
+        if self.twoD_dataset is None:
+            return
+        apod_cbx = getattr(self, "twoD_apodisation_cbx", None)
+        apodise_method = apod_cbx.currentText() if apod_cbx is not None else "0"
+
+        pad_chk = getattr(self, "twoD_zeropad_chk", None)
+        zeropad_enable = pad_chk.isChecked() if pad_chk is not None else True
+        pad_factor = getattr(self, "twoD_zeropad_factor", None)
+        zeropad_factor = pad_factor.value() if pad_factor is not None else 1
+        pad_next2k = getattr(self, "twoD_zeropad_next2k_chk", None)
+        zeropad_next2k = pad_next2k.isChecked() if pad_next2k is not None else False
+
+        phase_cbx = getattr(self, "twoD_phase_fit_cbx", None)
+        phase_method = phase_cbx.currentText() if phase_cbx is not None else "No fit"
+        phase_range = getattr(self, "twoD_phase_fit_range", None)
+        phase_points = phase_range.value() if phase_range is not None else 10
+
+        pump_corr = getattr(self, "twoD_pump_corr_chk", None)
+        pumpcorrection = pump_corr.isChecked() if pump_corr is not None else False
+
+        sub_chk = getattr(self, "twoD_sub_scat_chk", None)
+        sub_delay = getattr(self, "twoD_sub_scat_delay", None)
+        bkg_sub = sub_chk.isChecked() if sub_chk is not None else False
+        bkgIdx = (sub_delay.value() - 1) if (sub_delay is not None and bkg_sub) else 0
+        if bkgIdx < 0:
+            bkgIdx = 0
+
+        self._twoD_raw_probe = (
+            self.twoD_dataset.probe.copy()
+            if hasattr(self.twoD_dataset, "probe") and self.twoD_dataset.probe is not None
+            else None
+        )
+        self._twoD_raw_cal_level = getattr(self.twoD_dataset, "cal_level", None)
+
+        auto_cal = getattr(self, "twoD_auto_cal_chk", None)
+        autocalibrate_probe = auto_cal.isChecked() if auto_cal is not None else False
+        cal_probe_vec = (
+            self._get_cal_tab_probe_curve(len(self.twoD_dataset.probe))
+            if autocalibrate_probe
+            else None
+        )
+
+        self.twoD_dataset.process(
+            apodise_method=apodise_method,
+            zeropad_enable=zeropad_enable,
+            zeropad_factor=zeropad_factor,
+            zeropad_next2k=zeropad_next2k,
+            phase_method=phase_method,
+            phase_points=phase_points,
+            pumpcorrection=pumpcorrection,
+            bkg_sub=False,
+            bkgIdx=bkgIdx,
+            autocalibrate_probe=autocalibrate_probe,
+            cal_probe_vector=cal_probe_vec,
+            progress_tracker=progress_tracker,
+        )
+        if autocalibrate_probe and cal_probe_vec is not None:
+            self.twoD_dataset.probe = cal_probe_vec.copy()
+            self.twoD_dataset.cal_level = "autocalibrated"
+
+    def _update_twoD_state_selector(self):
+        """Show and populate the polarization/slow-modulation state selector if multiple states exist."""
+        from PyQt6.QtWidgets import QComboBox, QLabel, QWidget
+
+        state_names = (
+            getattr(self.twoD_dataset, "state_names", None)
+            if self.twoD_dataset is not None
+            else None
+        )
+        has_states = bool(state_names and len(state_names) >= 2)
+
+        row_widget = getattr(self, "_twoD_state_row_widget", None)
+        if row_widget is None and has_states:
+            parent_tab = getattr(self, "twoD_processplot_tab", None)
+            if parent_tab is not None and parent_tab.layout() is not None:
+                row_widget = QWidget(parent_tab)
+                row_layout = QHBoxLayout(row_widget)
+                row_layout.setContentsMargins(0, 0, 0, 4)
+                lbl = QLabel("Polarization State:", row_widget)
+                cbx = QComboBox(row_widget)
+                cbx.currentTextChanged.connect(self._on_twoD_state_changed)
+                row_layout.addWidget(lbl)
+                row_layout.addWidget(cbx, 1)
+                parent_tab.layout().insertWidget(0, row_widget)
+                self._twoD_state_row_widget = row_widget
+                self._twoD_state_cbx = cbx
+
+        if row_widget is not None:
+            cbx = getattr(self, "_twoD_state_cbx", None)
+            if has_states and cbx is not None:
+                cbx.blockSignals(True)
+                cbx.clear()
+                cbx.addItems(state_names)
+                active_st = getattr(self.twoD_dataset, "active_state", None)
+                if active_st and active_st in state_names:
+                    cbx.setCurrentText(active_st)
+                cbx.blockSignals(False)
+                row_widget.setVisible(True)
+            else:
+                row_widget.setVisible(False)
+
+    def _on_twoD_state_changed(self, state_name: str):
+        """Switch active polarization/slow-modulation state on the 2D dataset and re-render."""
+        if not state_name or self.twoD_dataset is None:
+            return
+        if not self.twoD_dataset.set_active_state(state_name):
+            return
+        if (
+            self.twoD_dataset.datatype in ("shaper", "interferometer", "FreqDomain")
+            or getattr(self.twoD_dataset, "is_frequency_domain", False)
+        ):
+            self._run_twoD_dataset_process()
+        if self.twoD_plot_controls is not None:
+            lst_delays = getattr(self, "twoD_t2delay_lst", None)
+            active_idx = lst_delays.currentIndex().row() if lst_delays is not None else 0
+            if active_idx < 0 or active_idx >= len(self.twoD_dataset.delays):
+                active_idx = max(0, len(self.twoD_dataset.delays) - 1)
+            self.twoD_plot_controls.set_dataset(self.twoD_dataset, active_idx)
+        self._twoD_preview_contour()
+        if hasattr(self, "_twoD_update_other_plot"):
+            self._twoD_update_other_plot()
 
     def _update_twoD_delay_list(self, prev_delay: float | None = None, prev_idx: int | None = None):
         """Populate the delays list and select the one closest to ``prev_delay`` (or the last delay if index exceeds new dataset delays)."""

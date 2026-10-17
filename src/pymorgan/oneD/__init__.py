@@ -31,6 +31,7 @@ from .chirp import (
 from .dataset import Dataset1D, load_1D
 from .load import (
     available_loaders,
+    classify_pymess_h5,
     export_pdat,
     get_loader,
     load_1D_hdf5,
@@ -55,6 +56,7 @@ __all__ = [
     "register_loader",
     "get_loader",
     "available_loaders",
+    "classify_pymess_h5",
     "load_pymess_anisotropy",
     "calculate_anisotropy",
     "compute_svd",

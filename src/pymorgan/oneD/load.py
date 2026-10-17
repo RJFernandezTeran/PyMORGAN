@@ -1890,55 +1890,227 @@ def _pymess_attr_str(val: Any) -> str:
     return str(val)
 
 
-@register_dataset_file_filter("PyMESS_PP")
-def _pymess_pp_is_file(path: Path | str) -> bool:
-    """Verify if path is a valid PyMESS pump-probe HDF5 file."""
-    p = Path(path)
-    if p.suffix.lower() != ".h5":
-        return False
-    if not p.is_file():
-        return False
+def classify_pymess_h5(filepath: str | Path) -> str:
+    """Classify a PyMESS .h5 file into one of:
+      - 'pump_probe': Standard 1D Pump-Probe (delay stage scan)
+      - 'shaper_t2_scan': 1D Pump-Probe recorded in the 2D tab via 1-pulse shaper delay scan
+      - '2d_time_domain': True 2D Time-Domain spectrum (2-pulse shaper t1 scan)
+      - '2d_freq_domain': True 2D Frequency-Domain spectrum (shaper frequency scan)
+      - 'other': Calibration, magic angle, find_t0, aborted empty file, or non-PyMESS HDF5
+    """
+    p = Path(filepath)
+    if p.suffix.lower() != ".h5" or not p.is_file():
+        return "other"
     try:
         if not h5py.is_hdf5(p):
-            return False
+            return "other"
         with h5py.File(p, "r") as f:
-            # 1. Authoritative explicit attribute check
-            if "metadata" in f and "measurement_type" in f["metadata"].attrs:
-                m_type = _pymess_attr_str(f["metadata"].attrs["measurement_type"])
-                return m_type == "pump_probe"
-            # 2. Structural heuristics fallback
-            if "data/delta_A" in f and "data/delays_fs" in f:
+            meta = f["metadata"].attrs if "metadata" in f else {}
+            mtype = _pymess_attr_str(meta.get("measurement_type", "")).strip().lower()
+
+            # 1. Standard 1D Pump-Probe tab
+            if mtype == "pump_probe":
+                return "pump_probe"
+            if not mtype and "data/delta_A" in f and "data/delays_fs" in f:
                 if (
                     "2D_Spectra" not in f
                     and "data/omega1_axis" not in f
                     and "data/angles_deg" not in f
                     and "data/interferogram" not in f
                 ):
-                    return True
-        return False
+                    return "pump_probe"
+
+            # 2. 2D Spectra tab (can be a 1-pulse shaper t2 scan OR a true 2D spectrum)
+            if mtype == "2d_spectra" or "2D_Spectra" in f:
+                # Verify that the file contains non-empty measurement data
+                has_valid_data = False
+                if "data/interferograms_raw" in f:
+                    ds_iraw = f["data/interferograms_raw"]
+                    if ds_iraw.ndim >= 2 and ds_iraw.size > 0:
+                        has_valid_data = True
+                if not has_valid_data and "scans" in f:
+                    for k in f["scans"].keys():
+                        grp = f["scans"][k]
+                        if isinstance(grp, h5py.Group) and (
+                            "interferograms_raw" in grp or "interferogram" in grp
+                        ):
+                            has_valid_data = True
+                            break
+                if not has_valid_data and "data/surface_absorptive" in f:
+                    surf = np.asarray(f["data/surface_absorptive"])
+                    if surf.ndim >= 2 and surf.size > 0 and not np.all(np.isnan(surf)):
+                        if "data/omega1_axis" in f and f["data/omega1_axis"].size > 0:
+                            has_valid_data = True
+                if not has_valid_data:
+                    return "other"
+
+                domain_mode = _pymess_attr_str(meta.get("domain_mode", "")).strip().lower()
+                fast_mod = _pymess_attr_str(meta.get("fast_modulation", "")).strip().lower()
+
+                shaper_attrs = {}
+                if "metadata/shaper" in f:
+                    shaper_attrs = f["metadata/shaper"].attrs
+                elif "2D_Spectra" in f:
+                    for sk in sorted(f["2D_Spectra"].keys()):
+                        sgrp = f["2D_Spectra"][sk]
+                        if isinstance(sgrp, h5py.Group) and "shaper" in sgrp:
+                            shaper_attrs = sgrp["shaper"].attrs
+                            break
+
+                shaper_mode = _pymess_attr_str(shaper_attrs.get("mode", "")).strip().lower()
+                try:
+                    shaper_form = int(shaper_attrs.get("form", -1))
+                except (ValueError, TypeError):
+                    shaper_form = -1
+
+                # 2a. Explicit Frequency-Domain 2D
+                if domain_mode == "frequency_domain" or shaper_mode.startswith("freq"):
+                    return "2d_freq_domain"
+
+                # Fallback for stopped Frequency-Domain 2D where metadata/shaper was not written:
+                # in FD mode, t1_delays_fs holds the scanned pump frequencies == omega1_axis
+                if "data/t1_delays_fs" in f and "data/omega1_axis" in f:
+                    t1_arr = np.asarray(f["data/t1_delays_fs"]).squeeze()
+                    w1_arr = np.asarray(f["data/omega1_axis"]).squeeze()
+                    if (
+                        t1_arr.ndim == 1
+                        and w1_arr.ndim == 1
+                        and t1_arr.size > 1
+                        and t1_arr.shape == w1_arr.shape
+                        and not np.all(np.isnan(w1_arr))
+                        and np.allclose(t1_arr, w1_arr, equal_nan=True)
+                    ):
+                        return "2d_freq_domain"
+
+                # 2b. Explicit Time-Domain shaper mode
+                if shaper_mode == "time":
+                    if shaper_form == 0:
+                        return "shaper_t2_scan"
+                    if shaper_form == 1:
+                        return "2d_time_domain"
+
+                # 2c. Fallbacks when metadata/shaper is absent (e.g. scan stopped early)
+                if "data/omega1_axis" in f:
+                    w1_arr = np.asarray(f["data/omega1_axis"]).squeeze()
+                    if w1_arr.ndim == 1 and w1_arr.size > 1 and not np.all(np.isnan(w1_arr)):
+                        # A non-zero rotating frame (e.g. 1800 cm-1) indicates a 2-pulse TD 2D scan
+                        if float(w1_arr[0]) > 100.0:
+                            return "2d_time_domain"
+
+                stem_low = p.stem.lower()
+                if "freqdomain" in stem_low or "freq_domain" in stem_low:
+                    return "2d_freq_domain"
+                if "timedomain" in stem_low or "time_domain" in stem_low or "td_2d" in stem_low:
+                    return "2d_time_domain"
+                if "t2scan" in stem_low or "chirp" in stem_low:
+                    return "shaper_t2_scan"
+
+                if ("pp" in fast_mod or "scatter" in fast_mod) and shaper_form != 1:
+                    return "shaper_t2_scan"
+                if "2d" in fast_mod:
+                    return "2d_time_domain"
+
+            return "other"
     except Exception:
-        return False
+        return "other"
+
+
+def _resolve_pymess_omega3_axis(
+    f: h5py.File, path: Path, n_pix: int
+) -> tuple[np.ndarray, str]:
+    """Resolve the probe spectral axis (omega3 / wavelengths) for a PyMESS HDF5 file.
+
+    Returns ``(probe_axis, source_kind)`` where ``source_kind`` is one of
+    ``'dataset'``, ``'sibling'``, ``'csv'``, or ``'pixel'``.
+    """
+    for ds_key in ("data/omega3_axis", "data/wavelengths", "2D_Spectra/scan_001/omega3_axis_cm1"):
+        if ds_key in f:
+            arr = np.asarray(f[ds_key], dtype=np.float64).squeeze()
+            if arr.ndim == 1 and arr.size == n_pix and not np.all(np.isnan(arr)):
+                return arr, "dataset"
+
+    # Fallback 1: check sibling .h5 files in the same folder (useful when a scan was stopped early
+    # before PyMESS wrote omega3_axis)
+    if path.parent.is_dir():
+        try:
+            for sib in sorted(path.parent.glob("*.h5")):
+                if sib == path or not sib.is_file():
+                    continue
+                try:
+                    with h5py.File(sib, "r") as sf:
+                        for ds_key in ("data/omega3_axis", "data/wavelengths"):
+                            if ds_key in sf:
+                                arr = np.asarray(sf[ds_key], dtype=np.float64).squeeze()
+                                if arr.ndim == 1 and arr.size == n_pix and not np.all(np.isnan(arr)):
+                                    return arr, "sibling"
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+    # Fallback 2: check CalibratedProbe.csv in current, parent, or Cal+Chirp directory
+    if path.parent.is_dir():
+        csv_candidates = [
+            path.parent / "CalibratedProbe.csv",
+            path.parent.parent / "CalibratedProbe.csv",
+            path.parent.parent / "Cal+Chirp" / "CalibratedProbe.csv",
+        ]
+        for cand in csv_candidates:
+            if cand.is_file():
+                try:
+                    arr = np.loadtxt(cand, delimiter=",").ravel().astype(np.float64)
+                    if arr.size == n_pix and not np.all(np.isnan(arr)):
+                        return arr, "csv"
+                except Exception:
+                    continue
+
+    return np.arange(1, n_pix + 1, dtype=np.float64), "pixel"
+
+
+@register_dataset_file_filter("PyMESS_PP")
+def _pymess_pp_is_file(path: Path | str) -> bool:
+    """Verify if path is a valid PyMESS 1D pump-probe or shaper t2-scan HDF5 file."""
+    return classify_pymess_h5(path) in ("pump_probe", "shaper_t2_scan")
 
 
 @register_dataset_describer("PyMESS_PP")
 def _pymess_pp_describe(path: Path) -> dict:
-    """Selection metadata for PyMESS pump-probe files (slow modulation states / anisotropy)."""
+    """Selection metadata for PyMESS pump-probe and shaper t2-scan files."""
     p = Path(path)
     if not p.is_file() or p.suffix.lower() != ".h5":
         return {"n_spectra": 1, "n_slowmod": 1}
     try:
+        subtype = classify_pymess_h5(p)
         with h5py.File(p, "r") as f:
             meta = {str(k): _pymess_attr_str(v) for k, v in f.get("metadata", {}).attrs.items()}
             is_slow_mod = str(meta.get("slow_modulation_enabled", "False")).lower() in ("true", "1")
             k_slow = int(meta.get("slow_modulation_num_states", 1)) if is_slow_mod else 1
             raw_state_names = meta.get("slow_modulation_state_names", "")
             state_names = (
-                [s.strip() for s in str(raw_state_names).split(",")] if raw_state_names else []
+                [s.strip() for s in str(raw_state_names).split(",") if s.strip()]
+                if raw_state_names
+                else []
             )
-            if "data/slow_modulation/delta_A_parallel" in f and "data/slow_modulation/delta_A_perpendicular" in f:
+            if (
+                "data/slow_modulation/delta_A_parallel" in f
+                and "data/slow_modulation/delta_A_perpendicular" in f
+            ):
                 k_slow = max(k_slow, 2)
                 if not state_names:
                     state_names = ["Parallel", "Perpendicular"]
+
+            for grp_name in ("scans", "data"):
+                if grp_name in f and isinstance(f[grp_name], h5py.Group):
+                    st_keys = sorted(
+                        [k for k in f[grp_name].keys() if k.startswith("state_")]
+                    )
+                    if len(st_keys) >= 2:
+                        k_slow = max(k_slow, len(st_keys))
+                        if not state_names:
+                            state_names = [
+                                _pymess_attr_str(f[grp_name][k].attrs.get("state_name", k))
+                                for k in st_keys
+                            ]
 
             g_val = 1.0
             for g_key in ("g_factor", "G_factor", "gfactor"):
@@ -1954,10 +2126,250 @@ def _pymess_pp_describe(path: Path) -> dict:
                 "n_slowmod": max(1, k_slow),
                 "state_names": state_names,
                 "is_pymess": True,
+                "pymess_subtype": subtype,
                 "g_factor": g_val,
             }
     except Exception:
         return {"n_spectra": 1, "n_slowmod": 1}
+
+
+def _read_pymess_shaper_t2_scan(
+    f: h5py.File,
+    path: Path,
+    *,
+    load_single_scans: bool = True,
+) -> LoaderResult:
+    """Read a PyMESS 1-pulse shaper t2-delay scan recorded in the 2D tab as a 1D dataset."""
+    if "data/t1_delays_fs" not in f:
+        raise ValueError(
+            f"File {path.name} is missing /data/t1_delays_fs for shaper t2 scan."
+        )
+
+    raw_delays = np.asarray(f["data/t1_delays_fs"][:], dtype=np.float64).squeeze()
+    delays = raw_delays / 1000.0
+    unitsT = "ps"
+
+    meta_dict: dict[str, str] = {}
+    if "metadata" in f:
+        for k, v in f["metadata"].attrs.items():
+            meta_dict[str(k)] = _pymess_attr_str(v)
+
+    is_slow_mod = str(meta_dict.get("slow_modulation_enabled", "False")).lower() in ("true", "1")
+    k_slow = int(meta_dict.get("slow_modulation_num_states", 1)) if is_slow_mod else 1
+    raw_state_names = meta_dict.get("slow_modulation_state_names", "")
+    state_names = (
+        [s.strip() for s in str(raw_state_names).split(",") if s.strip()]
+        if raw_state_names
+        else []
+    )
+
+    # Check for explicit state_0, state_1... subgroups in /scans or /data
+    state_groups: list[tuple[str, h5py.Group]] = []
+    for parent_key in ("scans", "data"):
+        if parent_key in f and isinstance(f[parent_key], h5py.Group):
+            st_keys = sorted([k for k in f[parent_key].keys() if k.startswith("state_")])
+            if st_keys:
+                state_groups = [(k, f[parent_key][k]) for k in st_keys if isinstance(f[parent_key][k], h5py.Group)]
+                if state_groups:
+                    break
+
+    if state_groups and len(state_groups) >= 2:
+        is_slow_mod = True
+        k_slow = len(state_groups)
+        if not state_names or len(state_names) != k_slow:
+            state_names = [
+                _pymess_attr_str(grp.attrs.get("state_name", k)) for k, grp in state_groups
+            ]
+        state_avg_list: list[np.ndarray] = []
+        state_scans_list: list[list[np.ndarray]] = []
+        for _, grp in state_groups:
+            s_scans: list[np.ndarray] = []
+            for sk in sorted(grp.keys()):
+                if sk.startswith("scan_") and isinstance(grp[sk], h5py.Group):
+                    for dname in ("interferogram", "interferograms_raw", "delta_A"):
+                        if dname in grp[sk]:
+                            s_scans.append(np.asarray(grp[sk][dname][:], dtype=np.float64))
+                            break
+            if "interferograms_raw" in grp:
+                s_avg = np.asarray(grp["interferograms_raw"][:], dtype=np.float64)
+            elif "interferogram" in grp:
+                s_avg = np.asarray(grp["interferogram"][:], dtype=np.float64)
+            elif "delta_A" in grp:
+                s_avg = np.asarray(grp["delta_A"][:], dtype=np.float64)
+            elif s_scans:
+                s_avg = np.nanmean(np.stack(s_scans, axis=0), axis=0)
+            else:
+                raise ValueError(f"State group in {path.name} contains no interferogram matrix.")
+            state_avg_list.append(s_avg)
+            state_scans_list.append(s_scans if s_scans else [s_avg])
+
+        Zavg_R = np.stack(state_avg_list, axis=2)
+        valid_rows = ~np.all(np.isnan(Zavg_R[:, :, 0]), axis=1)
+        if not np.all(valid_rows):
+            last_valid = np.where(valid_rows)[0]
+            if len(last_valid) > 0:
+                cut_idx = int(last_valid[-1]) + 1
+                Zavg_R = Zavg_R[:cut_idx, :, :]
+                delays = delays[:cut_idx]
+
+        n_repeats = min(len(sc) for sc in state_scans_list)
+        if load_single_scans and n_repeats >= 1:
+            Nscans = n_repeats
+            Zss_R = np.zeros(
+                (Zavg_R.shape[0], Zavg_R.shape[1], k_slow, n_repeats), dtype=np.float64
+            )
+            for s_idx in range(k_slow):
+                for r_idx in range(n_repeats):
+                    Zss_R[:, :, s_idx, r_idx] = state_scans_list[s_idx][r_idx][: len(delays), :]
+            Zstdv = (
+                np.nanstd(Zss_R, axis=3, ddof=1)
+                if n_repeats > 1
+                else np.zeros_like(Zavg_R)
+            )
+        else:
+            Nscans = 1
+            Zss_R = Zavg_R[:, :, :, np.newaxis]
+            Zstdv = np.zeros_like(Zavg_R)
+    else:
+        # Standard single-state shaper t2 scan
+        if "data/interferograms_raw" in f:
+            z_2d = np.asarray(f["data/interferograms_raw"][:], dtype=np.float64)
+        elif "2D_Spectra/scan_001/interferograms_raw" in f:
+            z_2d = np.asarray(
+                f["2D_Spectra/scan_001/interferograms_raw"][:], dtype=np.float64
+            )
+        else:
+            raise ValueError(
+                f"File {path.name} is missing /data/interferograms_raw for shaper t2 scan."
+            )
+
+        # Collect individual sweeps if available
+        scan_list: list[np.ndarray] = []
+        if load_single_scans:
+            if "scans" in f and isinstance(f["scans"], h5py.Group):
+                for sk in sorted(f["scans"].keys()):
+                    if sk.startswith("scan_") and isinstance(f["scans"][sk], h5py.Group):
+                        for dname in ("interferogram", "interferograms_raw", "delta_A"):
+                            if dname in f["scans"][sk]:
+                                arr = np.asarray(f["scans"][sk][dname][:], dtype=np.float64)
+                                if arr.shape == z_2d.shape:
+                                    scan_list.append(arr)
+                                break
+            if not scan_list and "data/signals" in f and isinstance(f["data/signals"], h5py.Group):
+                sig_grp = f["data/signals"]
+                num_keys = sorted(
+                    [k for k in sig_grp.keys() if k.isdigit()], key=lambda x: int(x)
+                )
+                for nk in num_keys:
+                    arr = np.asarray(sig_grp[nk][:], dtype=np.float64)
+                    if arr.shape == z_2d.shape:
+                        scan_list.append(arr)
+
+        valid_rows = ~np.all(np.isnan(z_2d), axis=1)
+        if not np.all(valid_rows):
+            last_valid = np.where(valid_rows)[0]
+            if len(last_valid) > 0:
+                cut_idx = int(last_valid[-1]) + 1
+                z_2d = z_2d[:cut_idx, :]
+                delays = delays[:cut_idx]
+                scan_list = [s[:cut_idx, :] for s in scan_list]
+
+        Zavg_R = z_2d[:, :, np.newaxis]
+        if load_single_scans and len(scan_list) > 0:
+            Nscans = len(scan_list)
+            Zss_R = np.stack(scan_list, axis=-1)[:, :, np.newaxis, :]
+            Zstdv = (
+                np.nanstd(Zss_R, axis=3, ddof=1)
+                if Nscans > 1
+                else np.zeros_like(Zavg_R)
+            )
+        else:
+            Nscans = 1
+            Zss_R = Zavg_R[:, :, :, np.newaxis]
+            Zstdv = np.zeros_like(Zavg_R)
+
+    n_pix = Zavg_R.shape[1]
+    probe, cal_kind = _resolve_pymess_omega3_axis(f, path, n_pix)
+
+    probe_mean = float(np.nanmean(probe)) if probe.size > 0 else 0.0
+    if probe_mean > 1200.0:
+        unitsL = "cm^{-1}"
+        display_L = "cm-1"
+    elif probe_mean > 100.0:
+        unitsL = "nm"
+        display_L = "nm"
+    else:
+        unitsL = "px"
+        display_L = "px"
+
+    Units = hlp.units2dic(unitsL, unitsT, "x1E3")
+    if cal_kind == "dataset" and unitsL != "px":
+        Units["cal_source"] = f"PyMESS spectral calibration ({display_L})"
+    elif cal_kind == "sibling":
+        Units["cal_source"] = f"PyMESS sibling HDF5 calibration ({display_L})"
+    elif cal_kind == "csv":
+        Units["cal_source"] = f"CalibratedProbe.csv ({display_L})"
+    else:
+        Units["cal_source"] = "Uncalibrated pixel indices"
+
+    if is_slow_mod and k_slow > 1:
+        if state_names and len(state_names) == k_slow:
+            Units["detectors"] = state_names
+        else:
+            Units["detectors"] = [f"State_{i}" for i in range(k_slow)]
+
+    Units["pymess_metadata"] = meta_dict
+    Units["pymess_subtype"] = "shaper_t2_scan"
+    for g_key in ("g_factor", "G_factor", "gfactor"):
+        if g_key in meta_dict:
+            try:
+                Units["g_factor"] = float(meta_dict[g_key])
+                break
+            except (ValueError, TypeError):
+                pass
+    if "sample_id" in meta_dict and meta_dict["sample_id"]:
+        Units["sample"] = meta_dict["sample_id"]
+    if "pump_wl_nm" in meta_dict and meta_dict["pump_wl_nm"]:
+        Units["pump_wl"] = meta_dict["pump_wl_nm"]
+
+    if "data/intensity" in f:
+        counts = np.asarray(f["data/intensity"][:], dtype=np.float64)
+        Units["counts"] = counts[: len(delays)]
+    elif "data/integrated_channel" in f:
+        counts = np.asarray(f["data/integrated_channel"][:], dtype=np.float64)
+        Units["counts"] = counts[: len(delays)]
+
+    if "calibration" in f:
+        calib_dict = {}
+        for k in f["calibration"].keys():
+            calib_dict[k] = np.asarray(f["calibration"][k][:], dtype=np.float64)
+        Units["pymess_calibration"] = calib_dict
+
+    info_lines = ["Mode: Shaper t2 Scan (2D tab)"]
+    if "sample_id" in meta_dict and meta_dict["sample_id"]:
+        info_lines.append(f"Sample: {meta_dict['sample_id']}")
+    if "solvent" in meta_dict and meta_dict["solvent"]:
+        info_lines.append(f"Solvent: {meta_dict['solvent']}")
+    if "fast_modulation" in meta_dict and meta_dict["fast_modulation"]:
+        info_lines.append(f"Fast Modulation: {meta_dict['fast_modulation']}")
+    if "pump_polarization" in meta_dict and meta_dict["pump_polarization"]:
+        info_lines.append(f"Pump Polarization: {meta_dict['pump_polarization']}")
+    if "probe_polarization" in meta_dict and meta_dict["probe_polarization"]:
+        info_lines.append(f"Probe Polarization: {meta_dict['probe_polarization']}")
+    if "waveplate_positions" in meta_dict and meta_dict["waveplate_positions"]:
+        info_lines.append(f"Waveplates: {meta_dict['waveplate_positions']}")
+    if is_slow_mod:
+        cadence = meta_dict.get("slow_modulation_cadence", "unknown cadence")
+        info_lines.append(f"Slow Modulation: {k_slow} states ({cadence})")
+    if "comments" in meta_dict and meta_dict["comments"]:
+        info_lines.append(f"Comments: {meta_dict['comments']}")
+    if info_lines:
+        Units["sample_info"] = "\n".join(info_lines)
+
+    if Nscans > 0:
+        Units["scan_ids"] = list(range(Nscans))
+
+    return Zavg_R, delays, probe, Units, Nscans, Zss_R, Zstdv
 
 
 @register_loader("PyMESS_PP")
@@ -1967,10 +2379,11 @@ def read_PyMESS_PP(
     load_single_scans: bool = True,
     **kwargs,
 ) -> LoaderResult:
-    """Read a PyMESS pump-probe (.h5) transient absorption file.
+    """Read a PyMESS pump-probe or shaper t2-scan (.h5) transient absorption file.
 
-    Handles standard single-condition scans as well as multi-state slow modulation
-    (e.g. polarization cycling, anisotropy, TOPAS stepping, mapped to Ndetectors).
+    Handles standard single-condition scans as well as 1-pulse shaper t2 scans
+    recorded in the 2D tab and multi-state slow modulation (e.g. polarization
+    cycling, anisotropy, TOPAS stepping, mapped to Ndetectors).
 
     Parameters
     ----------
@@ -1988,12 +2401,24 @@ def read_PyMESS_PP(
     if not path.is_file():
         raise FileNotFoundError(f"PyMESS HDF5 file not found: {datafilename}")
 
+    subtype = classify_pymess_h5(path)
+
     try:
         f = h5py.File(path, "r", swmr=True)
     except Exception:
         f = h5py.File(path, "r")
 
     with f:
+        if subtype == "shaper_t2_scan" or (
+            "data/t1_delays_fs" in f
+            and "data/delays_fs" not in f
+            and "data/interferograms_raw" in f
+            and subtype not in ("2d_time_domain", "2d_freq_domain")
+        ):
+            return _read_pymess_shaper_t2_scan(
+                f, path, load_single_scans=load_single_scans
+            )
+
         if "data" not in f or "data/delays_fs" not in f:
             # Auto-delegate if this is a PyMORGAN native HDF5 dataset opened via PyMESS loader
             if "delays" in f and "probe" in f:

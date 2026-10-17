@@ -206,7 +206,11 @@ class DatasetBrowserMixin:
             except OSError:
                 files = []
             for f in files:
-                valid = True if twoD else is_dataset_file(dt, f)
+                valid = (
+                    pm.twoD.is_map_dataset_file(dt, f)
+                    if twoD
+                    else is_dataset_file(dt, f)
+                )
                 if not valid:
                     continue
                 entries.append((f.name, f, False, True))

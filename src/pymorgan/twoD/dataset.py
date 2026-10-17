@@ -55,24 +55,30 @@ class Dataset2D:
         raw_t1delays=None,
         cal_level: str | None = None,
         cal_source: str | None = None,
+        is_frequency_domain: bool | None = None,
+        w0_cm1: float | None = None,
+        dt1_fs: float | None = None,
+        state_names: list[str] | None = None,
+        states_data: dict[str, np.ndarray] | None = None,
+        active_state: str | None = None,
     ):
         self.Z_R = np.asarray(Z)
         self.pump = np.asarray(pump)
         self.probe = np.asarray(probe)
         self.delays = np.asarray(delays)
-        self.units = units
+        self.units = units if isinstance(units, dict) else {}
         self.freq_units = freq_units
         self.source = source
         self.data_type = data_type
         self.in_progress = in_progress
         self.cal_level = cal_level
-        self.cal_source = cal_source
+        self.cal_source = cal_source or self.units.get("cal_source")
 
         self.raw_signal = raw_signal
         self.raw_interferogram = raw_interferogram
         self.raw_t1delays = raw_t1delays
 
-        # Determine datatype: 'shaper', 'interferometer', or 'processed'
+        # Determine datatype: 'shaper', 'interferometer', 'FreqDomain', or 'processed'
         if datatype is not None:
             self.datatype = datatype
         else:
@@ -81,9 +87,55 @@ class Dataset2D:
             else:
                 self.datatype = "processed"
 
+        if is_frequency_domain is not None:
+            self.is_frequency_domain = bool(is_frequency_domain)
+        else:
+            self.is_frequency_domain = bool(
+                self.units.get("is_frequency_domain", False)
+                or self.datatype == "FreqDomain"
+            )
+
+        self.w0_cm1 = (
+            float(w0_cm1)
+            if w0_cm1 is not None
+            else float(self.units.get("w0_cm1", 0.0) or 0.0)
+        )
+        self.dt1_fs = (
+            float(dt1_fs)
+            if dt1_fs is not None
+            else float(self.units.get("dt1_fs", 0.0) or 0.0)
+        )
+        self.state_names = (
+            list(state_names)
+            if state_names is not None
+            else list(self.units.get("state_names", []))
+        )
+        self.states_data = (
+            dict(states_data)
+            if states_data is not None
+            else (dict(self.units["states_data"]) if "states_data" in self.units else None)
+        )
+        self.active_state = active_state or self.units.get("active_state")
+
         self.Z_C = None  # populated by background_correct()
         self._is_corrected = False
         self.subtracted_spectrum = None
+
+    def set_active_state(self, state_name: str) -> bool:
+        """Switch the active slow-modulation / polarization state cube if available."""
+        if not self.states_data or state_name not in self.states_data:
+            return False
+        cube = np.asarray(self.states_data[state_name], dtype=float)
+        self.active_state = state_name
+        if self.is_frequency_domain or self.datatype in ("FreqDomain", "processed"):
+            self.Z_R = cube.copy()
+            if self.raw_signal is not None:
+                self.raw_signal = cube.copy()
+        else:
+            self.raw_signal = cube.copy()
+        self.Z_C = None
+        self._is_corrected = False
+        return True
 
     # ----------------------------------------------------------------- #
     #                          Load (construction)                      #
@@ -94,7 +146,10 @@ class Dataset2D:
     ) -> Dataset2D:
         """Load a 2-D dataset from ``path`` using the loader for ``data_type``."""
         loader = get_map_loader(data_type)
-        if data_type == "MESS_2DIR" or getattr(loader, "__name__", None) == "read_MESS_2DIR":
+        if data_type in ("MESS_2DIR", "PyMESS_2D") or getattr(loader, "__name__", None) in (
+            "read_MESS_2DIR",
+            "read_PyMESS_2D",
+        ):
             res = loader(str(path), progress_tracker=progress_tracker)
         else:
             res = loader(str(path))
@@ -143,7 +198,7 @@ class Dataset2D:
             except Exception:
                 pass
 
-        # Check for CalibratedProbe.csv override
+        # Check for CalibratedProbe.csv override (only in data folder for PyMESS_2D unless probe is uncalibrated)
         from pathlib import Path
 
         folder = Path(path)
@@ -166,7 +221,7 @@ class Dataset2D:
                     cal_path = cand_root
 
         cal_level = None
-        cal_source = None
+        cal_source = units.get("cal_source")
         if cal_path is not None:
             try:
                 # Load calibrated probe axis
@@ -192,6 +247,8 @@ class Dataset2D:
                 cal_source = f"Dataset probe axis ({folder.name}_wavenumbers.csv)"
             elif data_type == "P2DAT":
                 cal_source = "Dataset probe axis (P2DAT header)"
+            elif data_type == "PyMESS_2D":
+                cal_source = "PyMESS spectral calibration (cm-1)"
 
         return cls(
             Z,
@@ -479,6 +536,18 @@ class Dataset2D:
             raw_t1delays=_dup(self.raw_t1delays),
             cal_level=getattr(self, "cal_level", None),
             cal_source=getattr(self, "cal_source", None),
+            is_frequency_domain=getattr(self, "is_frequency_domain", False),
+            w0_cm1=getattr(self, "w0_cm1", 0.0),
+            dt1_fs=getattr(self, "dt1_fs", 0.0),
+            state_names=(
+                list(self.state_names) if getattr(self, "state_names", None) else None
+            ),
+            states_data=(
+                {k: _dup(v) for k, v in self.states_data.items()}
+                if getattr(self, "states_data", None)
+                else None
+            ),
+            active_state=getattr(self, "active_state", None),
         )
         new_ds.Z_C = _dup(self.Z_C)
         sub_spec = getattr(self, "subtracted_spectrum", None)

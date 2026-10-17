@@ -671,11 +671,25 @@ def read_MESS_2DIR(path: str, progress_tracker=None) -> tuple[Any, Any, Any, Any
 
 _MAP_DATATYPE_GLOBS: dict[str, str] = {"P2DAT": "*.p2dat"}
 _MAP_DATASET_DETECTORS: dict[str, Callable[[Path], bool]] = {}
+_MAP_DATASET_FILE_FILTERS: dict[str, Callable[[Path], bool]] = {}
 
 
 def register_map_dataset_glob(name: str, pattern: str) -> None:
     """Declare ``name`` as a file-based map format whose datasets match ``pattern``."""
     _MAP_DATATYPE_GLOBS[name] = pattern
+
+
+def register_map_dataset_file_filter(
+    *names: str,
+) -> Callable[[Callable[[Path], bool]], Callable[[Path], bool]]:
+    """Register a ``file -> bool`` predicate filtering files for a file-based map format."""
+
+    def decorator(fn: Callable[[Path], bool]) -> Callable[[Path], bool]:
+        for name in names:
+            _MAP_DATASET_FILE_FILTERS[name] = fn
+        return fn
+
+    return decorator
 
 
 def register_map_dataset_detector(
@@ -694,6 +708,17 @@ def register_map_dataset_detector(
 def map_dataset_glob(name: str) -> str | None:
     """Return the file glob for a file-based map format, or ``None``."""
     return _MAP_DATATYPE_GLOBS.get(name)
+
+
+def is_map_dataset_file(name: str, filepath: str | PathLike) -> bool:
+    """Whether ``filepath`` is a valid file dataset for map format ``name``."""
+    fn = _MAP_DATASET_FILE_FILTERS.get(name)
+    if fn is None:
+        return True
+    try:
+        return bool(fn(Path(filepath)))
+    except OSError:
+        return False
 
 
 def is_map_directory_format(name: str) -> bool:
@@ -720,4 +745,607 @@ def detect_MESS_2DIR(folder: Path) -> bool:
         and (folder / f"{folder.name}_bins.csv").exists()
         and (folder / f"{folder.name}_delays.csv").exists()
     )
+
+
+# --------------------------------------------------------------------------- #
+#                      PyMESS 2D Spectrum HDF5 reader                         #
+# --------------------------------------------------------------------------- #
+register_map_dataset_glob("PyMESS_2D", "*.h5")
+
+
+@register_map_dataset_file_filter("PyMESS_2D")
+def _pymess_2d_is_file(path: Path | str) -> bool:
+    """Verify if ``path`` is a valid PyMESS 2D spectrum (Time-Domain or Frequency-Domain) HDF5 file."""
+    from ..oneD.load import classify_pymess_h5
+
+    return classify_pymess_h5(path) in ("2d_time_domain", "2d_freq_domain")
+
+
+def _extract_pymess_2d_t2_ps(f, path: Path, meta_dict: dict[str, str], n_scans: int) -> np.ndarray:
+    """Extract the waiting-time (t2) axis in picoseconds (ps) for a PyMESS 2D HDF5 file."""
+    import re
+
+    import h5py
+
+    # 1. Explicit data/t2_delays_fs array
+    if "data/t2_delays_fs" in f:
+        arr = np.asarray(f["data/t2_delays_fs"][:], dtype=np.float64).ravel()
+        if arr.size > 0 and not np.all(np.isnan(arr)):
+            return arr / 1000.0
+
+    # 2. Per-scan t2 attributes inside 2D_Spectra or scans
+    for grp_name in ("2D_Spectra", "scans"):
+        if grp_name in f and isinstance(f[grp_name], h5py.Group):
+            scan_keys = sorted([k for k in f[grp_name].keys() if k.startswith("scan_")])
+            if len(scan_keys) > 1:
+                t2_vals = []
+                for sk in scan_keys:
+                    s_attrs = f[grp_name][sk].attrs
+                    val_ps = None
+                    for k_fs in ("t2_delay_fs", "waiting_time_fs", "delay_fs"):
+                        if k_fs in s_attrs:
+                            try:
+                                val_ps = float(s_attrs[k_fs]) / 1000.0
+                                break
+                            except (ValueError, TypeError):
+                                pass
+                    if val_ps is None:
+                        for k_ps in ("t2_delay_ps", "waiting_time_ps", "delay_ps", "stage_ir_pos_ps"):
+                            if k_ps in s_attrs:
+                                try:
+                                    val_ps = float(s_attrs[k_ps])
+                                    break
+                                except (ValueError, TypeError):
+                                    pass
+                    if val_ps is not None:
+                        t2_vals.append(val_ps)
+                if len(t2_vals) == len(scan_keys):
+                    return np.asarray(t2_vals, dtype=np.float64)
+
+    # 3. Single-t2 metadata attributes
+    for k_fs in ("t2_delay_fs", "waiting_time_fs", "t2_fs"):
+        if k_fs in meta_dict:
+            try:
+                return np.full(n_scans, float(meta_dict[k_fs]) / 1000.0, dtype=np.float64)
+            except (ValueError, TypeError):
+                pass
+    for k_ps in ("t2_delay_ps", "waiting_time_ps", "t2_ps", "stage_ir_pos_ps"):
+        if k_ps in meta_dict:
+            try:
+                return np.full(n_scans, float(meta_dict[k_ps]), dtype=np.float64)
+            except (ValueError, TypeError):
+                pass
+
+    # 4. Filename regex (e.g. sample_500fs.h5, sample_-1ps.h5)
+    m = re.search(r"(?:^|[_\-\s])([+-]?\d+(?:\.\d+)?)\s*(fs|ps)(?:$|[_\-\s])", path.stem, re.IGNORECASE)
+    if m:
+        val = float(m.group(1))
+        unit = m.group(2).lower()
+        val_ps = val / 1000.0 if unit == "fs" else val
+        return np.full(n_scans, val_ps, dtype=np.float64)
+
+    # 5. Parse last Stage move from log_notes if available
+    log_notes = meta_dict.get("log_notes", "")
+    if log_notes:
+        matches = re.findall(
+            r"Stage\s+\S+\s+moving\s+to\s+([+-]?\d+(?:\.\d+)?)\s*(ps|fs)",
+            log_notes,
+            re.IGNORECASE,
+        )
+        if matches:
+            val_str, unit = matches[-1]
+            try:
+                val = float(val_str)
+                val_ps = val / 1000.0 if unit.lower() == "fs" else val
+                return np.full(n_scans, val_ps, dtype=np.float64)
+            except ValueError:
+                pass
+
+    if n_scans > 1:
+        return np.arange(n_scans, dtype=np.float64)
+    return np.array([0.0], dtype=np.float64)
+
+
+def _extract_pymess_2d_stack_from_group(
+    grp: h5py.Group, is_freq_domain: bool, n_t1_or_w1_expected: int | None = None, n_pix_expected: int | None = None
+) -> tuple[np.ndarray, np.ndarray | None]:
+    """Extract a 3D stack ``(N_t1_or_w1, N_w3, N_t2)`` and optional 2D interferogram ``(N_t1, N_t2)`` from a group."""
+    import h5py
+
+    # 1. Check explicit 3D cubes first (e.g. data/surface_absorptive_cube, data/interferograms_cube)
+    cube_mat = None
+    if is_freq_domain and "surface_absorptive_cube" in grp:
+        cube_mat = np.asarray(grp["surface_absorptive_cube"][:], dtype=np.float64)
+    if (cube_mat is None or np.all(np.isnan(cube_mat))) and "interferograms_cube" in grp:
+        cube_mat = np.asarray(grp["interferograms_cube"][:], dtype=np.float64)
+    if (cube_mat is None or np.all(np.isnan(cube_mat))) and "surface_absorptive_cube" in grp:
+        cube_mat = np.asarray(grp["surface_absorptive_cube"][:], dtype=np.float64)
+
+    if cube_mat is not None and cube_mat.ndim == 3 and not np.all(np.isnan(cube_mat)):
+        # Determine whether cube_mat is already (N_t1_or_w1, N_w3, N_t2) or (N_t2, N_t1_or_w1, N_w3)
+        if (
+            n_t1_or_w1_expected is not None
+            and n_pix_expected is not None
+            and cube_mat.shape[0] == n_t1_or_w1_expected
+            and cube_mat.shape[1] == n_pix_expected
+        ):
+            cube = cube_mat
+        elif (
+            n_t1_or_w1_expected is not None
+            and n_pix_expected is not None
+            and cube_mat.shape[1] == n_t1_or_w1_expected
+            and cube_mat.shape[2] == n_pix_expected
+        ):
+            cube = np.transpose(cube_mat, (1, 2, 0))
+        else:
+            cube = cube_mat
+
+        interf_2d = None
+        for ikey in ("pump_interferogram_cube", "pump_interferogram", "integrated_channel"):
+            if ikey in grp:
+                p_int = np.asarray(grp[ikey][:], dtype=np.float64)
+                if p_int.ndim == 1:
+                    interf_2d = np.repeat(p_int[:, np.newaxis], cube.shape[2], axis=1)
+                elif p_int.ndim == 2:
+                    interf_2d = (
+                        p_int
+                        if p_int.shape[0] == cube.shape[0]
+                        else p_int.T
+                    )
+                break
+        if interf_2d is not None and np.all(np.isnan(interf_2d)):
+            interf_2d = np.nanmean(cube, axis=1)
+        return cube, interf_2d
+
+    # 2. Check multi-scan subgroups (scan_001, scan_002, ...)
+    scan_keys = sorted(
+        [k for k in grp.keys() if k.startswith("scan_") and isinstance(grp[k], h5py.Group)]
+    )
+    if len(scan_keys) > 1:
+        mats = []
+        interfs = []
+        for sk in scan_keys:
+            sgrp = grp[sk]
+            if is_freq_domain and "surface_absorptive" in sgrp:
+                mat = np.asarray(sgrp["surface_absorptive"][:], dtype=np.float64)
+            elif "interferograms_raw" in sgrp:
+                mat = np.asarray(sgrp["interferograms_raw"][:], dtype=np.float64)
+            elif "surface_absorptive" in sgrp:
+                mat = np.asarray(sgrp["surface_absorptive"][:], dtype=np.float64)
+            else:
+                continue
+            mats.append(mat)
+            p_int_vec = None
+            if "pump_interferogram" in sgrp:
+                p_int_vec = np.asarray(sgrp["pump_interferogram"][:], dtype=np.float64).ravel()
+            elif "integrated_channel" in sgrp:
+                p_int_vec = np.asarray(sgrp["integrated_channel"][:], dtype=np.float64).ravel()
+            if p_int_vec is None or np.all(np.isnan(p_int_vec)):
+                p_int_vec = np.nanmean(mat, axis=1)
+            interfs.append(p_int_vec)
+        if mats:
+            cube = np.stack(mats, axis=-1)
+            interf_2d = np.stack(interfs, axis=-1) if interfs else None
+            return cube, interf_2d
+
+    # 3. Single scan in group or direct datasets
+    target = grp[scan_keys[0]] if len(scan_keys) == 1 else grp
+    mat = None
+    if is_freq_domain and "surface_absorptive" in target:
+        mat = np.asarray(target["surface_absorptive"][:], dtype=np.float64)
+    if (mat is None or np.all(np.isnan(mat))) and "interferograms_raw" in target:
+        mat = np.asarray(target["interferograms_raw"][:], dtype=np.float64)
+    if (mat is None or np.all(np.isnan(mat))) and "surface_absorptive" in target:
+        mat = np.asarray(target["surface_absorptive"][:], dtype=np.float64)
+    if mat is None:
+        raise ValueError("No 2D interferograms_raw or surface_absorptive dataset found in HDF5 group.")
+
+    if mat.ndim == 2:
+        cube = mat[:, :, np.newaxis]
+    elif mat.ndim == 3:
+        if (
+            n_t1_or_w1_expected is not None
+            and n_pix_expected is not None
+            and mat.shape[0] == n_t1_or_w1_expected
+            and mat.shape[1] == n_pix_expected
+        ):
+            cube = mat
+        elif (
+            n_t1_or_w1_expected is not None
+            and n_pix_expected is not None
+            and mat.shape[1] == n_t1_or_w1_expected
+            and mat.shape[2] == n_pix_expected
+        ):
+            cube = np.transpose(mat, (1, 2, 0))
+        else:
+            cube = mat
+    else:
+        raise ValueError(f"Unexpected 2D dataset dimensionality: {mat.shape}")
+
+    interf_2d = None
+    for ikey in ("pump_interferogram_cube", "pump_interferogram", "integrated_channel"):
+        if ikey in target:
+            p_int = np.asarray(target[ikey][:], dtype=np.float64)
+            interf_2d = p_int[:, np.newaxis] if p_int.ndim == 1 else p_int
+            break
+    if interf_2d is not None and np.all(np.isnan(interf_2d)):
+        interf_2d = np.nanmean(cube, axis=1)
+
+    return cube, interf_2d
+
+
+@register_map_loader("PyMESS_2D")
+def read_PyMESS_2D(path: str, progress_tracker=None):
+    """Read a PyMESS 2D spectrum (.h5) file (Time-Domain or Frequency-Domain)."""
+    import h5py
+
+    from ..oneD.load import (
+        _pymess_attr_str,
+        _resolve_pymess_omega3_axis,
+        classify_pymess_h5,
+    )
+
+    p = Path(path)
+    if not p.is_file():
+        raise FileNotFoundError(f"PyMESS 2D HDF5 file not found: {path}")
+
+    subtype = classify_pymess_h5(p)
+    if subtype not in ("2d_time_domain", "2d_freq_domain"):
+        raise ValueError(
+            f"File {p.name} is not a valid PyMESS 2D spectrum (detected type: {subtype})."
+        )
+
+    is_freq_domain = subtype == "2d_freq_domain"
+
+    try:
+        f = h5py.File(p, "r", swmr=True)
+    except Exception:
+        f = h5py.File(p, "r")
+
+    with f:
+        meta_dict: dict[str, str] = {}
+        if "metadata" in f:
+            for k, v in f["metadata"].attrs.items():
+                meta_dict[str(k)] = _pymess_attr_str(v)
+
+        shaper_attrs: dict[str, Any] = {}
+        if "metadata/shaper" in f:
+            shaper_attrs = dict(f["metadata/shaper"].attrs)
+        elif "2D_Spectra" in f:
+            for sk in sorted(f["2D_Spectra"].keys()):
+                sgrp = f["2D_Spectra"][sk]
+                if isinstance(sgrp, h5py.Group) and "shaper" in sgrp:
+                    shaper_attrs = dict(sgrp["shaper"].attrs)
+                    break
+
+        n_t1_or_w1_exp = None
+        if is_freq_domain and "data/omega1_axis" in f:
+            n_t1_or_w1_exp = int(f["data/omega1_axis"].size)
+        elif "data/t1_delays_fs" in f:
+            n_t1_or_w1_exp = int(f["data/t1_delays_fs"].size)
+        n_pix_exp = None
+        if "data/omega3_axis" in f and f["data/omega3_axis"].size > 1:
+            n_pix_exp = int(f["data/omega3_axis"].size)
+
+        # Extract primary 3D cube and optional pump interferogram:
+        # Prioritize explicit 3D cubes in /data if present, then multi-scan groups
+        if "data" in f and isinstance(f["data"], h5py.Group) and (
+            "interferograms_cube" in f["data"] or "surface_absorptive_cube" in f["data"]
+        ):
+            raw_cube, interf_2d = _extract_pymess_2d_stack_from_group(
+                f["data"], is_freq_domain, n_t1_or_w1_exp, n_pix_exp
+            )
+        elif "scans" in f and isinstance(f["scans"], h5py.Group) and any(
+            k.startswith("scan_") for k in f["scans"].keys()
+        ):
+            raw_cube, interf_2d = _extract_pymess_2d_stack_from_group(
+                f["scans"], is_freq_domain, n_t1_or_w1_exp, n_pix_exp
+            )
+        elif "2D_Spectra" in f and isinstance(f["2D_Spectra"], h5py.Group) and any(
+            k.startswith("scan_") for k in f["2D_Spectra"].keys()
+        ):
+            raw_cube, interf_2d = _extract_pymess_2d_stack_from_group(
+                f["2D_Spectra"], is_freq_domain, n_t1_or_w1_exp, n_pix_exp
+            )
+        elif "data" in f and isinstance(f["data"], h5py.Group):
+            raw_cube, interf_2d = _extract_pymess_2d_stack_from_group(
+                f["data"], is_freq_domain, n_t1_or_w1_exp, n_pix_exp
+            )
+        else:
+            raise ValueError(f"File {p.name} contains no recognizable 2D data group.")
+
+        # Check for slow modulation / polarization states:
+        # 1. Datasets in /data/slow_modulation
+        states_data: dict[str, np.ndarray] = {}
+        if "data/slow_modulation" in f and isinstance(f["data/slow_modulation"], h5py.Group):
+            sm_grp = f["data/slow_modulation"]
+            def _to_cube(arr: np.ndarray) -> np.ndarray:
+                arr = np.asarray(arr, dtype=np.float64)
+                return arr[:, :, np.newaxis] if arr.ndim == 2 else arr
+
+            if is_freq_domain:
+                pair_map = [
+                    ("surface_parallel", "Parallel"),
+                    ("surface_perpendicular", "Perpendicular"),
+                    ("surface_isotropic", "Magic Angle"),
+                    ("surface_anisotropy", "Anisotropy"),
+                ]
+                prefix = "surface_"
+            else:
+                pair_map = [
+                    ("delta_A_parallel", "Parallel"),
+                    ("delta_A_perpendicular", "Perpendicular"),
+                    ("isotropic", "Magic Angle"),
+                ]
+                prefix = "state_"
+
+            for ds_key, label in pair_map:
+                if ds_key in sm_grp and isinstance(sm_grp[ds_key], h5py.Dataset):
+                    c = _to_cube(sm_grp[ds_key][:])
+                    if c.shape[:2] == raw_cube.shape[:2]:
+                        states_data[label] = c
+
+            for k in sorted(sm_grp.keys()):
+                if k.startswith(prefix) and k not in dict(pair_map) and isinstance(sm_grp[k], h5py.Dataset):
+                    c = _to_cube(sm_grp[k][:])
+                    if c.shape[:2] == raw_cube.shape[:2]:
+                        states_data[k] = c
+
+        # 2. Subgroups state_0, state_1, ... in /scans, /data, or /2D_Spectra/scan_001
+        if not states_data:
+            for parent_key in ("scans", "data", "2D_Spectra/scan_001"):
+                if parent_key in f and isinstance(f[parent_key], h5py.Group):
+                    pgrp = f[parent_key]
+                    st_keys = sorted(
+                        [
+                            k
+                            for k in pgrp.keys()
+                            if k.startswith("state_") and isinstance(pgrp[k], h5py.Group)
+                        ]
+                    )
+                    if len(st_keys) >= 2:
+                        raw_names = meta_dict.get("slow_modulation_state_names", "")
+                        parsed_names = (
+                            [s.strip() for s in raw_names.split(",") if s.strip()]
+                            if raw_names
+                            else []
+                        )
+                        for idx, sk in enumerate(st_keys):
+                            sgrp = pgrp[sk]
+                            st_cube, _ = _extract_pymess_2d_stack_from_group(
+                                sgrp, is_freq_domain, n_t1_or_w1_exp, n_pix_exp
+                            )
+                            if idx < len(parsed_names):
+                                st_label = parsed_names[idx]
+                            else:
+                                st_label = _pymess_attr_str(sgrp.attrs.get("state_name", sk))
+                            states_data[st_label] = st_cube
+                        break
+
+        n_t1_or_w1, n_pix, n_t2 = raw_cube.shape
+
+        # Resolve probe axis (omega3)
+        probe, cal_kind = _resolve_pymess_omega3_axis(f, p, n_pix)
+        if cal_kind == "dataset":
+            cal_source = "PyMESS spectral calibration (cm-1)"
+        elif cal_kind == "sibling":
+            cal_source = "PyMESS sibling HDF5 calibration (cm-1)"
+        elif cal_kind == "csv":
+            cal_source = "CalibratedProbe.csv (cm-1)"
+        else:
+            cal_source = "Uncalibrated pixel indices"
+
+        # Resolve t2 waiting times in ps
+        t2delays_ps = _extract_pymess_2d_t2_ps(f, p, meta_dict, n_t2)
+        if len(t2delays_ps) != n_t2:
+            if len(t2delays_ps) > n_t2:
+                t2delays_ps = t2delays_ps[:n_t2]
+            else:
+                t2delays_ps = np.arange(n_t2, dtype=np.float64)
+
+        # Sort by ascending t2
+        if n_t2 > 1:
+            sort_idx = np.argsort(t2delays_ps)
+            t2delays_ps = t2delays_ps[sort_idx]
+            raw_cube = raw_cube[:, :, sort_idx]
+            if interf_2d is not None and interf_2d.shape[1] == n_t2:
+                interf_2d = interf_2d[:, sort_idx]
+            for st_k in list(states_data.keys()):
+                states_data[st_k] = states_data[st_k][:, :, sort_idx]
+
+        # Trim trailing all-NaN rows along axis 0 if scan was stopped early
+        valid_rows = ~np.all(np.isnan(raw_cube[:, :, 0]), axis=1)
+        in_progress = not bool(np.all(valid_rows))
+        cut_rows = n_t1_or_w1
+        if in_progress:
+            last_valid = np.where(valid_rows)[0]
+            if len(last_valid) > 0:
+                cut_rows = int(last_valid[-1]) + 1
+                raw_cube = raw_cube[:cut_rows, :, :]
+                if interf_2d is not None:
+                    interf_2d = interf_2d[:cut_rows, :]
+                for st_k in list(states_data.keys()):
+                    states_data[st_k] = states_data[st_k][:cut_rows, :, :]
+
+        # If 2 polarization states exist, compute Magic Angle and Anisotropy cubes
+        if len(states_data) >= 2:
+            st_keys_list = list(states_data.keys())
+            par_key, perp_key = None, None
+            for k in st_keys_list:
+                kl = k.lower()
+                if "par" in kl and par_key is None:
+                    par_key = k
+                elif "perp" in kl and perp_key is None:
+                    perp_key = k
+            if par_key is None or perp_key is None:
+                par_key, perp_key = st_keys_list[0], st_keys_list[1]
+
+            g_factor = 1.0
+            for g_key in ("g_factor", "G_factor", "gfactor"):
+                if g_key in meta_dict:
+                    try:
+                        g_factor = float(meta_dict[g_key])
+                        break
+                    except (ValueError, TypeError):
+                        pass
+
+            c_par = states_data[par_key]
+            c_perp = states_data[perp_key]
+            c_ma = (c_par + 2.0 * g_factor * c_perp) / 3.0
+            states_data["Magic Angle"] = c_ma
+            if is_freq_domain:
+                denom = c_par + 2.0 * g_factor * c_perp
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    c_aniso = np.where(np.abs(denom) > 1e-6, (c_par - g_factor * c_perp) / denom, np.nan)
+                states_data["Anisotropy"] = c_aniso
+
+        w0_cm1 = 0.0
+        dt1_fs = 0.0
+
+        if is_freq_domain:
+            # Frequency-Domain 2D: axis 0 is already pump wavenumber (omega1)
+            if "data/omega1_axis" in f:
+                w1 = np.asarray(f["data/omega1_axis"][:], dtype=np.float64).ravel()
+            elif "data/t1_delays_fs" in f:
+                w1 = np.asarray(f["data/t1_delays_fs"][:], dtype=np.float64).ravel()
+            else:
+                w1 = np.arange(cut_rows, dtype=np.float64)
+            w1 = w1[:cut_rows]
+
+            Z = raw_cube.copy()
+            pump = w1.copy()
+            raw_signal = raw_cube.copy()
+            raw_interferogram = (
+                interf_2d[:cut_rows, :]
+                if interf_2d is not None and interf_2d.shape[0] >= cut_rows
+                else np.zeros((cut_rows, n_t2), dtype=np.float64)
+            )
+            raw_t1delays = w1.copy()
+            datatype_str = "FreqDomain"
+        else:
+            # Time-Domain 2D: axis 0 of raw_cube is t1 delay in fs
+            if "data/t1_delays_fs" in f:
+                t1 = np.asarray(f["data/t1_delays_fs"][:], dtype=np.float64).ravel()[:cut_rows]
+            else:
+                t1 = np.arange(cut_rows, dtype=np.float64)
+
+            # Determine rotating frame frequency (w0_cm1):
+            # Prioritize effective_rotating_frame_cm1 (= scanned - fixed)
+            if "effective_rotating_frame_cm1" in shaper_attrs:
+                try:
+                    w0_cm1 = float(shaper_attrs["effective_rotating_frame_cm1"])
+                except (ValueError, TypeError):
+                    w0_cm1 = 0.0
+            elif (
+                "rotating_frame_scanned_cm1" in shaper_attrs
+                and "rotating_frame_fixed_cm1" in shaper_attrs
+            ):
+                try:
+                    w0_cm1 = float(shaper_attrs["rotating_frame_scanned_cm1"]) - float(
+                        shaper_attrs["rotating_frame_fixed_cm1"]
+                    )
+                except (ValueError, TypeError):
+                    w0_cm1 = 0.0
+            elif "rotating_frame_scanned_cm1" in shaper_attrs:
+                try:
+                    w0_cm1 = float(shaper_attrs["rotating_frame_scanned_cm1"])
+                except (ValueError, TypeError):
+                    w0_cm1 = 0.0
+
+            # Fallback if metadata/shaper was absent (e.g. scan stopped early):
+            # read the starting wavenumber of data/omega1_axis
+            if w0_cm1 == 0.0 and "data/omega1_axis" in f:
+                w1_saved = np.asarray(f["data/omega1_axis"]).squeeze()
+                if w1_saved.ndim == 1 and w1_saved.size > 1 and not np.all(np.isnan(w1_saved)):
+                    w0_cm1 = float(w1_saved[0])
+
+            if "step_fs" in shaper_attrs:
+                try:
+                    dt1_fs = float(shaper_attrs["step_fs"])
+                except (ValueError, TypeError):
+                    dt1_fs = 0.0
+            if dt1_fs <= 0.0 and len(t1) > 1:
+                dt1_fs = float(np.nanmean(np.abs(np.diff(t1))))
+
+            raw_signal = raw_cube.copy()
+            if interf_2d is not None and interf_2d.shape[0] >= cut_rows:
+                raw_interferogram = interf_2d[:cut_rows, :].copy()
+            elif "data/integrated_channel" in f:
+                ic = np.asarray(f["data/integrated_channel"][:], dtype=np.float64).ravel()[:cut_rows]
+                raw_interferogram = np.repeat(ic[:, np.newaxis], n_t2, axis=1)
+            else:
+                raw_interferogram = np.nanmean(raw_signal, axis=1)
+            raw_t1delays = t1.copy()
+            datatype_str = "shaper"
+
+            # Provide initial frequency-domain Z and pump (used before/unless process() is called)
+            if (
+                "data/surface_absorptive" in f
+                and "data/omega1_axis" in f
+                and n_t2 == 1
+            ):
+                surf = np.asarray(f["data/surface_absorptive"][:], dtype=np.float64)
+                w1_saved = np.asarray(f["data/omega1_axis"][:], dtype=np.float64).ravel()
+                if (
+                    surf.ndim == 2
+                    and w1_saved.ndim == 1
+                    and surf.shape == (len(w1_saved), n_pix)
+                    and not np.all(np.isnan(surf))
+                ):
+                    Z = surf[:, :, np.newaxis]
+                    pump = w1_saved
+                else:
+                    Z = raw_signal.copy()
+                    pump = t1.copy()
+            else:
+                Z = raw_signal.copy()
+                pump = t1.copy()
+
+        units = _units_2d("ps", "cm-1")
+        units["cal_source"] = cal_source
+        units["is_frequency_domain"] = is_freq_domain
+        units["w0_cm1"] = w0_cm1
+        units["dt1_fs"] = dt1_fs
+        units["pymess_metadata"] = meta_dict
+        units["pymess_subtype"] = subtype
+        if states_data:
+            units["state_names"] = list(states_data.keys())
+            units["states_data"] = states_data
+            units["active_state"] = list(states_data.keys())[0]
+
+        info_lines = [
+            f"Mode: {'Frequency-Domain 2D' if is_freq_domain else f'Time-Domain 2D (w0 = {w0_cm1:.1f} cm-1)'}"
+        ]
+        if "sample_id" in meta_dict and meta_dict["sample_id"]:
+            info_lines.append(f"Sample: {meta_dict['sample_id']}")
+        if "solvent" in meta_dict and meta_dict["solvent"]:
+            info_lines.append(f"Solvent: {meta_dict['solvent']}")
+        if "fast_modulation" in meta_dict and meta_dict["fast_modulation"]:
+            info_lines.append(f"Fast Modulation: {meta_dict['fast_modulation']}")
+        if "pump_polarization" in meta_dict and meta_dict["pump_polarization"]:
+            info_lines.append(f"Pump Polarization: {meta_dict['pump_polarization']}")
+        if "probe_polarization" in meta_dict and meta_dict["probe_polarization"]:
+            info_lines.append(f"Probe Polarization: {meta_dict['probe_polarization']}")
+        if "waveplate_positions" in meta_dict and meta_dict["waveplate_positions"]:
+            info_lines.append(f"Waveplates: {meta_dict['waveplate_positions']}")
+        if states_data:
+            info_lines.append(f"Polarization States: {', '.join(states_data.keys())}")
+        if "comments" in meta_dict and meta_dict["comments"]:
+            info_lines.append(f"Comments: {meta_dict['comments']}")
+        units["sample_info"] = "\n".join(info_lines)
+
+    return (
+        Z,
+        pump,
+        probe,
+        t2delays_ps,
+        units,
+        "cm-1",
+        datatype_str,
+        in_progress,
+        raw_signal,
+        raw_interferogram,
+        raw_t1delays,
+    )
+
 

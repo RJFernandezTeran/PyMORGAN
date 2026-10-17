@@ -1,4 +1,4 @@
-# Form implementation generated from reading ui file 'src/pymorgan/gui/main_window.ui'
+# Form implementation generated from reading ui file 'C:\Users\ricar\Documents\GitHub\PyMORGAN\src\pymorgan\gui\main_window.ui'
 #
 # Created by: PyQt6 UI code generator 6.11.0
 #
@@ -95,75 +95,40 @@ class Ui_MainWindow(object):
         self.centralLayout.addWidget(self.RootDir_grp)
         self.MainTabs = QtWidgets.QTabWidget(parent=self.centralwidget)
         self.MainTabs.setStyleSheet("QTabWidget#MainTabs::pane { /* The tab widget frame */\n"
-"\n"
 "    border-top: 1px solid #C2C7CB;\n"
-"\n"
 "}\n"
-"\n"
-"\n"
 "\n"
 "QTabWidget#MainTabs::tab-bar {\n"
-"\n"
 "    left: 5px; /* move to the right by 5px */\n"
-"\n"
 "}\n"
-"\n"
-"\n"
 "\n"
 "/* Style the tab using the tab sub-control. Note that\n"
-"\n"
 "    it reads QTabBar _not_ QTabWidget */\n"
-"\n"
 "QTabWidget#MainTabs > QTabBar::tab {\n"
-"\n"
 "    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,\n"
-"\n"
 "                                stop: 0 #E1E1E1, stop: 0.4 #EEEEEE,\n"
-"\n"
 "                                stop: 0.5 #EFEFEF, stop: 1.0 #D3D3D3);\n"
-"\n"
 "    border: 1px solid #C4C4C3;\n"
-"\n"
 "    border-bottom-color: #C2C7CB; /* same as the pane color */\n"
-"\n"
 "    border-top-left-radius: 5px;\n"
-"\n"
 "    border-top-right-radius: 5px;\n"
-"\n"
 "    min-width: 30ex;\n"
-"\n"
 "    padding:4px;\n"
-"\n"
 "}\n"
-"\n"
-"\n"
 "\n"
 "QTabWidget#MainTabs > QTabBar::tab:selected, QTabWidget#MainTabs > QTabBar::tab:hover {\n"
-"\n"
 "    background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,\n"
-"\n"
 "                                stop: 0 #fafafa, stop: 0.4 #f4f4f4,\n"
-"\n"
 "                                stop: 0.5 #e7e7e7, stop: 1.0 #fafafa);\n"
-"\n"
 "}\n"
-"\n"
-"\n"
 "\n"
 "QTabWidget#MainTabs > QTabBar::tab:selected {\n"
-"\n"
 "    border-color: #9B9B9B;\n"
-"\n"
 "    border-bottom-color: #C2C7CB; /* same as pane color */\n"
-"\n"
 "}\n"
 "\n"
-"\n"
-"\n"
 "QTabWidget#MainTabs > QTabBar::tab:!selected {\n"
-"\n"
 "    margin-top: 2px; /* make non-selected tabs look smaller */\n"
-"\n"
 "}")
         self.MainTabs.setObjectName("MainTabs")
         self.PP_tab = QtWidgets.QWidget()
@@ -236,11 +201,8 @@ class Ui_MainWindow(object):
         sizePolicy.setHeightForWidth(self.PP_fitChirp_btn.sizePolicy().hasHeightForWidth())
         self.PP_fitChirp_btn.setSizePolicy(sizePolicy)
         self.PP_fitChirp_btn.setStyleSheet("font: bold;\n"
-"\n"
 "color: white;\n"
-"\n"
 "background-color: Black\n"
-"\n"
 "")
         self.PP_fitChirp_btn.setObjectName("PP_fitChirp_btn")
         self.horizontalLayout_3.addWidget(self.PP_fitChirp_btn)
@@ -251,11 +213,8 @@ class Ui_MainWindow(object):
         sizePolicy.setHeightForWidth(self.PP_loadChirpCorr_btn.sizePolicy().hasHeightForWidth())
         self.PP_loadChirpCorr_btn.setSizePolicy(sizePolicy)
         self.PP_loadChirpCorr_btn.setStyleSheet("font: bold;\n"
-"\n"
 "color: white;\n"
-"\n"
 "background-color: Purple\n"
-"\n"
 "")
         self.PP_loadChirpCorr_btn.setObjectName("PP_loadChirpCorr_btn")
         self.horizontalLayout_3.addWidget(self.PP_loadChirpCorr_btn)
@@ -266,11 +225,8 @@ class Ui_MainWindow(object):
         sizePolicy.setHeightForWidth(self.PP_subtractSolvent_btn.sizePolicy().hasHeightForWidth())
         self.PP_subtractSolvent_btn.setSizePolicy(sizePolicy)
         self.PP_subtractSolvent_btn.setStyleSheet("font: bold;\n"
-"\n"
 "color: white;\n"
-"\n"
 "background-color: Gray\n"
-"\n"
 "")
         self.PP_subtractSolvent_btn.setObjectName("PP_subtractSolvent_btn")
         self.horizontalLayout_3.addWidget(self.PP_subtractSolvent_btn)
@@ -281,11 +237,8 @@ class Ui_MainWindow(object):
         sizePolicy.setHeightForWidth(self.PP_subtractShockwave_btn.sizePolicy().hasHeightForWidth())
         self.PP_subtractShockwave_btn.setSizePolicy(sizePolicy)
         self.PP_subtractShockwave_btn.setStyleSheet("font: bold;\n"
-"\n"
 "color: white;\n"
-"\n"
 "background-color: DarkSlateGray\n"
-"\n"
 "")
         self.PP_subtractShockwave_btn.setObjectName("PP_subtractShockwave_btn")
         self.horizontalLayout_3.addWidget(self.PP_subtractShockwave_btn)
@@ -385,55 +338,38 @@ class Ui_MainWindow(object):
         self.gridLayout_2.setObjectName("gridLayout_2")
         self.PP_CtrPlot_btn = QtWidgets.QPushButton(parent=self.oneD_PlotsCuts_box)
         self.PP_CtrPlot_btn.setStyleSheet("font: bold;\n"
-"\n"
 "font-size: 12px;\n"
-"\n"
 "color: white;\n"
-"\n"
 "background-color: DarkBlue\n"
-"\n"
 "")
         self.PP_CtrPlot_btn.setObjectName("PP_CtrPlot_btn")
         self.gridLayout_2.addWidget(self.PP_CtrPlot_btn, 0, 0, 1, 1)
         self.PP_kineticsPlot_btn = QtWidgets.QPushButton(parent=self.oneD_PlotsCuts_box)
         self.PP_kineticsPlot_btn.setStyleSheet("font: bold;\n"
-"\n"
 "font-size: 12px;\n"
-"\n"
 "color: white;\n"
-"\n"
 "background-color: ForestGreen;\n"
-"\n"
 "")
         self.PP_kineticsPlot_btn.setObjectName("PP_kineticsPlot_btn")
         self.gridLayout_2.addWidget(self.PP_kineticsPlot_btn, 0, 1, 1, 1)
         self.PP_SurfPlot_btn = QtWidgets.QPushButton(parent=self.oneD_PlotsCuts_box)
         self.PP_SurfPlot_btn.setStyleSheet("font: bold;\n"
-"\n"
 "font-size: 12px;\n"
-"\n"
 "color: white;\n"
-"\n"
 "background-color: DarkRed\n"
-"\n"
 "")
         self.PP_SurfPlot_btn.setObjectName("PP_SurfPlot_btn")
         self.gridLayout_2.addWidget(self.PP_SurfPlot_btn, 1, 0, 1, 1)
         self.PP_trSpecPlot_btn = QtWidgets.QPushButton(parent=self.oneD_PlotsCuts_box)
         self.PP_trSpecPlot_btn.setStyleSheet("font: bold;\n"
-"\n"
 "font-size: 12px;\n"
-"\n"
 "color: white;\n"
-"\n"
 "background-color: RoyalBlue\n"
-"\n"
 "")
         self.PP_trSpecPlot_btn.setObjectName("PP_trSpecPlot_btn")
         self.gridLayout_2.addWidget(self.PP_trSpecPlot_btn, 1, 1, 1, 1)
         self.PP_Normalise_chk = QtWidgets.QCheckBox(parent=self.oneD_PlotsCuts_box)
         self.PP_Normalise_chk.setStyleSheet("\n"
-"\n"
 "font: bold")
         self.PP_Normalise_chk.setObjectName("PP_Normalise_chk")
         self.gridLayout_2.addWidget(self.PP_Normalise_chk, 2, 1, 1, 1)
@@ -444,13 +380,9 @@ class Ui_MainWindow(object):
         self.ppCutsColumn.addWidget(self.oneD_PlotsCuts_box)
         self.PP_plotCounts_btn = QtWidgets.QPushButton(parent=self.PP_tab)
         self.PP_plotCounts_btn.setStyleSheet("font: bold;\n"
-"\n"
 "font-size: 12px;\n"
-"\n"
 "color: white;\n"
-"\n"
 "background-color: #0284c7;\n"
-"\n"
 "")
         self.PP_plotCounts_btn.setObjectName("PP_plotCounts_btn")
         self.ppCutsColumn.addWidget(self.PP_plotCounts_btn)
@@ -468,11 +400,8 @@ class Ui_MainWindow(object):
         sizePolicy.setHeightForWidth(self.PP_ScanKinetics_btn.sizePolicy().hasHeightForWidth())
         self.PP_ScanKinetics_btn.setSizePolicy(sizePolicy)
         self.PP_ScanKinetics_btn.setStyleSheet("font-size: 12px;\n"
-"\n"
 "color: black;\n"
-"\n"
 "background-color: PaleGreen;\n"
-"\n"
 "")
         self.PP_ScanKinetics_btn.setObjectName("PP_ScanKinetics_btn")
         self._2.addWidget(self.PP_ScanKinetics_btn, 0, 0, 1, 1)
@@ -502,11 +431,8 @@ class Ui_MainWindow(object):
         sizePolicy.setHeightForWidth(self.PP_ScanSpectra_btn.sizePolicy().hasHeightForWidth())
         self.PP_ScanSpectra_btn.setSizePolicy(sizePolicy)
         self.PP_ScanSpectra_btn.setStyleSheet("font-size: 12px;\n"
-"\n"
 "color: black;\n"
-"\n"
 "background-color: PaleTurquoise\n"
-"\n"
 "")
         self.PP_ScanSpectra_btn.setObjectName("PP_ScanSpectra_btn")
         self._2.addWidget(self.PP_ScanSpectra_btn, 1, 0, 1, 1)
@@ -517,7 +443,6 @@ class Ui_MainWindow(object):
         sizePolicy.setHeightForWidth(self.PP_RecalcAvg_btn.sizePolicy().hasHeightForWidth())
         self.PP_RecalcAvg_btn.setSizePolicy(sizePolicy)
         self.PP_RecalcAvg_btn.setStyleSheet("\n"
-"\n"
 "font: bold")
         self.PP_RecalcAvg_btn.setObjectName("PP_RecalcAvg_btn")
         self._2.addWidget(self.PP_RecalcAvg_btn, 1, 1, 1, 2)
@@ -1995,13 +1920,9 @@ class Ui_MainWindow(object):
         self.PC_xUnit.setItemText(4, _translate("MainWindow", "THz"))
         self.PC_lblScalePct.setText(_translate("MainWindow", "Scale %"))
         self.PC_smooth.setToolTip(_translate("MainWindow", "Smoothing for transient-spectra / kinetic cuts (opened in a new figure):\n"
-"\n"
 "0 = no smoothing;\n"
-"\n"
 ">0 = smoothed data only;\n"
-"\n"
 "<0 = smoothed data plus the original semitransparent.\n"
-"\n"
 "The magnitude sets the smoothing window width."))
         self.PC_filled.setText(_translate("MainWindow", "Filled contours"))
         self.PC_symmetric.setText(_translate("MainWindow", "Symmetric colour scale"))
@@ -2067,9 +1988,7 @@ class Ui_MainWindow(object):
         self.twoD_spectral_diffusion_btn.setText(_translate("MainWindow", "Spectral diffusion"))
         self.twoD_make_gif_btn.setText(_translate("MainWindow", "Make GIF movie"))
         self.twoD_SampleInfo_text.setHtml(_translate("MainWindow", "<!DOCTYPE HTML PUBLIC \"-//W3C//DTD HTML 4.0//EN\" \"http://www.w3.org/TR/REC-html40/strict.dtd\">\n"
-"\n"
 "<html><head><meta name=\"qrichtext\" content=\"1\" /></head><body>\n"
-"\n"
 "<p>No additional sample info available.</p></body></html>"))
         self.twoD_PC_box.setTitle(_translate("MainWindow", "Plot Controls"))
         self.twoD_PC_lblPumpWl.setText(_translate("MainWindow", "Min probe"))

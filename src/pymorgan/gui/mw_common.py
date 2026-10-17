@@ -65,6 +65,7 @@ DATA_TYPE_DISPLAY_NAMES: dict[str, str] = {
     # 2D Datatypes
     "P2DAT": "Processed 2D Spectrum (.p2dat)",
     "MESS_2DIR": "UniGE 2D-IR (MESS Raw)",
+    "PyMESS_2D": "PyMESS 2D Spectrum (.h5)",
     "UoS_2DIR": "U. of Sheffield 2D-IR",
     "RAL_RAW": "RAL 2D-IR (Raw)",
     "RAL_Proc": "RAL 2D-IR (Processed)",
