@@ -118,6 +118,14 @@ def run_pyinstaller(clean: bool = False):
         with open(ui_compiled, "w", encoding="utf-8") as fh:
             uic.compileUi(str(ui_file), fh)
         print("      Pre-compiled main_window.ui -> main_window_ui.py")
+    pyrate_ui = REPO_ROOT.parent / "PyRATE-TA" / "src" / "pyrate_ta" / "gui" / "main_window.ui"
+    pyrate_ui_compiled = REPO_ROOT.parent / "PyRATE-TA" / "src" / "pyrate_ta" / "gui" / "main_window_ui.py"
+    if pyrate_ui.exists():
+        from PyQt6 import uic
+
+        with open(pyrate_ui_compiled, "w", encoding="utf-8") as fh:
+            uic.compileUi(str(pyrate_ui), fh)
+        print("      Pre-compiled PyRATE-TA main_window.ui -> main_window_ui.py")
 
     cmd = [
         sys.executable,
