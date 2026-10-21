@@ -351,3 +351,188 @@ def test_real_20261016_datasets():
             w1_sub = ds_td.pump[w1_mask]
             peak_w1 = w1_sub[np.unravel_index(np.argmin(sub), sub.shape)[0]]
             assert peak_w1 == pytest.approx(2025.23022053, abs=1e-4)
+
+
+def test_new_schema_shaper_t2_scan_3d_active_and_slowmod(tmp_path: Path):
+    """Verify new PyMESS .h5 schema for shaper t2 scans (3D interferograms_raw, active AWG mode, slow_modulation)."""
+    p = tmp_path / "new_schema_t2_scan.h5"
+    n_delays, n_pix = 10, 24
+    t2_fs = np.linspace(-300.0, 1500.0, n_delays)
+    omega3 = np.linspace(1920.0, 2080.0, n_pix)
+    par_2d = np.full((n_delays, n_pix), 8.0)
+    perp_2d = np.full((n_delays, n_pix), 2.0)
+    avg_3d = (0.5 * (par_2d + perp_2d))[np.newaxis, :, :]  # (1, n_t1, n_pix)
+    indiv_4d = np.stack([avg_3d * 0.9, avg_3d * 1.1], axis=0)  # (2, 1, n_t1, n_pix)
+
+    with h5py.File(p, "w") as f:
+        meta = f.create_group("metadata")
+        meta.attrs["measurement_type"] = "2d_spectra"
+        meta.attrs["domain_mode"] = "time_domain"
+        meta.attrs["sample_id"] = "NewSchema_t2"
+        meta.attrs["slow_modulation_enabled"] = True
+        meta.attrs["slow_modulation_num_states"] = 2
+        meta.attrs["slow_modulation_state_names"] = "Parallel,Perpendicular"
+        shaper = meta.create_group("shaper")
+        shaper.attrs["mode"] = "active"
+        shaper.attrs["shaper_mode"] = "time"
+        shaper.attrs["pulse_form"] = "Single Pulse (Compression / Chirp)"
+
+        grp = f.create_group("data")
+        grp.create_dataset("t1_delays_fs", data=t2_fs)
+        grp.create_dataset("t2_delays_fs", data=np.array([0.0]))
+        grp.create_dataset("omega3_axis", data=omega3)
+        grp.create_dataset("interferograms_raw", data=avg_3d)
+        grp.create_dataset("pump_interferogram", data=np.ones((1, n_delays)))
+        grp.create_dataset("individual_scans", data=indiv_4d)
+
+        sm = f.create_group("data/slow_modulation")
+        sm.create_dataset("state_00_Parallel", data=par_2d[np.newaxis, :, :])
+        sm.create_dataset("state_01_Perpendicular", data=perp_2d[np.newaxis, :, :])
+        sm.create_dataset("isotropic", data=((par_2d + 2.0 * perp_2d) / 3.0)[np.newaxis, :, :])
+        sm.create_dataset("anisotropy", data=((par_2d - perp_2d) / (par_2d + 2.0 * perp_2d))[np.newaxis, :, :])
+
+    assert classify_pymess_h5(p) == "shaper_t2_scan"
+    assert _pymess_pp_is_file(p) is True
+    assert is_map_dataset_file("PyMESS_2D", p) is False
+
+    desc = describe_dataset("PyMESS_PP", p)
+    assert desc is not None
+    assert desc["n_slowmod"] == 2
+    assert desc["state_names"] == ["Parallel", "Perpendicular"]
+
+    ds = pm.load_1D(p, data_type="PyMESS_PP")
+    assert ds.Zavg_R.shape == (n_delays, n_pix, 2)
+    assert ds.Units["detectors"] == ["Parallel", "Perpendicular"]
+    np.testing.assert_allclose(ds.Zavg_R[:, :, 0], 8.0)
+    np.testing.assert_allclose(ds.Zavg_R[:, :, 1], 2.0)
+    assert ds.Units["counts"].shape == (n_delays,)
+
+
+
+def test_new_schema_td_2d_3d_no_omega1_axis(tmp_path: Path):
+    """Verify new PyMESS .h5 schema for Time-Domain 2D (3D interferograms_raw, no omega1_axis/surface_absorptive)."""
+    p = tmp_path / "new_schema_td_2d.h5"
+    n_t2, n_t1, n_pix = 3, 21, 16
+    dt1_fs = 35.0
+    t1_fs = np.arange(n_t1, dtype=float) * dt1_fs
+    t2_fs = np.array([200.0, 1000.0, 5000.0])  # 3rd t2 slice will be unmeasured (NaN)
+    omega3 = np.linspace(1950.0, 2050.0, n_pix)
+    w0_cm1 = 1800.0
+    freq_cm1 = 2025.0
+    c_cm_fs = 2.99792458e-5
+
+    osc = np.cos(2.0 * np.pi * (freq_cm1 - w0_cm1) * c_cm_fs * t1_fs) * np.exp(-t1_fs / 600.0)
+    probe_prof = np.exp(-((omega3 - 2020.0) / 15.0) ** 2)
+    td_base = np.outer(osc, probe_prof) * -10.0  # (n_t1, n_pix)
+
+    cube_avg = np.full((n_t2, n_t1, n_pix), np.nan, dtype=float)
+    cube_avg[0] = td_base * 1.0
+    cube_avg[1] = td_base * 0.5
+    # cube_avg[2] left as NaN to simulate a live/partially completed multi-t2 scan
+
+    with h5py.File(p, "w") as f:
+        meta = f.create_group("metadata")
+        meta.attrs["measurement_type"] = "2d_spectra"
+        meta.attrs["domain_mode"] = "time_domain"
+        meta.attrs["sample_id"] = "NewSchema_TD2D"
+        meta.attrs["slow_modulation_enabled"] = True
+        meta.attrs["slow_modulation_num_states"] = 2
+        meta.attrs["slow_modulation_state_names"] = "Parallel,Perpendicular"
+        shaper = meta.create_group("shaper")
+        shaper.attrs["mode"] = "active"
+        shaper.attrs["shaper_mode"] = "time"
+        shaper.attrs["pulse_form"] = "Double Pulse (2D Scan)"
+        shaper.attrs["rotating_frame_cm1"] = w0_cm1
+        shaper.attrs["step_fs"] = dt1_fs
+
+        grp = f.create_group("data")
+        grp.create_dataset("t1_delays_fs", data=t1_fs)
+        grp.create_dataset("t2_delays_fs", data=t2_fs)
+        grp.create_dataset("omega3_axis", data=omega3)
+        grp.create_dataset("interferograms_raw", data=cube_avg)
+        grp.create_dataset("pump_interferogram", data=np.ones((n_t2, n_t1)))
+
+        sm = f.create_group("data/slow_modulation")
+        sm.create_dataset("state_00_Parallel", data=cube_avg * 1.2)
+        sm.create_dataset("state_01_Perpendicular", data=cube_avg * 0.4)
+        sm.create_dataset("isotropic", data=cube_avg * ((1.2 + 0.8) / 3.0))
+
+    assert classify_pymess_h5(p) == "2d_time_domain"
+    assert is_map_dataset_file("PyMESS_2D", p) is True
+    assert _pymess_pp_is_file(p) is False
+
+    ds = pm.load_2D(p, data_type="PyMESS_2D")
+    assert ds.is_frequency_domain is False
+    assert ds.w0_cm1 == pytest.approx(1800.0)
+    assert ds.dt1_fs == pytest.approx(35.0)
+    # Only the 2 measured t2 slices should be kept (3rd all-NaN slice filtered out)
+    np.testing.assert_allclose(ds.delays, [0.2, 1.0])
+    assert ds.raw_signal.shape == (n_t1, n_pix, 2)
+    assert ds.raw_interferogram.shape == (n_t1, 2)
+    assert ds.state_names == ["Parallel", "Perpendicular", "Magic Angle"]
+
+
+    ds.process(zeropad_factor=4)
+    assert ds.Z.shape[2] == 2
+    assert np.isfinite(ds.Z).all()
+
+
+def test_new_schema_fd_2d_3d_no_surface_absorptive(tmp_path: Path):
+    """Verify new PyMESS .h5 schema for Frequency-Domain 2D (3D interferograms_raw, no surface_absorptive)."""
+    p = tmp_path / "new_schema_fd_2d.h5"
+    n_t2, n_pump, n_pix = 2, 15, 20
+    pump_axis = np.linspace(1950.0, 2060.0, n_pump)
+    probe_axis = np.linspace(1940.0, 2070.0, n_pix)
+    t2_fs = np.array([300.0, 1500.0])
+    surf_base = (
+        np.outer(
+            np.exp(-((pump_axis - 2015.0) / 12.0) ** 2),
+            np.exp(-((probe_axis - 2015.0) / 12.0) ** 2),
+        )
+        * -8.0
+    )
+    cube_avg = np.stack([surf_base, surf_base * 0.6], axis=0)  # (n_t2, n_pump, n_pix)
+
+    with h5py.File(p, "w") as f:
+        meta = f.create_group("metadata")
+        meta.attrs["measurement_type"] = "2d_spectra"
+        meta.attrs["domain_mode"] = "frequency_domain"
+        meta.attrs["sample_id"] = "NewSchema_FD2D"
+        meta.attrs["slow_modulation_enabled"] = True
+        meta.attrs["slow_modulation_num_states"] = 2
+        meta.attrs["slow_modulation_state_names"] = "Parallel,Perpendicular"
+        shaper = meta.create_group("shaper")
+        shaper.attrs["mode"] = "active"
+        shaper.attrs["shaper_mode"] = "freq"
+
+        grp = f.create_group("data")
+        grp.create_dataset("t1_delays_fs", data=pump_axis)
+        grp.create_dataset("omega1_axis", data=pump_axis)
+        grp.create_dataset("omega3_axis", data=probe_axis)
+        grp.create_dataset("t2_delays_fs", data=t2_fs)
+        grp.create_dataset("interferograms_raw", data=cube_avg)
+
+        sm = f.create_group("data/slow_modulation")
+        sm.create_dataset("state_00_Parallel", data=cube_avg * 1.2)
+        sm.create_dataset("state_01_Perpendicular", data=cube_avg * 0.4)
+        sm.create_dataset("isotropic", data=cube_avg * ((1.2 + 0.8) / 3.0))
+
+    assert classify_pymess_h5(p) == "2d_freq_domain"
+    assert is_map_dataset_file("PyMESS_2D", p) is True
+    assert _pymess_pp_is_file(p) is False
+
+    ds = pm.load_2D(p, data_type="PyMESS_2D")
+    assert ds.is_frequency_domain is True
+    np.testing.assert_allclose(ds.delays, [0.3, 1.5])
+    assert ds.Z_R.shape == (n_pump, n_pix, 2)
+    assert ds.state_names == ["Parallel", "Perpendicular", "Magic Angle", "Anisotropy"]
+
+
+
+    ds.process(bkg_sub=False)
+    assert ds.Z.shape == (n_pump, n_pix, 2)
+    assert np.isfinite(ds.Z).all()
+    ds.set_active_state("Perpendicular")
+    ds.process(bkg_sub=False)
+    np.testing.assert_allclose(ds.Z[:, :, 0], surf_base * 0.4)
+

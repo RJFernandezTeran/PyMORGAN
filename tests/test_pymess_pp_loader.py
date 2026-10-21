@@ -287,3 +287,75 @@ def test_pymess_pp_describe(standard_pp_file: Path, slow_mod_anisotropy_file: Pa
     assert desc_sm["state_names"] == ["Parallel", "Perpendicular"]
     assert desc_sm["is_pymess"] is True
 
+
+def test_new_schema_slow_mod_state_00_and_intensity_mode(tmp_path: Path):
+    """Verify new PyMESS .h5 schema (state_00_<name> without individual_scans, plus Intensity mode)."""
+    from pymorgan.oneD.load import describe_dataset
+
+    # 1. Slow-modulated pump-probe with state_00_Parallel / state_01_Perpendicular and no individual_scans
+    p_sm = tmp_path / "new_schema_aniso.h5"
+    n_delays, n_pix = 10, 16
+    delays_fs = np.linspace(-200.0, 2000.0, n_delays)
+    wl = np.linspace(1900.0, 2100.0, n_pix)
+    par = np.full((n_delays, n_pix), 12.0)
+    perp = np.full((n_delays, n_pix), 3.0)
+    iso = (par + 2.0 * perp) / 3.0
+    aniso = (par - perp) / (par + 2.0 * perp)
+
+    with h5py.File(p_sm, "w") as f:
+        grp = f.create_group("data")
+        grp.create_dataset("delta_A", data=0.5 * (par + perp))
+        grp.create_dataset("delays_fs", data=delays_fs)
+        grp.create_dataset("wavelengths", data=wl)
+        grp_slow = f.create_group("data/slow_modulation")
+        grp_slow.create_dataset("state_00_Parallel", data=par)
+        grp_slow.create_dataset("state_01_Perpendicular", data=perp)
+        grp_slow.create_dataset("isotropic", data=iso)
+        grp_slow.create_dataset("anisotropy", data=aniso)
+
+        meta = f.create_group("metadata")
+        meta.attrs["measurement_type"] = "pump_probe"
+        meta.attrs["slow_modulation_enabled"] = True
+        meta.attrs["slow_modulation_num_states"] = 2
+        meta.attrs["slow_modulation_state_names"] = "Parallel,Perpendicular"
+        meta.attrs["num_scans_completed"] = 3
+        meta.attrs["sample_id"] = "NewSchema_Aniso"
+
+    desc = describe_dataset("PyMESS_PP", p_sm)
+    assert desc is not None
+    assert desc["n_slowmod"] == 2
+    assert desc["state_names"] == ["Parallel", "Perpendicular"]
+
+    ds_sm = load_1D(p_sm, data_type="PyMESS_PP")
+    assert ds_sm.Zavg_R.shape == (n_delays, n_pix, 2)
+    assert ds_sm.Units["detectors"] == ["Parallel", "Perpendicular"]
+    np.testing.assert_allclose(ds_sm.Zavg_R[:, :, 0], 12.0)
+    np.testing.assert_allclose(ds_sm.Zavg_R[:, :, 1], 3.0)
+
+    bundle = load_pymess_anisotropy(p_sm, G_factor=1.0, threshold_mOD=0.05)
+    np.testing.assert_allclose(bundle["parallel"].Zavg_R[:, :, 0], 12.0)
+    np.testing.assert_allclose(bundle["perpendicular"].Zavg_R[:, :, 0], 3.0)
+    np.testing.assert_allclose(bundle["isotropic"].Zavg_R[:, :, 0], 6.0)
+    np.testing.assert_allclose(bundle["anisotropy"].Zavg_R[:, :, 0], 0.5)
+
+    # 2. Intensity-mode pump-probe scan (/data/intensity instead of /data/delta_A)
+    p_int = tmp_path / "new_schema_intensity.h5"
+    intensity_mat = np.full((n_delays, n_pix), 2.5)
+    with h5py.File(p_int, "w") as f:
+        grp = f.create_group("data")
+        grp.create_dataset("intensity", data=intensity_mat)
+        grp.create_dataset("delays_fs", data=delays_fs)
+        grp.create_dataset("wavelengths", data=wl)
+        meta = f.create_group("metadata")
+        meta.attrs["measurement_type"] = "pump_probe"
+        meta.attrs["save_as"] = "Intensity"
+        meta.attrs["sample_id"] = "Intensity_Test"
+
+    assert _pymess_pp_is_file(p_int) is True
+    ds_int = load_1D(p_int, data_type="PyMESS_PP")
+    assert ds_int.Zavg_R.shape == (n_delays, n_pix, 1)
+    np.testing.assert_allclose(ds_int.Zavg_R[:, :, 0], 2.5)
+    np.testing.assert_allclose(ds_int.Units["counts"], 2.5)
+
+
+

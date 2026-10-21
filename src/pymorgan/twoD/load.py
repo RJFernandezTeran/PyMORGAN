@@ -847,10 +847,68 @@ def _extract_pymess_2d_t2_ps(f, path: Path, meta_dict: dict[str, str], n_scans: 
 
 
 def _extract_pymess_2d_stack_from_group(
-    grp: h5py.Group, is_freq_domain: bool, n_t1_or_w1_expected: int | None = None, n_pix_expected: int | None = None
+    grp: h5py.Group,
+    is_freq_domain: bool,
+    n_t1_or_w1_expected: int | None = None,
+    n_pix_expected: int | None = None,
+    n_t2_expected: int | None = None,
 ) -> tuple[np.ndarray, np.ndarray | None]:
     """Extract a 3D stack ``(N_t1_or_w1, N_w3, N_t2)`` and optional 2D interferogram ``(N_t1, N_t2)`` from a group."""
     import h5py
+
+    def _orient_3d_cube(arr_3d: np.ndarray) -> np.ndarray:
+        # PyMESS new schema stores 3D cubes as (N_t2, N_t1_or_w1, N_pix);
+        # PyMORGAN stores 3D cubes as (N_t1_or_w1, N_pix, N_t2).
+        if (
+            n_t1_or_w1_expected is not None
+            and n_pix_expected is not None
+            and arr_3d.shape[1] == n_t1_or_w1_expected
+            and arr_3d.shape[2] == n_pix_expected
+            and (
+                arr_3d.shape[0] != n_t1_or_w1_expected
+                or n_t2_expected is None
+                or arr_3d.shape[0] == n_t2_expected
+            )
+        ):
+            return np.transpose(arr_3d, (1, 2, 0))
+        if (
+            n_t1_or_w1_expected is not None
+            and n_pix_expected is not None
+            and arr_3d.shape[0] == n_t1_or_w1_expected
+            and arr_3d.shape[1] == n_pix_expected
+        ):
+            return arr_3d
+        if n_t1_or_w1_expected is not None:
+            if arr_3d.shape[1] == n_t1_or_w1_expected and arr_3d.shape[0] != n_t1_or_w1_expected:
+                return np.transpose(arr_3d, (1, 2, 0))
+            if (
+                n_t2_expected is not None
+                and arr_3d.shape[0] == n_t2_expected
+                and arr_3d.shape[1] == n_t1_or_w1_expected
+            ):
+                return np.transpose(arr_3d, (1, 2, 0))
+        if (
+            n_t2_expected is not None
+            and n_pix_expected is not None
+            and arr_3d.shape[0] == n_t2_expected
+            and arr_3d.shape[2] == n_pix_expected
+        ):
+            return np.transpose(arr_3d, (1, 2, 0))
+        return arr_3d
+
+    def _orient_interf_2d(p_int: np.ndarray, n_t1: int, n_t2: int) -> np.ndarray:
+        if p_int.ndim == 1:
+            return np.repeat(p_int[:, np.newaxis], n_t2, axis=1)
+        if p_int.ndim == 2:
+            if p_int.shape == (n_t1, n_t2):
+                return p_int
+            if p_int.shape == (n_t2, n_t1):
+                return p_int.T
+            if p_int.shape[0] == n_t1:
+                return p_int
+            if p_int.shape[1] == n_t1:
+                return p_int.T
+        return p_int
 
     # 1. Check explicit 3D cubes first (e.g. data/surface_absorptive_cube, data/interferograms_cube)
     cube_mat = None
@@ -862,36 +920,13 @@ def _extract_pymess_2d_stack_from_group(
         cube_mat = np.asarray(grp["surface_absorptive_cube"][:], dtype=np.float64)
 
     if cube_mat is not None and cube_mat.ndim == 3 and not np.all(np.isnan(cube_mat)):
-        # Determine whether cube_mat is already (N_t1_or_w1, N_w3, N_t2) or (N_t2, N_t1_or_w1, N_w3)
-        if (
-            n_t1_or_w1_expected is not None
-            and n_pix_expected is not None
-            and cube_mat.shape[0] == n_t1_or_w1_expected
-            and cube_mat.shape[1] == n_pix_expected
-        ):
-            cube = cube_mat
-        elif (
-            n_t1_or_w1_expected is not None
-            and n_pix_expected is not None
-            and cube_mat.shape[1] == n_t1_or_w1_expected
-            and cube_mat.shape[2] == n_pix_expected
-        ):
-            cube = np.transpose(cube_mat, (1, 2, 0))
-        else:
-            cube = cube_mat
+        cube = _orient_3d_cube(cube_mat)
 
         interf_2d = None
         for ikey in ("pump_interferogram_cube", "pump_interferogram", "integrated_channel"):
             if ikey in grp:
                 p_int = np.asarray(grp[ikey][:], dtype=np.float64)
-                if p_int.ndim == 1:
-                    interf_2d = np.repeat(p_int[:, np.newaxis], cube.shape[2], axis=1)
-                elif p_int.ndim == 2:
-                    interf_2d = (
-                        p_int
-                        if p_int.shape[0] == cube.shape[0]
-                        else p_int.T
-                    )
+                interf_2d = _orient_interf_2d(p_int, cube.shape[0], cube.shape[2])
                 break
         if interf_2d is not None and np.all(np.isnan(interf_2d)):
             interf_2d = np.nanmean(cube, axis=1)
@@ -943,22 +978,7 @@ def _extract_pymess_2d_stack_from_group(
     if mat.ndim == 2:
         cube = mat[:, :, np.newaxis]
     elif mat.ndim == 3:
-        if (
-            n_t1_or_w1_expected is not None
-            and n_pix_expected is not None
-            and mat.shape[0] == n_t1_or_w1_expected
-            and mat.shape[1] == n_pix_expected
-        ):
-            cube = mat
-        elif (
-            n_t1_or_w1_expected is not None
-            and n_pix_expected is not None
-            and mat.shape[1] == n_t1_or_w1_expected
-            and mat.shape[2] == n_pix_expected
-        ):
-            cube = np.transpose(mat, (1, 2, 0))
-        else:
-            cube = mat
+        cube = _orient_3d_cube(mat)
     else:
         raise ValueError(f"Unexpected 2D dataset dimensionality: {mat.shape}")
 
@@ -966,7 +986,7 @@ def _extract_pymess_2d_stack_from_group(
     for ikey in ("pump_interferogram_cube", "pump_interferogram", "integrated_channel"):
         if ikey in target:
             p_int = np.asarray(target[ikey][:], dtype=np.float64)
-            interf_2d = p_int[:, np.newaxis] if p_int.ndim == 1 else p_int
+            interf_2d = _orient_interf_2d(p_int, cube.shape[0], cube.shape[2])
             break
     if interf_2d is not None and np.all(np.isnan(interf_2d)):
         interf_2d = np.nanmean(cube, axis=1)
@@ -977,6 +997,8 @@ def _extract_pymess_2d_stack_from_group(
 @register_map_loader("PyMESS_2D")
 def read_PyMESS_2D(path: str, progress_tracker=None):
     """Read a PyMESS 2D spectrum (.h5) file (Time-Domain or Frequency-Domain)."""
+    import re
+
     import h5py
 
     from ..oneD.load import (
@@ -1019,13 +1041,16 @@ def read_PyMESS_2D(path: str, progress_tracker=None):
                     break
 
         n_t1_or_w1_exp = None
-        if is_freq_domain and "data/omega1_axis" in f:
+        if is_freq_domain and "data/omega1_axis" in f and f["data/omega1_axis"].size > 1:
             n_t1_or_w1_exp = int(f["data/omega1_axis"].size)
-        elif "data/t1_delays_fs" in f:
+        elif "data/t1_delays_fs" in f and f["data/t1_delays_fs"].size > 1:
             n_t1_or_w1_exp = int(f["data/t1_delays_fs"].size)
         n_pix_exp = None
         if "data/omega3_axis" in f and f["data/omega3_axis"].size > 1:
             n_pix_exp = int(f["data/omega3_axis"].size)
+        n_t2_exp = None
+        if "data/t2_delays_fs" in f and f["data/t2_delays_fs"].size > 0:
+            n_t2_exp = int(f["data/t2_delays_fs"].size)
 
         # Extract primary 3D cube and optional pump interferogram:
         # Prioritize explicit 3D cubes in /data if present, then multi-scan groups
@@ -1033,23 +1058,23 @@ def read_PyMESS_2D(path: str, progress_tracker=None):
             "interferograms_cube" in f["data"] or "surface_absorptive_cube" in f["data"]
         ):
             raw_cube, interf_2d = _extract_pymess_2d_stack_from_group(
-                f["data"], is_freq_domain, n_t1_or_w1_exp, n_pix_exp
+                f["data"], is_freq_domain, n_t1_or_w1_exp, n_pix_exp, n_t2_exp
             )
         elif "scans" in f and isinstance(f["scans"], h5py.Group) and any(
             k.startswith("scan_") for k in f["scans"].keys()
         ):
             raw_cube, interf_2d = _extract_pymess_2d_stack_from_group(
-                f["scans"], is_freq_domain, n_t1_or_w1_exp, n_pix_exp
+                f["scans"], is_freq_domain, n_t1_or_w1_exp, n_pix_exp, n_t2_exp
             )
         elif "2D_Spectra" in f and isinstance(f["2D_Spectra"], h5py.Group) and any(
             k.startswith("scan_") for k in f["2D_Spectra"].keys()
         ):
             raw_cube, interf_2d = _extract_pymess_2d_stack_from_group(
-                f["2D_Spectra"], is_freq_domain, n_t1_or_w1_exp, n_pix_exp
+                f["2D_Spectra"], is_freq_domain, n_t1_or_w1_exp, n_pix_exp, n_t2_exp
             )
         elif "data" in f and isinstance(f["data"], h5py.Group):
             raw_cube, interf_2d = _extract_pymess_2d_stack_from_group(
-                f["data"], is_freq_domain, n_t1_or_w1_exp, n_pix_exp
+                f["data"], is_freq_domain, n_t1_or_w1_exp, n_pix_exp, n_t2_exp
             )
         else:
             raise ValueError(f"File {p.name} contains no recognizable 2D data group.")
@@ -1059,16 +1084,51 @@ def read_PyMESS_2D(path: str, progress_tracker=None):
         states_data: dict[str, np.ndarray] = {}
         if "data/slow_modulation" in f and isinstance(f["data/slow_modulation"], h5py.Group):
             sm_grp = f["data/slow_modulation"]
+
             def _to_cube(arr: np.ndarray) -> np.ndarray:
                 arr = np.asarray(arr, dtype=np.float64)
-                return arr[:, :, np.newaxis] if arr.ndim == 2 else arr
+                if arr.ndim == 2:
+                    return arr[:, :, np.newaxis]
+                if arr.ndim == 3:
+                    if arr.shape[:2] == raw_cube.shape[:2]:
+                        return arr
+                    if arr.shape[1:] == raw_cube.shape[:2]:
+                        return np.transpose(arr, (1, 2, 0))
+                return arr
 
+            raw_names = meta_dict.get("slow_modulation_state_names", "")
+            parsed_names = (
+                [s.strip() for s in raw_names.split(",") if s.strip()]
+                if raw_names
+                else []
+            )
+
+            # 1a. New PyMESS schema: state_00_<name>, state_01_<name>, ...
+            st_ds_keys = sorted(
+                [
+                    k
+                    for k in sm_grp.keys()
+                    if k.startswith("state_") and isinstance(sm_grp[k], h5py.Dataset)
+                ]
+            )
+            for idx, k in enumerate(st_ds_keys):
+                c = _to_cube(sm_grp[k][:])
+                if c.shape[:2] == raw_cube.shape[:2]:
+                    if idx < len(parsed_names):
+                        st_label = parsed_names[idx]
+                    else:
+                        st_label = re.sub(r"^state_\d+_", "", k) or k
+                    states_data[st_label] = c
+
+            # 1b. Legacy PyMESS schema or pre-computed isotropic/anisotropy datasets
             if is_freq_domain:
                 pair_map = [
                     ("surface_parallel", "Parallel"),
                     ("surface_perpendicular", "Perpendicular"),
                     ("surface_isotropic", "Magic Angle"),
                     ("surface_anisotropy", "Anisotropy"),
+                    ("isotropic", "Magic Angle"),
+                    ("anisotropy", "Anisotropy"),
                 ]
                 prefix = "surface_"
             else:
@@ -1080,13 +1140,18 @@ def read_PyMESS_2D(path: str, progress_tracker=None):
                 prefix = "state_"
 
             for ds_key, label in pair_map:
-                if ds_key in sm_grp and isinstance(sm_grp[ds_key], h5py.Dataset):
+                if label not in states_data and ds_key in sm_grp and isinstance(sm_grp[ds_key], h5py.Dataset):
                     c = _to_cube(sm_grp[ds_key][:])
                     if c.shape[:2] == raw_cube.shape[:2]:
                         states_data[label] = c
 
             for k in sorted(sm_grp.keys()):
-                if k.startswith(prefix) and k not in dict(pair_map) and isinstance(sm_grp[k], h5py.Dataset):
+                if (
+                    k.startswith(prefix)
+                    and k not in dict(pair_map)
+                    and k not in st_ds_keys
+                    and isinstance(sm_grp[k], h5py.Dataset)
+                ):
                     c = _to_cube(sm_grp[k][:])
                     if c.shape[:2] == raw_cube.shape[:2]:
                         states_data[k] = c
@@ -1113,7 +1178,7 @@ def read_PyMESS_2D(path: str, progress_tracker=None):
                         for idx, sk in enumerate(st_keys):
                             sgrp = pgrp[sk]
                             st_cube, _ = _extract_pymess_2d_stack_from_group(
-                                sgrp, is_freq_domain, n_t1_or_w1_exp, n_pix_exp
+                                sgrp, is_freq_domain, n_t1_or_w1_exp, n_pix_exp, n_t2_exp
                             )
                             if idx < len(parsed_names):
                                 st_label = parsed_names[idx]
@@ -1143,6 +1208,21 @@ def read_PyMESS_2D(path: str, progress_tracker=None):
             else:
                 t2delays_ps = np.arange(n_t2, dtype=np.float64)
 
+        # Filter out completely unmeasured (all-NaN) t2 slices if scan is in progress
+        in_progress_t2 = False
+        if n_t2 > 1:
+            valid_t2_mask = ~np.all(np.isnan(raw_cube), axis=(0, 1))
+            if np.any(valid_t2_mask) and not np.all(valid_t2_mask):
+                in_progress_t2 = True
+                raw_cube = raw_cube[:, :, valid_t2_mask]
+                t2delays_ps = t2delays_ps[valid_t2_mask]
+                if interf_2d is not None and interf_2d.shape[1] == n_t2:
+                    interf_2d = interf_2d[:, valid_t2_mask]
+                for st_k in list(states_data.keys()):
+                    if states_data[st_k].shape[2] == n_t2:
+                        states_data[st_k] = states_data[st_k][:, :, valid_t2_mask]
+                n_t2 = raw_cube.shape[2]
+
         # Sort by ascending t2
         if n_t2 > 1:
             sort_idx = np.argsort(t2delays_ps)
@@ -1155,9 +1235,9 @@ def read_PyMESS_2D(path: str, progress_tracker=None):
 
         # Trim trailing all-NaN rows along axis 0 if scan was stopped early
         valid_rows = ~np.all(np.isnan(raw_cube[:, :, 0]), axis=1)
-        in_progress = not bool(np.all(valid_rows))
+        in_progress = in_progress_t2 or (not bool(np.all(valid_rows)))
         cut_rows = n_t1_or_w1
-        if in_progress:
+        if not bool(np.all(valid_rows)):
             last_valid = np.where(valid_rows)[0]
             if len(last_valid) > 0:
                 cut_rows = int(last_valid[-1]) + 1
@@ -1236,6 +1316,11 @@ def read_PyMESS_2D(path: str, progress_tracker=None):
                     w0_cm1 = float(shaper_attrs["effective_rotating_frame_cm1"])
                 except (ValueError, TypeError):
                     w0_cm1 = 0.0
+            elif "rotating_frame_cm1" in shaper_attrs:
+                try:
+                    w0_cm1 = float(shaper_attrs["rotating_frame_cm1"])
+                except (ValueError, TypeError):
+                    w0_cm1 = 0.0
             elif (
                 "rotating_frame_scanned_cm1" in shaper_attrs
                 and "rotating_frame_fixed_cm1" in shaper_attrs
@@ -1249,6 +1334,11 @@ def read_PyMESS_2D(path: str, progress_tracker=None):
             elif "rotating_frame_scanned_cm1" in shaper_attrs:
                 try:
                     w0_cm1 = float(shaper_attrs["rotating_frame_scanned_cm1"])
+                except (ValueError, TypeError):
+                    w0_cm1 = 0.0
+            elif "rotating_frame_cm1" in meta_dict:
+                try:
+                    w0_cm1 = float(meta_dict["rotating_frame_cm1"])
                 except (ValueError, TypeError):
                     w0_cm1 = 0.0
 

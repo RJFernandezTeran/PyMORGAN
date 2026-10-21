@@ -1911,7 +1911,16 @@ def classify_pymess_h5(filepath: str | Path) -> str:
             # 1. Standard 1D Pump-Probe tab
             if mtype == "pump_probe":
                 return "pump_probe"
-            if not mtype and "data/delta_A" in f and "data/delays_fs" in f:
+            if (
+                not mtype
+                and "data/delays_fs" in f
+                and (
+                    "data/delta_A" in f
+                    or "data/intensity" in f
+                    or "data/individual_scans" in f
+                    or "data/slow_modulation" in f
+                )
+            ):
                 if (
                     "2D_Spectra" not in f
                     and "data/omega1_axis" not in f
@@ -1927,6 +1936,18 @@ def classify_pymess_h5(filepath: str | Path) -> str:
                 if "data/interferograms_raw" in f:
                     ds_iraw = f["data/interferograms_raw"]
                     if ds_iraw.ndim >= 2 and ds_iraw.size > 0:
+                        arr_iraw = np.asarray(ds_iraw)
+                        if not np.all(np.isnan(arr_iraw)):
+                            has_valid_data = True
+                if not has_valid_data and "data/slow_modulation" in f and isinstance(f["data/slow_modulation"], h5py.Group):
+                    for k in f["data/slow_modulation"].keys():
+                        ds_sm = f["data/slow_modulation"][k]
+                        if isinstance(ds_sm, h5py.Dataset) and ds_sm.size > 0 and not np.all(np.isnan(np.asarray(ds_sm))):
+                            has_valid_data = True
+                            break
+                if not has_valid_data and "data/individual_scans" in f:
+                    ds_ind = f["data/individual_scans"]
+                    if isinstance(ds_ind, h5py.Dataset) and ds_ind.size > 0 and not np.all(np.isnan(np.asarray(ds_ind))):
                         has_valid_data = True
                 if not has_valid_data and "scans" in f:
                     for k in f["scans"].keys():
@@ -1945,6 +1966,8 @@ def classify_pymess_h5(filepath: str | Path) -> str:
                     return "other"
 
                 domain_mode = _pymess_attr_str(meta.get("domain_mode", "")).strip().lower()
+                scan_mode = _pymess_attr_str(meta.get("scan_mode", "")).strip().lower()
+                preset_name = _pymess_attr_str(meta.get("preset_name", "")).strip().lower()
                 fast_mod = _pymess_attr_str(meta.get("fast_modulation", "")).strip().lower()
 
                 shaper_attrs = {}
@@ -1957,39 +1980,72 @@ def classify_pymess_h5(filepath: str | Path) -> str:
                             shaper_attrs = sgrp["shaper"].attrs
                             break
 
-                shaper_mode = _pymess_attr_str(shaper_attrs.get("mode", "")).strip().lower()
+                shaper_mode_attr = _pymess_attr_str(shaper_attrs.get("shaper_mode", "")).strip().lower()
+                mode_attr = _pymess_attr_str(shaper_attrs.get("mode", "")).strip().lower()
+                domain_attr = _pymess_attr_str(shaper_attrs.get("domain", "")).strip().lower()
+                if shaper_mode_attr in ("time", "freq", "frequency") or shaper_mode_attr.startswith("freq"):
+                    shaper_mode = shaper_mode_attr
+                elif mode_attr in ("time", "freq", "frequency") or mode_attr.startswith("freq"):
+                    shaper_mode = mode_attr
+                elif domain_attr:
+                    shaper_mode = domain_attr
+                else:
+                    shaper_mode = mode_attr
+
                 try:
                     shaper_form = int(shaper_attrs.get("form", -1))
                 except (ValueError, TypeError):
                     shaper_form = -1
+                if shaper_form == -1:
+                    pform_str = _pymess_attr_str(shaper_attrs.get("pulse_form", "")).strip().lower()
+                    if "single" in pform_str or "1-pulse" in pform_str or "compression" in pform_str:
+                        shaper_form = 0
+                    elif "double" in pform_str or "2-pulse" in pform_str or "t1" in pform_str:
+                        shaper_form = 1
 
                 # 2a. Explicit Frequency-Domain 2D
-                if domain_mode == "frequency_domain" or shaper_mode.startswith("freq"):
+                if (
+                    domain_mode == "frequency_domain"
+                    or "freq" in domain_mode
+                    or "freq" in scan_mode
+                    or shaper_mode.startswith("freq")
+                    or "frequency" in preset_name
+                ):
                     return "2d_freq_domain"
 
-                # Fallback for stopped Frequency-Domain 2D where metadata/shaper was not written:
-                # in FD mode, t1_delays_fs holds the scanned pump frequencies == omega1_axis
-                if "data/t1_delays_fs" in f and "data/omega1_axis" in f:
-                    t1_arr = np.asarray(f["data/t1_delays_fs"]).squeeze()
+                # Fallback for Frequency-Domain 2D where metadata/shaper was not written:
+                # 1) in FD mode, t1_delays_fs holds the scanned pump frequencies == omega1_axis, OR
+                # 2) in the new PyMESS schema, t1_delays_fs is empty/[0.0] while omega1_axis holds the pump frequencies
+                if "data/omega1_axis" in f:
                     w1_arr = np.asarray(f["data/omega1_axis"]).squeeze()
-                    if (
-                        t1_arr.ndim == 1
-                        and w1_arr.ndim == 1
-                        and t1_arr.size > 1
-                        and t1_arr.shape == w1_arr.shape
-                        and not np.all(np.isnan(w1_arr))
-                        and np.allclose(t1_arr, w1_arr, equal_nan=True)
-                    ):
-                        return "2d_freq_domain"
+                    if w1_arr.ndim == 1 and w1_arr.size > 1 and not np.all(np.isnan(w1_arr)):
+                        if "data/t1_delays_fs" not in f or f["data/t1_delays_fs"].size <= 1:
+                            return "2d_freq_domain"
+                        t1_arr = np.asarray(f["data/t1_delays_fs"]).squeeze()
+                        if (
+                            t1_arr.ndim == 1
+                            and t1_arr.shape == w1_arr.shape
+                            and np.allclose(t1_arr, w1_arr, equal_nan=True)
+                        ):
+                            return "2d_freq_domain"
 
                 # 2b. Explicit Time-Domain shaper mode
-                if shaper_mode == "time":
+                if shaper_mode.startswith("time"):
                     if shaper_form == 0:
                         return "shaper_t2_scan"
                     if shaper_form == 1:
                         return "2d_time_domain"
 
-                # 2c. Fallbacks when metadata/shaper is absent (e.g. scan stopped early)
+                # 2c. Check rotating frame in shaper_attrs (>100 cm-1 indicates 2-pulse TD 2D scan)
+                for rf_key in ("effective_rotating_frame_cm1", "rotating_frame_cm1", "rotating_frame_scanned_cm1"):
+                    if rf_key in shaper_attrs:
+                        try:
+                            if float(shaper_attrs[rf_key]) > 100.0:
+                                return "2d_time_domain"
+                        except (ValueError, TypeError):
+                            pass
+
+                # 2d. Fallbacks when metadata/shaper is absent (e.g. scan stopped early)
                 if "data/omega1_axis" in f:
                     w1_arr = np.asarray(f["data/omega1_axis"]).squeeze()
                     if w1_arr.ndim == 1 and w1_arr.size > 1 and not np.all(np.isnan(w1_arr)):
@@ -2005,9 +2061,17 @@ def classify_pymess_h5(filepath: str | Path) -> str:
                 if "t2scan" in stem_low or "chirp" in stem_low:
                     return "shaper_t2_scan"
 
+                if (
+                    "t2" in preset_name
+                    or "chirp" in preset_name
+                    or "single pulse" in preset_name
+                    or "1-pulse" in preset_name
+                ):
+                    return "shaper_t2_scan"
+
                 if ("pp" in fast_mod or "scatter" in fast_mod) and shaper_form != 1:
                     return "shaper_t2_scan"
-                if "2d" in fast_mod:
+                if "2d" in fast_mod or domain_mode == "time_domain" or "time" in scan_mode:
                     return "2d_time_domain"
 
             return "other"
@@ -2091,13 +2155,26 @@ def _pymess_pp_describe(path: Path) -> dict:
                 if raw_state_names
                 else []
             )
-            if (
-                "data/slow_modulation/delta_A_parallel" in f
-                and "data/slow_modulation/delta_A_perpendicular" in f
-            ):
-                k_slow = max(k_slow, 2)
-                if not state_names:
-                    state_names = ["Parallel", "Perpendicular"]
+            if "data/slow_modulation" in f and isinstance(f["data/slow_modulation"], h5py.Group):
+                sm_grp = f["data/slow_modulation"]
+                st_ds_keys = sorted(
+                    [
+                        k
+                        for k in sm_grp.keys()
+                        if k.startswith("state_") and isinstance(sm_grp[k], h5py.Dataset)
+                    ]
+                )
+                if len(st_ds_keys) >= 2:
+                    k_slow = max(k_slow, len(st_ds_keys))
+                    if not state_names:
+                        state_names = [re.sub(r"^state_\d+_", "", k) or k for k in st_ds_keys]
+                elif (
+                    "delta_A_parallel" in sm_grp
+                    and "delta_A_perpendicular" in sm_grp
+                ):
+                    k_slow = max(k_slow, 2)
+                    if not state_names:
+                        state_names = ["Parallel", "Perpendicular"]
 
             for grp_name in ("scans", "data"):
                 if grp_name in f and isinstance(f[grp_name], h5py.Group):
@@ -2140,14 +2217,42 @@ def _read_pymess_shaper_t2_scan(
     load_single_scans: bool = True,
 ) -> LoaderResult:
     """Read a PyMESS 1-pulse shaper t2-delay scan recorded in the 2D tab as a 1D dataset."""
-    if "data/t1_delays_fs" not in f:
+    if "data/t1_delays_fs" not in f and "data/t2_delays_fs" not in f:
         raise ValueError(
             f"File {path.name} is missing /data/t1_delays_fs for shaper t2 scan."
         )
 
-    raw_delays = np.asarray(f["data/t1_delays_fs"][:], dtype=np.float64).squeeze()
+    t1_arr = (
+        np.asarray(f["data/t1_delays_fs"][:], dtype=np.float64).ravel()
+        if "data/t1_delays_fs" in f
+        else np.array([], dtype=np.float64)
+    )
+    t2_arr = (
+        np.asarray(f["data/t2_delays_fs"][:], dtype=np.float64).ravel()
+        if "data/t2_delays_fs" in f
+        else np.array([], dtype=np.float64)
+    )
+    if t1_arr.size <= 1 and t2_arr.size > 1:
+        raw_delays = t2_arr
+        scan_along_t2 = True
+    else:
+        raw_delays = t1_arr
+        scan_along_t2 = False
+
     delays = raw_delays / 1000.0
     unitsT = "ps"
+
+    def _squeeze_t2_mat(arr: np.ndarray) -> np.ndarray:
+        a = np.asarray(arr, dtype=np.float64)
+        if a.ndim == 3:
+            if scan_along_t2 and a.shape[1] == 1:
+                return a[:, 0, :]
+            if a.shape[0] == 1:
+                return a[0, :, :]
+            if a.shape[2] == 1:
+                return a[:, :, 0]
+            return a[0, :, :]
+        return a
 
     meta_dict: dict[str, str] = {}
     if "metadata" in f:
@@ -2163,17 +2268,53 @@ def _read_pymess_shaper_t2_scan(
         else []
     )
 
-    # Check for explicit state_0, state_1... subgroups in /scans or /data
-    state_groups: list[tuple[str, h5py.Group]] = []
-    for parent_key in ("scans", "data"):
-        if parent_key in f and isinstance(f[parent_key], h5py.Group):
-            st_keys = sorted([k for k in f[parent_key].keys() if k.startswith("state_")])
-            if st_keys:
-                state_groups = [(k, f[parent_key][k]) for k in st_keys if isinstance(f[parent_key][k], h5py.Group)]
-                if state_groups:
-                    break
+    # 1. Check for /data/slow_modulation state_00_*, state_01_* datasets (new PyMESS schema)
+    sm_ds_list: list[tuple[str, np.ndarray]] = []
+    if "data/slow_modulation" in f and isinstance(f["data/slow_modulation"], h5py.Group):
+        sm_grp = f["data/slow_modulation"]
+        st_ds_keys = sorted(
+            [
+                k
+                for k in sm_grp.keys()
+                if k.startswith("state_") and isinstance(sm_grp[k], h5py.Dataset)
+            ]
+        )
+        if len(st_ds_keys) >= 2:
+            for k in st_ds_keys:
+                sm_ds_list.append((k, _squeeze_t2_mat(sm_grp[k][:])))
 
-    if state_groups and len(state_groups) >= 2:
+    # 2. Check for explicit state_0, state_1... subgroups in /scans or /data (legacy layout)
+    state_groups: list[tuple[str, h5py.Group]] = []
+    if not sm_ds_list:
+        for parent_key in ("scans", "data"):
+            if parent_key in f and isinstance(f[parent_key], h5py.Group):
+                st_keys = sorted([k for k in f[parent_key].keys() if k.startswith("state_")])
+                if st_keys:
+                    state_groups = [
+                        (k, f[parent_key][k])
+                        for k in st_keys
+                        if isinstance(f[parent_key][k], h5py.Group)
+                    ]
+                    if state_groups:
+                        break
+
+    if sm_ds_list:
+        is_slow_mod = True
+        k_slow = len(sm_ds_list)
+        if not state_names or len(state_names) != k_slow:
+            state_names = [re.sub(r"^state_\d+_", "", k) or k for k, _ in sm_ds_list]
+        Zavg_R = np.stack([mat for _, mat in sm_ds_list], axis=2)
+        valid_rows = ~np.all(np.isnan(Zavg_R[:, :, 0]), axis=1)
+        if not np.all(valid_rows):
+            last_valid = np.where(valid_rows)[0]
+            if len(last_valid) > 0:
+                cut_idx = int(last_valid[-1]) + 1
+                Zavg_R = Zavg_R[:cut_idx, :, :]
+                delays = delays[:cut_idx]
+        Nscans = 1
+        Zss_R = Zavg_R[:, :, :, np.newaxis]
+        Zstdv = np.zeros_like(Zavg_R)
+    elif state_groups and len(state_groups) >= 2:
         is_slow_mod = True
         k_slow = len(state_groups)
         if not state_names or len(state_names) != k_slow:
@@ -2188,14 +2329,14 @@ def _read_pymess_shaper_t2_scan(
                 if sk.startswith("scan_") and isinstance(grp[sk], h5py.Group):
                     for dname in ("interferogram", "interferograms_raw", "delta_A"):
                         if dname in grp[sk]:
-                            s_scans.append(np.asarray(grp[sk][dname][:], dtype=np.float64))
+                            s_scans.append(_squeeze_t2_mat(grp[sk][dname][:]))
                             break
             if "interferograms_raw" in grp:
-                s_avg = np.asarray(grp["interferograms_raw"][:], dtype=np.float64)
+                s_avg = _squeeze_t2_mat(grp["interferograms_raw"][:])
             elif "interferogram" in grp:
-                s_avg = np.asarray(grp["interferogram"][:], dtype=np.float64)
+                s_avg = _squeeze_t2_mat(grp["interferogram"][:])
             elif "delta_A" in grp:
-                s_avg = np.asarray(grp["delta_A"][:], dtype=np.float64)
+                s_avg = _squeeze_t2_mat(grp["delta_A"][:])
             elif s_scans:
                 s_avg = np.nanmean(np.stack(s_scans, axis=0), axis=0)
             else:
@@ -2233,11 +2374,9 @@ def _read_pymess_shaper_t2_scan(
     else:
         # Standard single-state shaper t2 scan
         if "data/interferograms_raw" in f:
-            z_2d = np.asarray(f["data/interferograms_raw"][:], dtype=np.float64)
+            z_2d = _squeeze_t2_mat(f["data/interferograms_raw"][:])
         elif "2D_Spectra/scan_001/interferograms_raw" in f:
-            z_2d = np.asarray(
-                f["2D_Spectra/scan_001/interferograms_raw"][:], dtype=np.float64
-            )
+            z_2d = _squeeze_t2_mat(f["2D_Spectra/scan_001/interferograms_raw"][:])
         else:
             raise ValueError(
                 f"File {path.name} is missing /data/interferograms_raw for shaper t2 scan."
@@ -2246,12 +2385,19 @@ def _read_pymess_shaper_t2_scan(
         # Collect individual sweeps if available
         scan_list: list[np.ndarray] = []
         if load_single_scans:
-            if "scans" in f and isinstance(f["scans"], h5py.Group):
+            if "data/individual_scans" in f and isinstance(f["data/individual_scans"], h5py.Dataset):
+                ind_arr = np.asarray(f["data/individual_scans"][:], dtype=np.float64)
+                if ind_arr.ndim in (3, 4) and ind_arr.shape[0] >= 1:
+                    for s_i in range(ind_arr.shape[0]):
+                        s_mat = _squeeze_t2_mat(ind_arr[s_i])
+                        if s_mat.shape == z_2d.shape:
+                            scan_list.append(s_mat)
+            if not scan_list and "scans" in f and isinstance(f["scans"], h5py.Group):
                 for sk in sorted(f["scans"].keys()):
                     if sk.startswith("scan_") and isinstance(f["scans"][sk], h5py.Group):
                         for dname in ("interferogram", "interferograms_raw", "delta_A"):
                             if dname in f["scans"][sk]:
-                                arr = np.asarray(f["scans"][sk][dname][:], dtype=np.float64)
+                                arr = _squeeze_t2_mat(f["scans"][sk][dname][:])
                                 if arr.shape == z_2d.shape:
                                     scan_list.append(arr)
                                 break
@@ -2261,7 +2407,7 @@ def _read_pymess_shaper_t2_scan(
                     [k for k in sig_grp.keys() if k.isdigit()], key=lambda x: int(x)
                 )
                 for nk in num_keys:
-                    arr = np.asarray(sig_grp[nk][:], dtype=np.float64)
+                    arr = _squeeze_t2_mat(sig_grp[nk][:])
                     if arr.shape == z_2d.shape:
                         scan_list.append(arr)
 
@@ -2329,15 +2475,21 @@ def _read_pymess_shaper_t2_scan(
                 pass
     if "sample_id" in meta_dict and meta_dict["sample_id"]:
         Units["sample"] = meta_dict["sample_id"]
-    if "pump_wl_nm" in meta_dict and meta_dict["pump_wl_nm"]:
-        Units["pump_wl"] = meta_dict["pump_wl_nm"]
+    for wl_key in ("pump_wl_nm", "pump_wavelength_nm"):
+        if wl_key in meta_dict and meta_dict[wl_key]:
+            Units["pump_wl"] = meta_dict[wl_key]
+            break
 
     if "data/intensity" in f:
-        counts = np.asarray(f["data/intensity"][:], dtype=np.float64)
+        counts = _squeeze_t2_mat(f["data/intensity"][:])
         Units["counts"] = counts[: len(delays)]
     elif "data/integrated_channel" in f:
-        counts = np.asarray(f["data/integrated_channel"][:], dtype=np.float64)
+        counts = np.asarray(f["data/integrated_channel"][:], dtype=np.float64).squeeze()
         Units["counts"] = counts[: len(delays)]
+    elif "data/pump_interferogram" in f:
+        counts = np.asarray(f["data/pump_interferogram"][:], dtype=np.float64).squeeze()
+        if counts.ndim == 1:
+            Units["counts"] = counts[: len(delays)]
 
     if "calibration" in f:
         calib_dict = {}
@@ -2426,7 +2578,12 @@ def read_PyMESS_PP(
             raise ValueError(
                 f"File {path.name} is not a valid PyMESS pump-probe dataset (missing /data/delays_fs)."
             )
-        if "data/delta_A" not in f and "data/individual_scans" not in f:
+        if (
+            "data/delta_A" not in f
+            and "data/intensity" not in f
+            and "data/individual_scans" not in f
+            and "data/slow_modulation" not in f
+        ):
             raise ValueError(
                 f"File {path.name} is not a valid PyMESS pump-probe dataset (missing /data/delta_A)."
             )
@@ -2442,6 +2599,8 @@ def read_PyMESS_PP(
         else:
             if "data/delta_A" in f:
                 n_pix = f["data/delta_A"].shape[1]
+            elif "data/intensity" in f:
+                n_pix = f["data/intensity"].shape[1]
             elif "data/individual_scans" in f:
                 n_pix = f["data/individual_scans"].shape[2]
             else:
@@ -2470,7 +2629,9 @@ def read_PyMESS_PP(
         k_slow = int(meta_dict.get("slow_modulation_num_states", 1)) if is_slow_mod else 1
         raw_state_names = meta_dict.get("slow_modulation_state_names", "")
         state_names = (
-            [s.strip() for s in str(raw_state_names).split(",")] if raw_state_names else []
+            [s.strip() for s in str(raw_state_names).split(",") if s.strip()]
+            if raw_state_names
+            else []
         )
 
         indiv_scans = (
@@ -2478,6 +2639,21 @@ def read_PyMESS_PP(
             if "data/individual_scans" in f and f["data/individual_scans"].ndim == 3
             else None
         )
+
+        # Check /data/slow_modulation for state_00_*, state_01_* datasets (new PyMESS schema)
+        sm_state_datasets: list[tuple[str, np.ndarray]] = []
+        if "data/slow_modulation" in f and isinstance(f["data/slow_modulation"], h5py.Group):
+            sm_grp = f["data/slow_modulation"]
+            st_ds_keys = sorted(
+                [
+                    k
+                    for k in sm_grp.keys()
+                    if k.startswith("state_") and isinstance(sm_grp[k], h5py.Dataset)
+                ]
+            )
+            if len(st_ds_keys) >= 2:
+                for k in st_ds_keys:
+                    sm_state_datasets.append((k, np.asarray(sm_grp[k][:], dtype=np.float64)))
 
         if is_slow_mod and k_slow > 1 and indiv_scans is not None and indiv_scans.shape[0] >= k_slow:
             n_total_scans = indiv_scans.shape[0]
@@ -2502,14 +2678,34 @@ def read_PyMESS_PP(
 
             for s_idx in range(k_slow):
                 sweeps = indiv_scans[s_idx : n_repeats * k_slow : k_slow, :, :]
-                with np.errstate(all="ignore"):
-                    Zavg_R[:, :, s_idx] = np.nanmean(sweeps, axis=0) if n_repeats > 1 else sweeps[0]
+                if s_idx < len(sm_state_datasets) and sm_state_datasets[s_idx][1].shape == (Ndelays, Npixels):
+                    Zavg_R[:, :, s_idx] = sm_state_datasets[s_idx][1]
+                else:
+                    with np.errstate(all="ignore"):
+                        Zavg_R[:, :, s_idx] = np.nanmean(sweeps, axis=0) if n_repeats > 1 else sweeps[0]
                 Zss_R[:, :, s_idx, :] = np.transpose(sweeps, (1, 2, 0))
 
             Zstdv = np.zeros_like(Zavg_R)
             if not load_single_scans:
                 Nscans = 1
                 Zss_R = Zavg_R[:, :, :, np.newaxis]
+        elif len(sm_state_datasets) >= 2:
+            is_slow_mod = True
+            k_slow = len(sm_state_datasets)
+            if not state_names or len(state_names) != k_slow:
+                state_names = [re.sub(r"^state_\d+_", "", k) or k for k, _ in sm_state_datasets]
+            s_mats = [mat for _, mat in sm_state_datasets]
+            valid_rows = ~np.all(np.isnan(s_mats[0]), axis=1)
+            if not np.all(valid_rows):
+                last_valid = np.where(valid_rows)[0]
+                if len(last_valid) > 0:
+                    cut_idx = int(last_valid[-1]) + 1
+                    s_mats = [m[:cut_idx, :] for m in s_mats]
+                    delays = delays[:cut_idx]
+            Zavg_R = np.stack(s_mats, axis=2)
+            Zstdv = np.zeros_like(Zavg_R)
+            Nscans = 1
+            Zss_R = Zavg_R[:, :, :, np.newaxis]
         elif (
             "data/slow_modulation/delta_A_parallel" in f
             and "data/slow_modulation/delta_A_perpendicular" in f
@@ -2534,7 +2730,16 @@ def read_PyMESS_PP(
             if not state_names:
                 state_names = ["Parallel", "Perpendicular"]
         else:
-            delta_A = np.asarray(f["data/delta_A"][:], dtype=np.float64)
+            if "data/delta_A" in f:
+                delta_A = np.asarray(f["data/delta_A"][:], dtype=np.float64)
+            elif "data/intensity" in f:
+                delta_A = np.asarray(f["data/intensity"][:], dtype=np.float64)
+            elif indiv_scans is not None:
+                delta_A = np.nanmean(indiv_scans, axis=0)
+            else:
+                raise ValueError(
+                    f"File {path.name} is not a valid PyMESS pump-probe dataset (missing primary matrix)."
+                )
             valid_rows = ~np.all(np.isnan(delta_A), axis=1)
             if not np.all(valid_rows):
                 last_valid = np.where(valid_rows)[0]
@@ -2545,8 +2750,13 @@ def read_PyMESS_PP(
 
             Zavg_R = delta_A[:, :, np.newaxis]
 
-            if "data/delta_A_noise" in f:
-                noise_mat = np.asarray(f["data/delta_A_noise"][:], dtype=np.float64)
+            noise_key = (
+                "data/delta_A_noise"
+                if "data/delta_A_noise" in f
+                else ("data/intensity_noise" if "data/intensity_noise" in f else None)
+            )
+            if noise_key is not None:
+                noise_mat = np.asarray(f[noise_key][:], dtype=np.float64)
                 if not np.all(valid_rows):
                     noise_mat = noise_mat[:len(delays), :]
                 Zstdv = noise_mat[:, :, np.newaxis]
@@ -2585,8 +2795,10 @@ def read_PyMESS_PP(
                     pass
         if "sample_id" in meta_dict and meta_dict["sample_id"]:
             Units["sample"] = meta_dict["sample_id"]
-        if "pump_wl_nm" in meta_dict and meta_dict["pump_wl_nm"]:
-            Units["pump_wl"] = meta_dict["pump_wl_nm"]
+        for wl_key in ("pump_wl_nm", "pump_wavelength_nm"):
+            if wl_key in meta_dict and meta_dict[wl_key]:
+                Units["pump_wl"] = meta_dict[wl_key]
+                break
 
         # 5. Raw Intensity / Accumulation Counts (if present)
         if "data/intensity" in f:
@@ -2608,8 +2820,10 @@ def read_PyMESS_PP(
             info_lines.append(f"Sample: {meta_dict['sample_id']}")
         if "solvent" in meta_dict and meta_dict["solvent"]:
             info_lines.append(f"Solvent: {meta_dict['solvent']}")
-        if "pump_wl_nm" in meta_dict and meta_dict["pump_wl_nm"]:
-            info_lines.append(f"Pump Wavelength: {meta_dict['pump_wl_nm']} nm")
+        for wl_key in ("pump_wl_nm", "pump_wavelength_nm"):
+            if wl_key in meta_dict and meta_dict[wl_key]:
+                info_lines.append(f"Pump Wavelength: {meta_dict[wl_key]} nm")
+                break
         if "pump_power_mw" in meta_dict and meta_dict["pump_power_mw"]:
             info_lines.append(f"Pump Power: {meta_dict['pump_power_mw']} mW")
         if "pump_polarization" in meta_dict and meta_dict["pump_polarization"]:
