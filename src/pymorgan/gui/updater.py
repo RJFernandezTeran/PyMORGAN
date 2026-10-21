@@ -1179,58 +1179,65 @@ def check_for_updates_background(
     current_version: str,
     app_name: str,
     force: bool = False,
+    show_popup: bool = True,
 ) -> None:
-    """Run a quiet, passive update check in the background (checks both release and main)."""
-    settings = QSettings("RJFernandezTeran", app_name)
-    now = time.time()
-    last_check = float(settings.value("last_update_check", 0) or 0)
-    if not force and (now - last_check < 86400):
-        return
-
-    settings.setValue("last_update_check", now)
-
+    """Check for updates on startup (both release and main) and notify the user with a popup."""
     worker = UpdateCheckWorker(github_url, current_version, window)
 
     def on_success(info: UpdateInfo):
-        if not info.is_update_available or not hasattr(window, "statusBar"):
+        if not info.is_update_available:
             return
 
-        sb = window.statusBar()
-        if sb is None:
-            return
+        if hasattr(window, "statusBar"):
+            sb = window.statusBar()
+            if sb is not None and sb.findChild(QPushButton, "btnStatusUpdateNotification") is None:
+                channel_tag = (
+                    " (main)"
+                    if info.has_bleeding_edge_update and not info.has_release_update
+                    else ""
+                )
+                btn = QPushButton(
+                    f"Update Available: {app_name} v{info.latest_version}{channel_tag}"
+                )
+                btn.setObjectName("btnStatusUpdateNotification")
+                btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                btn.setToolTip(
+                    "A newer version is available on GitHub! Click to sync or download."
+                )
+                btn.setStyleSheet("""
+                    QPushButton#btnStatusUpdateNotification {
+                        background-color: #2563eb;
+                        color: #ffffff;
+                        font-weight: bold;
+                        font-size: 11px;
+                        border-radius: 4px;
+                        padding: 3px 10px;
+                        border: 1px solid #60a5fa;
+                    }
+                    QPushButton#btnStatusUpdateNotification:hover {
+                        background-color: #1d4ed8;
+                    }
+                """)
 
-        existing_btn = sb.findChild(QPushButton, "btnStatusUpdateNotification")
-        if existing_btn is not None:
-            return
+                def on_click():
+                    dlg = UpdateDialog(info, app_name, window)
+                    dlg.exec()
 
-        channel_tag = (
-            " (main)" if info.has_bleeding_edge_update and not info.has_release_update else ""
-        )
-        btn = QPushButton(f"Update Available: {app_name} v{info.latest_version}{channel_tag}")
-        btn.setObjectName("btnStatusUpdateNotification")
-        btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn.setToolTip("A newer version is available on GitHub! Click to sync or download.")
-        btn.setStyleSheet("""
-            QPushButton#btnStatusUpdateNotification {
-                background-color: #2563eb;
-                color: #ffffff;
-                font-weight: bold;
-                font-size: 11px;
-                border-radius: 4px;
-                padding: 3px 10px;
-                border: 1px solid #60a5fa;
-            }
-            QPushButton#btnStatusUpdateNotification:hover {
-                background-color: #1d4ed8;
-            }
-        """)
+                btn.clicked.connect(on_click)
+                sb.addPermanentWidget(btn)
 
-        def on_click():
+        if show_popup and window.isVisible():
+            shared_settings = QSettings("RJFernandezTeran", "PyMORGAN_Suite_Updater")
+            now = time.time()
+            last_popup_ts = float(shared_settings.value("last_popup_ts", 0) or 0)
+            last_popup_ver = str(shared_settings.value("last_popup_ver", "") or "")
+            # Avoid duplicate popup within 45s if user just dismissed it in Suite Launcher
+            if not force and last_popup_ver == info.latest_version and (now - last_popup_ts < 45):
+                return
+            shared_settings.setValue("last_popup_ts", now)
+            shared_settings.setValue("last_popup_ver", info.latest_version)
             dlg = UpdateDialog(info, app_name, window)
             dlg.exec()
-
-        btn.clicked.connect(on_click)
-        sb.addPermanentWidget(btn)
 
     worker.check_finished.connect(on_success)
     worker.start()

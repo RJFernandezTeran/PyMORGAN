@@ -607,6 +607,16 @@ class SuiteLauncherDialog(QDialog):
                         "background-color: #0d9488; }"
                         "QPushButton:hover { background-color: #0f766e; }"
                     )
+                    if self.isVisible():
+                        import time
+                        from PyQt6.QtCore import QSettings
+                        from pymorgan.gui.updater import UpdateDialog
+
+                        shared_settings = QSettings("RJFernandezTeran", "PyMORGAN_Suite_Updater")
+                        shared_settings.setValue("last_popup_ts", time.time())
+                        shared_settings.setValue("last_popup_ver", info.latest_version)
+                        dlg = UpdateDialog(info, "PyMORGAN Suite", self)
+                        dlg.exec()
 
             worker.check_finished.connect(_on_bg_info)
             worker.start()

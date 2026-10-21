@@ -6,7 +6,7 @@
 
 [![PyPI - Version](https://img.shields.io/pypi/v/pymorgan.svg?logo=pypi&logoColor=white&label=PyPI)](https://pypi.org/project/pymorgan/)
 [![GitHub Release](https://img.shields.io/github/v/release/RJFernandezTeran/PyMORGAN?logo=github&label=Release)](https://github.com/RJFernandezTeran/PyMORGAN/releases)
-[![Python >= 3.12](https://img.shields.io/badge/python-%3E%3D3.12-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
+[![Python >= 3.11](https://img.shields.io/badge/python-%3E%3D3.11-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
 [![GUI: PyQt6](https://img.shields.io/badge/GUI-PyQt6-41CD52.svg?logo=qt&logoColor=white)](https://riverbankcomputing.com/software/pyqt/)
 [![uv](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/uv/main/assets/badge/v0.json)](https://github.com/astral-sh/uv)
 [![Code style: Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
@@ -151,16 +151,38 @@ PyMORGAN includes built-in loaders for a wide range of ultrafast time-resolved s
 
 ## Installation
 
-### From PyPI (Recommended)
+### 1. Standalone Desktop Suite Installer (Windows, macOS & Linux)
 
-Install the latest release directly from [PyPI](https://pypi.org/project/pymorgan/):
+If you want to run the **PyMORGAN** and **PyRATE-TA** desktop applications immediately without setting up Python, download the latest **PyMORGAN Suite** installer for your operating system from [**GitHub Releases**](https://github.com/RJFernandezTeran/PyMORGAN/releases):
+
+- **Windows:** `PyMORGAN_Suite_Setup_v*.exe` (or portable `.zip`)
+- **macOS:** `PyMORGAN_Suite_v*-macOS.dmg`
+- **Linux:** `PyMORGAN_Suite_v*-Linux.tar.gz`
+
+The standalone installer bundles **PyMORGAN**, **PyRATE-TA**, the unified **PyMORGAN Suite Launcher**, and the **TeX Gyre Heros** fonts.
+
+- **Automatic Update Notifications & Bleeding-Edge Sync:** On startup, the application checks GitHub and pops up the **Update & Sync Center** whenever a new version is available. You can click **Sync Bleeding-Edge (`main`)** to pull the latest pure-Python updates for both PyMORGAN and PyRATE-TA in seconds without reinstalling, or **Download Installer** for a full release upgrade.
+
+---
+
+### 2. Using PyMORGAN & PyRATE-TA in Your Own Python Environment (Conda, Jupyter, Spyder, VS Code)
+
+You can use `import pymorgan as pm` and `import pyrate_ta as pr` in any **Python $\ge 3.11$** environment in two ways:
+
+#### Option A — 1-Click Local Python Setup (Recommended if you installed the Suite)
+Open the **PyMORGAN Suite Launcher** and click **Setup in Local Python...** (also accessible inside PyMORGAN or PyRATE-TA via *Help → About → Setup in Python...*, or from the terminal via `pymorgan-setup-env` / `python scripts/setup_local_python.py`):
+1. Automatically discovers all Python $\ge 3.11$ environments on your computer (Conda/Miniconda/Mamba environments, Homebrew/system Python, `pyenv`, `uv`, or custom virtualenvs).
+2. **Live-Linked `.pth` Bridge:** Installs only any missing third-party packages, configures **TeX Gyre Heros** in that environment's Matplotlib cache, and links `pymorgan` and `pyrate_ta` via `pymorgan_suite.pth`—so whenever you click **Sync Bleeding-Edge** in the desktop GUI, your native Jupyter/Spyder/VS Code environment is automatically updated at the same time!
+
+#### Option B — Install Directly from PyPI (`pip` / `uv`)
+Install the latest release directly from [PyPI](https://pypi.org/project/pymorgan/) into any Python $\ge 3.11$ environment:
 
 ```bash
-pip install pymorgan
+pip install -U pymorgan pyrate-ta
 # or with uv:
-uv pip install pymorgan
+uv pip install -U pymorgan pyrate-ta
 
-# After installation, register bundled fonts in matplotlib:
+# Register bundled TeX Gyre Heros fonts in Matplotlib:
 pymorgan-install-fonts
 ```
 
@@ -169,7 +191,9 @@ You can also run the GUI directly without installing using [`uvx`](https://docs.
 uvx --from pymorgan pymorgan-gui
 ```
 
-### From Source (Development)
+---
+
+### 3. From Source (Development)
 
 Clone the repository and install in editable mode with [uv](https://docs.astral.sh/uv/):
 
@@ -177,7 +201,7 @@ Clone the repository and install in editable mode with [uv](https://docs.astral.
 git clone https://github.com/RJFernandezTeran/PyMORGAN.git
 cd PyMORGAN
 
-uv venv                       # create .venv (Python >= 3.12)
+uv venv                       # create .venv (Python >= 3.11)
 
 # Install the package (choose one):
 uv pip install -e .           # core workflow (includes PyQt6 GUI)
@@ -192,8 +216,10 @@ Console scripts installed with the package:
 
 | Script | Purpose |
 |--------|--------|
-| `pymorgan-gui` | Launch the graphical interface |
-| `pymorgan-install-fonts` | Install bundled fonts into matplotlib |
+| `pymorgan-suite` | Launch the unified PyMORGAN & PyRATE-TA Suite Launcher |
+| `pymorgan-gui` | Launch the PyMORGAN graphical interface directly |
+| `pymorgan-setup-env` | Configure a local Conda / system / virtualenv Python to import `pymorgan` & `pyrate_ta` |
+| `pymorgan-install-fonts` | Install bundled TeX Gyre Heros fonts into Matplotlib |
 | `pymorgan-edit-gui` | Open the GUI layout in Qt Designer |
 | `pymorgan-settings` | Standalone settings editor (no data loaded) |
 
@@ -256,8 +282,9 @@ Additional interactive dialogs:
   (per-pixel IRF-convoluted) solvent response removal.
 - **Shockwave subtraction** (`Subtract Shockwave…`) — removes correlated
   acoustic artefacts by selecting a reference pixel range.
-- **Make Movie** (`Make Movie…`) — exports a GIF or MP4 animation of 2-D maps
-  stepping through all population times $t_2$.
+- **Make Movie** (`Make Movie…`) — exports a lightweight, high-compatibility animated
+  **GIF**, **WebP**, or **APNG** movie of 2-D maps stepping through all population times $t_2$
+  (powered natively by Pillow with zero external `ffmpeg` dependency).
 
 The 1-D and 2-D dataset lists share one root folder and stay in sync; long
 operations disable the interface while they run; and *View → Restore Default
