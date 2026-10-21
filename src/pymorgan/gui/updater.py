@@ -1,13 +1,14 @@
 """GitHub Releases and Bleeding-Edge (main branch) updater for PyMORGAN and PyRATE-TA.
 
 Provides non-blocking background update checking against both official GitHub
-Releases and the repository ``main`` branch``__about__.py`` ("Bleeding Edge"),
+Releases and the repository ``main`` branch ``__about__.py`` ("Bleeding Edge"),
 version comparison via ``packaging.version``, one-click bleeding-edge source
 code syncing, and direct platform installer download.
 """
 
 from __future__ import annotations
 
+import html
 import json
 import os
 import re
@@ -116,7 +117,9 @@ def _select_platform_asset(assets: list[dict[str, Any]]) -> dict[str, Any] | Non
     return None
 
 
-def _fetch_bleeding_edge_metadata(repo_slug: str, timeout: float = 5.0) -> tuple[str, str, str, str]:
+def _fetch_bleeding_edge_metadata(
+    repo_slug: str, timeout: float = 5.0
+) -> tuple[str, str, str, str]:
     """Fetch __version__ and latest commit info from the repository's main branch."""
     pkg_dir = "pyrate_ta" if "pyrate" in repo_slug.lower() else "pymorgan"
     raw_url = f"https://raw.githubusercontent.com/{repo_slug}/main/src/{pkg_dir}/__about__.py"
@@ -220,28 +223,14 @@ def fetch_latest_release(
         latest_ver = be_ver or release_ver or current_version
 
     if not release_name:
-        release_name = f"v{latest_ver} (main)"
-
-    notes_parts: list[str] = []
-    if be_ver:
-        commit_info = f" (`{be_sha}` on {be_date})" if be_sha else ""
-        msg_info = f"\n- **Latest commit on `main`:** {be_msg}" if be_msg else ""
-        notes_parts.append(
-            f"### Bleeding-Edge (`main` branch): `v{be_ver}`{commit_info}{msg_info}\n"
-            "You can sync the pure-Python code directly from the `main` branch using "
-            "**Sync Bleeding-Edge (`main`)** below without waiting for a full installer build."
-        )
-    if release_notes:
-        notes_parts.append(f"### Official Release Notes ({release_name})\n{release_notes}")
-    elif not notes_parts:
-        notes_parts.append("No release notes provided.")
+        release_name = f"v{latest_ver}"
 
     return UpdateInfo(
         is_update_available=update_avail,
         current_version=normalize_version(current_version),
         latest_version=latest_ver,
         release_name=release_name,
-        release_notes="\n\n---\n\n".join(notes_parts),
+        release_notes=release_notes,
         html_url=html_url,
         published_at=published_at or be_date,
         installer_asset=installer_asset,
@@ -252,6 +241,147 @@ def fetch_latest_release(
         bleeding_edge_message=be_msg,
         has_release_update=has_rel_update,
         has_bleeding_edge_update=has_be_update,
+    )
+
+
+def _is_dark_mode() -> bool:
+    """Detect whether the host Qt application uses a dark palette."""
+    try:
+        from pymorgan.gui.theme import is_dark_palette
+
+        return bool(is_dark_palette())
+    except Exception:
+        return False
+
+
+def _markdown_to_styled_html(md_text: str, dark: bool) -> str:
+    """Convert simple GitHub release-note markdown into high-contrast HTML without Qt's broken code spans."""
+    if not md_text.strip():
+        return ""
+    fg = "#e2e8f0" if dark else "#1e293b"
+    h_color = "#60a5fa" if dark else "#1d4ed8"
+    code_bg = "#0f172a" if dark else "#f1f5f9"
+    code_fg = "#38bdf8" if dark else "#0f172a"
+    code_border = "#334155" if dark else "#cbd5e1"
+    link_color = "#38bdf8" if dark else "#2563eb"
+
+    lines_out: list[str] = []
+    in_list = False
+
+    def _inline(text: str) -> str:
+        esc = html.escape(text)
+        # Inline code `...`
+        esc = re.sub(
+            r"`([^`]+)`",
+            rf'<span style="font-family: Consolas, monospace; background-color: {code_bg}; '
+            rf'color: {code_fg}; border: 1px solid {code_border}; border-radius: 3px; padding: 1px 4px;">\1</span>',
+            esc,
+        )
+        # Bold **...**
+        esc = re.sub(r"\*\*([^*]+)\*\*", r"<b>\1</b>", esc)
+        # Links [label](url)
+        esc = re.sub(
+            r"\[([^\]]+)\]\((https?://[^\)]+)\)",
+            rf'<a href="\2" style="color: {link_color}; text-decoration: underline;">\1</a>',
+            esc,
+        )
+        return esc
+
+    for raw_line in md_text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            if in_list:
+                lines_out.append("</ul>")
+                in_list = False
+            continue
+        if line.startswith("### ") or line.startswith("## ") or line.startswith("# "):
+            if in_list:
+                lines_out.append("</ul>")
+                in_list = False
+            heading = line.lstrip("#").strip()
+            lines_out.append(
+                f'<div style="color: {h_color}; font-weight: bold; font-size: 12.5px; '
+                f'margin-top: 8px; margin-bottom: 4px;">{_inline(heading)}</div>'
+            )
+        elif line.startswith(("- ", "* ")):
+            if not in_list:
+                lines_out.append(
+                    f'<ul style="margin-top: 2px; margin-bottom: 6px; padding-left: 18px; color: {fg};">'
+                )
+                in_list = True
+            lines_out.append(f'<li style="margin-bottom: 3px;">{_inline(line[2:].strip())}</li>')
+        else:
+            if in_list:
+                lines_out.append("</ul>")
+                in_list = False
+            lines_out.append(
+                f'<p style="margin-top: 3px; margin-bottom: 5px; color: {fg};">{_inline(line)}</p>'
+            )
+
+    if in_list:
+        lines_out.append("</ul>")
+    return "\n".join(lines_out)
+
+
+def _build_notes_html(info: UpdateInfo, dark: bool) -> str:
+    """Build crisp, high-contrast HTML for the UpdateDialog release notes view."""
+    fg = "#f1f5f9" if dark else "#0f172a"
+    muted = "#94a3b8" if dark else "#475569"
+    h_be = "#34d399" if dark else "#0f766e"
+    h_rel = "#60a5fa" if dark else "#1d4ed8"
+    code_bg = "#0f172a" if dark else "#f1f5f9"
+    code_fg = "#38bdf8" if dark else "#0f172a"
+    hr_color = "#334155" if dark else "#e2e8f0"
+
+    sections: list[str] = []
+
+    if info.bleeding_edge_version:
+        commit_badge = ""
+        if info.bleeding_edge_commit:
+            date_str = f" on {html.escape(info.bleeding_edge_date)}" if info.bleeding_edge_date else ""
+            commit_badge = (
+                f' &nbsp;<span style="font-family: Consolas, monospace; background-color: {code_bg}; '
+                f'color: {code_fg}; padding: 1px 5px; border-radius: 3px;">'
+                f"{html.escape(info.bleeding_edge_commit)}</span>"
+                f'<span style="color: {muted}; font-weight: normal;">{date_str}</span>'
+            )
+        msg_html = ""
+        if info.bleeding_edge_message:
+            msg_html = (
+                f'<div style="margin-top: 4px; margin-bottom: 4px; color: {fg};">'
+                f"<b>Latest commit on main:</b> {html.escape(info.bleeding_edge_message)}</div>"
+            )
+        sections.append(
+            f'<div style="color: {h_be}; font-weight: bold; font-size: 13px; margin-bottom: 4px;">'
+            f"Bleeding-Edge Channel (main): v{html.escape(info.bleeding_edge_version)}{commit_badge}</div>"
+            f"{msg_html}"
+            f'<div style="color: {muted}; font-size: 11.5px; margin-bottom: 6px;">'
+            f"Syncs pure-Python code directly from the <b>main</b> branch for both PyMORGAN and PyRATE-TA.</div>"
+        )
+
+    if info.release_notes:
+        rel_html = _markdown_to_styled_html(info.release_notes, dark)
+        sections.append(
+            f'<div style="color: {h_rel}; font-weight: bold; font-size: 13px; margin-bottom: 4px;">'
+            f"Official Release ({html.escape(info.release_name)})</div>"
+            f"{rel_html}"
+        )
+    elif info.release_version:
+        sections.append(
+            f'<div style="color: {h_rel}; font-weight: bold; font-size: 13px; margin-bottom: 4px;">'
+            f"Official Release: v{html.escape(info.release_version)}</div>"
+            f'<div style="color: {muted}; font-size: 11.5px;">'
+            f"Full standalone installer bundle with pre-compiled dependencies.</div>"
+        )
+
+    if not sections:
+        sections.append(f'<div style="color: {muted};">No release notes provided.</div>')
+
+    divider = f'<hr style="border: 0; border-top: 1px solid {hr_color}; margin: 10px 0;">'
+    body = divider.join(sections)
+    return (
+        f'<div style="font-family: \'Segoe UI\', -apple-system, Arial, sans-serif; '
+        f'font-size: 12px; color: {fg}; line-height: 1.45;">{body}</div>'
     )
 
 
@@ -396,7 +526,11 @@ class BleedingEdgeSyncWorker(QThread):
             )
 
             # Always also populate BLEEDING_EDGE_DIR if frozen or if overlay is used
-            if pm_target == BLEEDING_EDGE_DIR or pr_target == BLEEDING_EDGE_DIR or getattr(sys, "frozen", False):
+            if (
+                pm_target == BLEEDING_EDGE_DIR
+                or pr_target == BLEEDING_EDGE_DIR
+                or getattr(sys, "frozen", False)
+            ):
                 BLEEDING_EDGE_DIR.mkdir(parents=True, exist_ok=True)
                 meta = {
                     "pymorgan_version": pm_ver,
@@ -418,7 +552,7 @@ class DownloadWorker(QThread):
     """Background worker to download an installer asset."""
 
     progress = pyqtSignal(int, int)  # bytes_downloaded, total_bytes
-    finished = pyqtSignal(str)       # local_file_path
+    finished = pyqtSignal(str)  # local_file_path
     failed = pyqtSignal(str)
 
     def __init__(self, download_url: str, file_name: str, parent: QWidget | None = None):
@@ -470,8 +604,10 @@ class UpdateDialog(QDialog):
         parent: QWidget | None = None,
     ):
         super().__init__(parent)
+        self.setObjectName("UpdateCenterDialog")
         self.info = info
         self.app_name = app_name
+        self._dark = _is_dark_mode()
         self._download_worker: DownloadWorker | None = None
         self._sync_worker: BleedingEdgeSyncWorker | None = None
 
@@ -480,89 +616,192 @@ class UpdateDialog(QDialog):
         self.setFixedSize(620, 520)
         self.setModal(True)
 
-        self.setStyleSheet("""
-            QDialog {
-                background-color: #0f172a;
-                color: #e2e8f0;
-                font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Arial, sans-serif;
-            }
-            QFrame#headerBox {
-                background-color: #1e293b;
-                border: 1px solid #3b82f6;
-                border-radius: 8px;
-                padding: 12px;
-            }
-            QLabel {
-                color: #e2e8f0;
-                border: none;
-                background: transparent;
-            }
-            QLabel#lblHeadline {
-                color: #60a5fa;
-                font-size: 15px;
-                font-weight: bold;
-            }
-            QLabel#lblNotes {
-                color: #f1f5f9;
-                font-size: 13px;
-                font-weight: bold;
-            }
-            QLabel#lblVersionBadge {
-                color: #cbd5e1;
-                font-size: 12px;
-            }
-            QTextBrowser {
-                background-color: #1e293b;
-                color: #f1f5f9;
-                border: 1px solid #334155;
-                border-radius: 6px;
-                padding: 10px;
-                font-size: 12px;
-            }
-            QPushButton {
-                background-color: #1e293b;
-                color: #93c5fd;
-                border: 1px solid #3b82f6;
-                border-radius: 5px;
-                padding: 7px 14px;
-                font-weight: bold;
-                font-size: 12px;
-            }
-            QPushButton:hover {
-                background-color: #2563eb;
-                color: #ffffff;
-            }
-            QPushButton#btnPrimary {
-                background-color: #2563eb;
-                color: #ffffff;
-                border: 1px solid #60a5fa;
-            }
-            QPushButton#btnPrimary:hover {
-                background-color: #1d4ed8;
-            }
-            QPushButton#btnBleedingEdge {
-                background-color: #0d9488;
-                color: #ffffff;
-                border: 1px solid #2dd4bf;
-            }
-            QPushButton#btnBleedingEdge:hover {
-                background-color: #0f766e;
-            }
-            QProgressBar {
-                border: 1px solid #334155;
-                border-radius: 4px;
-                background-color: #1e293b;
-                text-align: center;
-                color: #ffffff;
-                height: 20px;
-            }
-            QProgressBar::chunk {
-                background-color: #0d9488;
-                border-radius: 3px;
-            }
-        """)
-
+        self._apply_theme_stylesheet()
         self._setup_ui()
+
+    def _apply_theme_stylesheet(self) -> None:
+        if self._dark:
+            self.setStyleSheet("""
+                QDialog#UpdateCenterDialog {
+                    background-color: #181c24;
+                    color: #f1f5f9;
+                    font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Arial, sans-serif;
+                }
+                QDialog#UpdateCenterDialog QFrame#headerBox {
+                    background-color: #222834;
+                    border: 1px solid #3b82f6;
+                    border-radius: 8px;
+                    padding: 12px;
+                }
+                QDialog#UpdateCenterDialog QLabel {
+                    color: #f1f5f9;
+                    border: none;
+                    background: transparent;
+                }
+                QDialog#UpdateCenterDialog QLabel#lblHeadline {
+                    color: #60a5fa;
+                    font-size: 15px;
+                    font-weight: bold;
+                }
+                QDialog#UpdateCenterDialog QLabel#lblNotes {
+                    color: #f1f5f9;
+                    font-size: 13px;
+                    font-weight: bold;
+                }
+                QDialog#UpdateCenterDialog QLabel#lblVersionBadge {
+                    color: #cbd5e1;
+                    font-size: 12px;
+                }
+                QDialog#UpdateCenterDialog QTextBrowser {
+                    background-color: #12161d;
+                    color: #f1f5f9;
+                    border: 1px solid #334155;
+                    border-radius: 6px;
+                    padding: 10px;
+                    font-size: 12px;
+                }
+                QDialog#UpdateCenterDialog QPushButton {
+                    background-color: #222834;
+                    color: #e2e8f0;
+                    border: 1px solid #475569;
+                    border-radius: 6px;
+                    padding: 6px 14px;
+                    font-weight: bold;
+                    font-size: 12px;
+                }
+                QDialog#UpdateCenterDialog QPushButton:hover {
+                    background-color: #334155;
+                    color: #ffffff;
+                }
+                QDialog#UpdateCenterDialog QPushButton#btnPrimary {
+                    background-color: #2563eb;
+                    color: #ffffff;
+                    border: 1px solid #60a5fa;
+                }
+                QDialog#UpdateCenterDialog QPushButton#btnPrimary:hover {
+                    background-color: #1d4ed8;
+                }
+                QDialog#UpdateCenterDialog QPushButton#btnBleedingEdge {
+                    background-color: #0d9488;
+                    color: #ffffff;
+                    border: 1px solid #2dd4bf;
+                }
+                QDialog#UpdateCenterDialog QPushButton#btnBleedingEdge:hover {
+                    background-color: #0f766e;
+                }
+                QDialog#UpdateCenterDialog QProgressBar {
+                    border: 1px solid #334155;
+                    border-radius: 4px;
+                    background-color: #12161d;
+                    text-align: center;
+                    color: #ffffff;
+                    height: 20px;
+                }
+                QDialog#UpdateCenterDialog QProgressBar::chunk {
+                    background-color: #0d9488;
+                    border-radius: 3px;
+                }
+            """)
+        else:
+            self.setStyleSheet("""
+                QDialog#UpdateCenterDialog {
+                    background-color: #f8fafc;
+                    color: #0f172a;
+                    font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Arial, sans-serif;
+                }
+                QDialog#UpdateCenterDialog QFrame#headerBox {
+                    background-color: #ffffff;
+                    border: 1px solid #93c5fd;
+                    border-left: 4px solid #2563eb;
+                    border-radius: 8px;
+                    padding: 12px;
+                }
+                QDialog#UpdateCenterDialog QLabel {
+                    color: #0f172a;
+                    border: none;
+                    background: transparent;
+                }
+                QDialog#UpdateCenterDialog QLabel#lblHeadline {
+                    color: #1d4ed8;
+                    font-size: 15px;
+                    font-weight: bold;
+                }
+                QDialog#UpdateCenterDialog QLabel#lblNotes {
+                    color: #0f172a;
+                    font-size: 13px;
+                    font-weight: bold;
+                }
+                QDialog#UpdateCenterDialog QLabel#lblVersionBadge {
+                    color: #334155;
+                    font-size: 12px;
+                }
+                QDialog#UpdateCenterDialog QTextBrowser {
+                    background-color: #ffffff;
+                    color: #0f172a;
+                    border: 1px solid #cbd5e1;
+                    border-radius: 6px;
+                    padding: 10px;
+                    font-size: 12px;
+                }
+                QDialog#UpdateCenterDialog QPushButton {
+                    background-color: #ffffff;
+                    color: #1e293b;
+                    border: 1px solid #cbd5e1;
+                    border-radius: 6px;
+                    padding: 6px 14px;
+                    font-weight: bold;
+                    font-size: 12px;
+                }
+                QDialog#UpdateCenterDialog QPushButton:hover {
+                    background-color: #e2e8f0;
+                    color: #0f172a;
+                }
+                QDialog#UpdateCenterDialog QPushButton#btnPrimary {
+                    background-color: #2563eb;
+                    color: #ffffff;
+                    border: 1px solid #1d4ed8;
+                }
+                QDialog#UpdateCenterDialog QPushButton#btnPrimary:hover {
+                    background-color: #1d4ed8;
+                }
+                QDialog#UpdateCenterDialog QPushButton#btnBleedingEdge {
+                    background-color: #0d9488;
+                    color: #ffffff;
+                    border: 1px solid #0f766e;
+                }
+                QDialog#UpdateCenterDialog QPushButton#btnBleedingEdge:hover {
+                    background-color: #0f766e;
+                }
+                QDialog#UpdateCenterDialog QProgressBar {
+                    border: 1px solid #cbd5e1;
+                    border-radius: 4px;
+                    background-color: #e2e8f0;
+                    text-align: center;
+                    color: #0f172a;
+                    font-weight: bold;
+                    height: 20px;
+                }
+                QDialog#UpdateCenterDialog QProgressBar::chunk {
+                    background-color: #0d9488;
+                    border-radius: 3px;
+                }
+            """)
+
+    def _default_sync_button_text(self) -> str:
+        ver_sub = (
+            f"main \u00b7 v{self.info.bleeding_edge_version}"
+            if self.info.bleeding_edge_version
+            else "main branch"
+        )
+        return f"Sync Bleeding-Edge\n{ver_sub}"
+
+    def _default_download_button_text(self) -> str:
+        ver_sub = (
+            f"Release \u00b7 v{self.info.release_version}"
+            if self.info.release_version
+            else "Official Setup"
+        )
+        return f"Download Installer\n{ver_sub}"
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -585,14 +824,19 @@ class UpdateDialog(QDialog):
         h_layout.addWidget(lbl_head)
 
         rel_str = f"v{self.info.release_version}" if self.info.release_version else "N/A"
-        be_str = f"v{self.info.bleeding_edge_version}" if self.info.bleeding_edge_version else "N/A"
+        be_str = (
+            f"v{self.info.bleeding_edge_version}" if self.info.bleeding_edge_version else "N/A"
+        )
         if self.info.bleeding_edge_commit:
             be_str += f" ({self.info.bleeding_edge_commit})"
 
+        rel_color = "#38bdf8" if self._dark else "#0284c7"
+        be_color = "#4ade80" if self._dark else "#0d9488"
+
         badge_text = (
             f"<b>Installed:</b> v{self.info.current_version} &nbsp;&nbsp;|&nbsp;&nbsp; "
-            f"<b>Latest Release:</b> <span style='color: #38bdf8;'>{rel_str}</span> &nbsp;&nbsp;|&nbsp;&nbsp; "
-            f"<b>Bleeding Edge (main):</b> <span style='color: #4ade80;'>{be_str}</span>"
+            f"<b>Latest Release:</b> <span style='color: {rel_color}; font-weight: bold;'>{rel_str}</span> &nbsp;&nbsp;|&nbsp;&nbsp; "
+            f"<b>Bleeding Edge (main):</b> <span style='color: {be_color}; font-weight: bold;'>{be_str}</span>"
         )
         lbl_badge = QLabel(badge_text)
         lbl_badge.setObjectName("lblVersionBadge")
@@ -602,20 +846,13 @@ class UpdateDialog(QDialog):
         layout.addWidget(header)
 
         # Release Notes Title & Box
-        lbl_notes = QLabel("<b>Channel Details & Release Notes:</b>")
+        lbl_notes = QLabel("<b>Channel Details &amp; Release Notes:</b>")
         lbl_notes.setObjectName("lblNotes")
         layout.addWidget(lbl_notes)
 
         self.text_notes = QTextBrowser()
         self.text_notes.setOpenExternalLinks(True)
-        self.text_notes.document().setDefaultStyleSheet("""
-            body, p, li, span, div { color: #f1f5f9; font-size: 12px; line-height: 1.45; }
-            h1, h2, h3, h4 { color: #60a5fa; font-weight: bold; margin-top: 6px; margin-bottom: 4px; }
-            code, pre { background-color: #0f172a; color: #38bdf8; font-family: monospace; border-radius: 3px; padding: 2px 4px; }
-            a { color: #38bdf8; text-decoration: underline; }
-            ul, ol { margin-left: 14px; margin-top: 2px; margin-bottom: 4px; }
-        """)
-        self.text_notes.setMarkdown(self.info.release_notes)
+        self.text_notes.setHtml(_build_notes_html(self.info, self._dark))
         layout.addWidget(self.text_notes, 1)
 
         # Progress bar (hidden by default)
@@ -623,17 +860,13 @@ class UpdateDialog(QDialog):
         self.progress_bar.setVisible(False)
         layout.addWidget(self.progress_bar)
 
-        # Button row
+        # Button row (2-line stacked action buttons)
         btn_layout = QHBoxLayout()
-        btn_layout.setSpacing(8)
+        btn_layout.setSpacing(10)
 
-        sync_label = (
-            f"Sync Bleeding-Edge (v{self.info.bleeding_edge_version})"
-            if self.info.has_bleeding_edge_update
-            else "Sync Bleeding-Edge (main)"
-        )
-        self.btn_sync_be = QPushButton(sync_label)
+        self.btn_sync_be = QPushButton(self._default_sync_button_text())
         self.btn_sync_be.setObjectName("btnBleedingEdge")
+        self.btn_sync_be.setMinimumHeight(44)
         self.btn_sync_be.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_sync_be.setToolTip(
             "Download and sync the latest pure-Python code directly from the GitHub main branch "
@@ -644,20 +877,25 @@ class UpdateDialog(QDialog):
 
         if self.info.installer_asset:
             asset_name = self.info.installer_asset.get("name", "Installer")
-            self.btn_download = QPushButton(f"Download Installer ({asset_name})")
+            self.btn_download = QPushButton(self._default_download_button_text())
             self.btn_download.setObjectName("btnPrimary")
+            self.btn_download.setMinimumHeight(44)
             self.btn_download.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.btn_download.setToolTip(f"Download official release installer: {asset_name}")
             self.btn_download.clicked.connect(self._on_download_installer)
             btn_layout.addWidget(self.btn_download)
 
         self.btn_github = QPushButton("GitHub")
+        self.btn_github.setMinimumHeight(44)
         self.btn_github.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_github.setToolTip(f"Open {self.info.html_url} in your browser")
         self.btn_github.clicked.connect(self._on_open_github)
         btn_layout.addWidget(self.btn_github)
 
         btn_layout.addStretch()
 
         self.btn_close = QPushButton("Close")
+        self.btn_close.setMinimumHeight(44)
         self.btn_close.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_close.clicked.connect(self.reject)
         btn_layout.addWidget(self.btn_close)
@@ -669,7 +907,7 @@ class UpdateDialog(QDialog):
 
     def _on_sync_bleeding_edge(self):
         self.btn_sync_be.setEnabled(False)
-        self.btn_sync_be.setText("Syncing from main...")
+        self.btn_sync_be.setText("Syncing...\nfrom main")
         if hasattr(self, "btn_download"):
             self.btn_download.setEnabled(False)
         self.progress_bar.setVisible(True)
@@ -687,20 +925,21 @@ class UpdateDialog(QDialog):
 
     def _on_sync_finished(self, pm_ver: str, pr_ver: str):
         self.progress_bar.setValue(100)
-        self.btn_sync_be.setText("Synced!")
+        self.btn_sync_be.setText(f"Synced!\nv{pm_ver}")
 
-        mb = QMessageBox(self)
-        mb.setIcon(QMessageBox.Icon.Information)
-        mb.setWindowTitle("Bleeding-Edge Sync Complete")
-        mb.setText(
-            f"Successfully synced the latest code from GitHub (main):\n\n"
-            f"  * PyMORGAN: v{pm_ver}\n"
-            f"  * PyRATE-TA: v{pr_ver}\n\n"
-            f"Restart {self.app_name} now to load the updated code?"
+        mb = _create_message_box(
+            self,
+            icon=QMessageBox.Icon.Information,
+            title="Bleeding-Edge Sync Complete",
+            text=(
+                f"Successfully synced the latest code from GitHub (main):\n\n"
+                f"  \u2022 PyMORGAN: v{pm_ver}\n"
+                f"  \u2022 PyRATE-TA: v{pr_ver}\n\n"
+                f"Restart {self.app_name} now to load the updated code?"
+            ),
+            buttons=QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            default_button=QMessageBox.StandardButton.Yes,
         )
-        mb.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-        mb.setDefaultButton(QMessageBox.StandardButton.Yes)
-        _style_message_box(mb)
         reply = mb.exec()
 
         if reply == QMessageBox.StandardButton.Yes:
@@ -717,15 +956,16 @@ class UpdateDialog(QDialog):
 
     def _on_sync_failed(self, err_msg: str):
         self.btn_sync_be.setEnabled(True)
-        self.btn_sync_be.setText("Retry Bleeding-Edge Sync")
+        self.btn_sync_be.setText("Retry Sync\nmain branch")
         if hasattr(self, "btn_download"):
             self.btn_download.setEnabled(True)
         self.progress_bar.setVisible(False)
-        mb = QMessageBox(self)
-        mb.setIcon(QMessageBox.Icon.Warning)
-        mb.setWindowTitle("Bleeding-Edge Sync Failed")
-        mb.setText(f"Could not sync from GitHub main branch:\n{err_msg}")
-        _style_message_box(mb)
+        mb = _create_message_box(
+            self,
+            icon=QMessageBox.Icon.Warning,
+            title="Bleeding-Edge Sync Failed",
+            text=f"Could not sync from GitHub main branch:\n{err_msg}",
+        )
         mb.exec()
 
     def _on_download_installer(self):
@@ -739,7 +979,7 @@ class UpdateDialog(QDialog):
             return
 
         self.btn_download.setEnabled(False)
-        self.btn_download.setText("Downloading...")
+        self.btn_download.setText("Downloading...\nPlease wait")
         self.btn_sync_be.setEnabled(False)
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
@@ -762,18 +1002,19 @@ class UpdateDialog(QDialog):
 
     def _on_download_finished(self, local_path: str):
         self.progress_bar.setValue(100)
-        self.btn_download.setText("Download Complete")
+        self.btn_download.setText("Downloaded!\nReady to install")
 
-        mb = QMessageBox(self)
-        mb.setIcon(QMessageBox.Icon.Question)
-        mb.setWindowTitle("Update Ready to Install")
-        mb.setText(
-            f"The update has been downloaded to:\n{local_path}\n\n"
-            f"Would you like to close {self.app_name} and open the installer now?"
+        mb = _create_message_box(
+            self,
+            icon=QMessageBox.Icon.Question,
+            title="Update Ready to Install",
+            text=(
+                f"The update has been downloaded to:\n{local_path}\n\n"
+                f"Would you like to close {self.app_name} and open the installer now?"
+            ),
+            buttons=QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            default_button=QMessageBox.StandardButton.Yes,
         )
-        mb.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-        mb.setDefaultButton(QMessageBox.StandardButton.Yes)
-        _style_message_box(mb)
         reply = mb.exec()
 
         if reply == QMessageBox.StandardButton.Yes:
@@ -787,48 +1028,102 @@ class UpdateDialog(QDialog):
 
     def _on_download_failed(self, error_msg: str):
         self.btn_download.setEnabled(True)
-        self.btn_download.setText("Retry Download")
+        self.btn_download.setText("Retry Download\nInstaller")
         self.btn_sync_be.setEnabled(True)
         self.progress_bar.setVisible(False)
-        mb = QMessageBox(self)
-        mb.setIcon(QMessageBox.Icon.Warning)
-        mb.setWindowTitle("Download Failed")
-        mb.setText(
-            f"Could not download the update:\n{error_msg}\n\n"
-            "You can download it manually from the GitHub release page."
+        mb = _create_message_box(
+            self,
+            icon=QMessageBox.Icon.Warning,
+            title="Download Failed",
+            text=(
+                f"Could not download the update:\n{error_msg}\n\n"
+                "You can download it manually from the GitHub release page."
+            ),
         )
-        _style_message_box(mb)
         mb.exec()
 
 
+def _create_message_box(
+    parent: QWidget | None,
+    *,
+    icon: QMessageBox.Icon,
+    title: str,
+    text: str,
+    buttons: QMessageBox.StandardButton = QMessageBox.StandardButton.Ok,
+    default_button: QMessageBox.StandardButton | None = None,
+) -> QMessageBox:
+    """Create a theme-aware QMessageBox with guaranteed readable foreground/background contrast."""
+    mb = QMessageBox(parent)
+    mb.setObjectName("UpdateMessageBox")
+    mb.setIcon(icon)
+    mb.setWindowTitle(title)
+    mb.setText(text)
+    mb.setStandardButtons(buttons)
+    if default_button is not None:
+        mb.setDefaultButton(default_button)
+    return _style_message_box(mb)
+
+
 def _style_message_box(mb: QMessageBox) -> QMessageBox:
-    """Ensure message boxes displayed over dark dialogs have crisp high-contrast text."""
-    mb.setStyleSheet("""
-        QMessageBox {
-            background-color: #0f172a;
-        }
-        QLabel {
-            color: #f8fafc;
-            font-size: 12.5px;
-            min-width: 290px;
-            border: none;
-            background: transparent;
-        }
-        QPushButton {
-            background-color: #1e293b;
-            color: #93c5fd;
-            border: 1px solid #3b82f6;
-            border-radius: 5px;
-            padding: 6px 18px;
-            font-weight: bold;
-            font-size: 12px;
-            min-width: 65px;
-        }
-        QPushButton:hover {
-            background-color: #2563eb;
-            color: #ffffff;
-        }
-    """)
+    """Style QMessageBox to match the active Light or Dark application palette with crisp contrast."""
+    dark = _is_dark_mode()
+    if dark:
+        mb.setStyleSheet("""
+            QMessageBox {
+                background-color: #222834;
+                color: #f8fafc;
+            }
+            QMessageBox QLabel {
+                color: #f8fafc;
+                font-size: 12.5px;
+                min-width: 300px;
+                border: none;
+                background: transparent;
+            }
+            QMessageBox QPushButton {
+                background-color: #2563eb;
+                color: #ffffff;
+                border: 1px solid #60a5fa;
+                border-radius: 5px;
+                padding: 6px 18px;
+                font-weight: bold;
+                font-size: 12px;
+                min-width: 72px;
+            }
+            QMessageBox QPushButton:hover {
+                background-color: #1d4ed8;
+                color: #ffffff;
+            }
+        """)
+    else:
+        mb.setStyleSheet("""
+            QMessageBox {
+                background-color: #ffffff;
+                color: #0f172a;
+            }
+            QMessageBox QLabel {
+                color: #0f172a;
+                font-size: 12.5px;
+                min-width: 300px;
+                border: none;
+                background: transparent;
+            }
+            QMessageBox QPushButton {
+                background-color: #f8fafc;
+                color: #0f172a;
+                border: 1px solid #94a3b8;
+                border-radius: 5px;
+                padding: 6px 18px;
+                font-weight: bold;
+                font-size: 12px;
+                min-width: 72px;
+            }
+            QMessageBox QPushButton:hover {
+                background-color: #2563eb;
+                color: #ffffff;
+                border-color: #1d4ed8;
+            }
+        """)
     return mb
 
 
@@ -854,14 +1149,15 @@ def check_for_updates_interactive(
     def on_error(err_msg: str):
         if status_callback:
             status_callback("")
-        mb = QMessageBox(parent)
-        mb.setIcon(QMessageBox.Icon.Warning)
-        mb.setWindowTitle("Update Check Failed")
-        mb.setText(
-            f"Unable to check for updates for {app_name}:\n{err_msg}\n\n"
-            "Please check your internet connection or visit the GitHub repository."
+        mb = _create_message_box(
+            parent,
+            icon=QMessageBox.Icon.Warning,
+            title="Update Check Failed",
+            text=(
+                f"Unable to check for updates for {app_name}:\n{err_msg}\n\n"
+                "Please check your internet connection or visit the GitHub repository."
+            ),
         )
-        _style_message_box(mb)
         mb.exec()
 
     worker.check_finished.connect(on_success)
@@ -900,7 +1196,9 @@ def check_for_updates_background(
         if existing_btn is not None:
             return
 
-        channel_tag = " (main)" if info.has_bleeding_edge_update and not info.has_release_update else ""
+        channel_tag = (
+            " (main)" if info.has_bleeding_edge_update and not info.has_release_update else ""
+        )
         btn = QPushButton(f"Update Available: {app_name} v{info.latest_version}{channel_tag}")
         btn.setObjectName("btnStatusUpdateNotification")
         btn.setCursor(Qt.CursorShape.PointingHandCursor)

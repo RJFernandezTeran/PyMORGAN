@@ -151,12 +151,12 @@ class SuiteLauncherDialog(QDialog):
                 background-color: #f1f5f9;
                 color: #0f172a;
             }
-            QLabel {
+            QDialog#SuiteLauncher QLabel {
                 border: none;
                 background: transparent;
                 color: #0f172a;
             }
-            QCheckBox {
+            QDialog#SuiteLauncher QCheckBox {
                 color: #1e293b;
                 font-size: 9.5pt;
                 spacing: 6px;

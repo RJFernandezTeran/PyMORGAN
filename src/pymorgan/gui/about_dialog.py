@@ -1,4 +1,4 @@
-"""Reusable Modern Dark-Themed About Dialog for PyQt6 / PySide6 applications."""
+"""Reusable Modern Theme-Aware About Dialog for PyQt6 / PySide6 applications."""
 
 from __future__ import annotations
 
@@ -18,11 +18,17 @@ from PyQt6.QtWidgets import (
 )
 
 
+def _is_dark() -> bool:
+    try:
+        from pymorgan.gui.theme import is_dark_palette
+
+        return bool(is_dark_palette())
+    except Exception:
+        return False
+
+
 class ModernAboutDialog(QDialog):
-    """
-    Modern dark-themed About dialog displaying application branding,
-    version, author metadata, description, and documentation triggers.
-    """
+    """Theme-aware About dialog displaying application branding, version, and author metadata."""
 
     def __init__(
         self,
@@ -45,6 +51,8 @@ class ModernAboutDialog(QDialog):
         ai_credit: str | None = "Developed with AI assistance from <b>Google Antigravity</b>.",
     ) -> None:
         super().__init__(parent)
+        self.setObjectName("ModernAboutDialog")
+        self._dark = _is_dark()
 
         self._app_name = app_name
         self._version = version
@@ -63,7 +71,7 @@ class ModernAboutDialog(QDialog):
         self._ai_credit = ai_credit
 
         self.setWindowTitle(title)
-        self.setFixedSize(580, 530)
+        self.setFixedSize(580, 540)
         self.setModal(True)
 
         if self._icon_path and os.path.exists(self._icon_path):
@@ -76,80 +84,117 @@ class ModernAboutDialog(QDialog):
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(14)
 
-        # Apply cohesive dark palette stylesheet
-        self.setStyleSheet("""
-            QDialog {
-                background-color: #0f172a;
-                color: #e2e8f0;
-                font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Arial, sans-serif;
-            }
-            QFrame#headerFrame {
-                background-color: #1e293b;
-                border: 1px solid #3b82f6;
-                border-radius: 10px;
-                padding: 12px;
-            }
-            QLabel#lblBanner {
-                border-radius: 8px;
-            }
-            QLabel#lblTitle {
-                color: #60a5fa;
-                font-size: 20px;
-                font-weight: bold;
-            }
-            QLabel#lblSubtitle {
-                color: #94a3b8;
-                font-size: 12.5px;
-                font-style: italic;
-            }
-            QLabel#lblDetails {
-                color: #cbd5e1;
-                font-size: 12px;
-                line-height: 1.4;
-            }
-            QPushButton {
-                background-color: #1e293b;
-                color: #93c5fd;
-                border: 1px solid #3b82f6;
-                border-radius: 5px;
-                padding: 7px 18px;
-                font-weight: bold;
-                font-size: 12px;
-            }
-            QPushButton:hover {
-                background-color: #2563eb;
-                color: #ffffff;
-            }
-            QPushButton#btnManual {
-                background-color: #2563eb;
-                color: #ffffff;
-                border: 1px solid #60a5fa;
-            }
-            QPushButton#btnManual:hover {
-                background-color: #1d4ed8;
-            }
-            QMessageBox {
-                background-color: #0f172a;
-            }
-            QMessageBox QLabel {
-                color: #f8fafc;
-                font-size: 12.5px;
-            }
-            QMessageBox QPushButton {
-                background-color: #1e293b;
-                color: #93c5fd;
-                border: 1px solid #3b82f6;
-                border-radius: 5px;
-                padding: 6px 18px;
-                font-weight: bold;
-                font-size: 12px;
-                min-width: 65px;
-            }
-            QMessageBox QPushButton:hover {
-                background-color: #2563eb;
-                color: #ffffff;
-            }
-        """)
+        if self._dark:
+            self.setStyleSheet("""
+                QDialog#ModernAboutDialog {
+                    background-color: #181c24;
+                    color: #f1f5f9;
+                    font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Arial, sans-serif;
+                }
+                QDialog#ModernAboutDialog QFrame#headerFrame {
+                    background-color: #222834;
+                    border: 1px solid #3b82f6;
+                    border-radius: 10px;
+                    padding: 12px;
+                }
+                QDialog#ModernAboutDialog QLabel {
+                    color: #f1f5f9;
+                    background: transparent;
+                    border: none;
+                }
+                QDialog#ModernAboutDialog QLabel#lblTitle {
+                    color: #60a5fa;
+                    font-size: 20px;
+                    font-weight: bold;
+                }
+                QDialog#ModernAboutDialog QLabel#lblSubtitle {
+                    color: #94a3b8;
+                    font-size: 12.5px;
+                    font-style: italic;
+                }
+                QDialog#ModernAboutDialog QLabel#lblDetails {
+                    color: #e2e8f0;
+                    font-size: 12px;
+                    line-height: 1.4;
+                }
+                QDialog#ModernAboutDialog QPushButton {
+                    background-color: #222834;
+                    color: #e2e8f0;
+                    border: 1px solid #475569;
+                    border-radius: 5px;
+                    padding: 7px 16px;
+                    font-weight: bold;
+                    font-size: 12px;
+                }
+                QDialog#ModernAboutDialog QPushButton:hover {
+                    background-color: #2563eb;
+                    color: #ffffff;
+                }
+                QDialog#ModernAboutDialog QPushButton#btnManual {
+                    background-color: #2563eb;
+                    color: #ffffff;
+                    border: 1px solid #60a5fa;
+                }
+                QDialog#ModernAboutDialog QPushButton#btnManual:hover {
+                    background-color: #1d4ed8;
+                }
+            """)
+        else:
+            self.setStyleSheet("""
+                QDialog#ModernAboutDialog {
+                    background-color: #f8fafc;
+                    color: #0f172a;
+                    font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Arial, sans-serif;
+                }
+                QDialog#ModernAboutDialog QFrame#headerFrame {
+                    background-color: #ffffff;
+                    border: 1px solid #93c5fd;
+                    border-left: 4px solid #2563eb;
+                    border-radius: 10px;
+                    padding: 12px;
+                }
+                QDialog#ModernAboutDialog QLabel {
+                    color: #0f172a;
+                    background: transparent;
+                    border: none;
+                }
+                QDialog#ModernAboutDialog QLabel#lblTitle {
+                    color: #1d4ed8;
+                    font-size: 20px;
+                    font-weight: bold;
+                }
+                QDialog#ModernAboutDialog QLabel#lblSubtitle {
+                    color: #475569;
+                    font-size: 12.5px;
+                    font-style: italic;
+                }
+                QDialog#ModernAboutDialog QLabel#lblDetails {
+                    color: #1e293b;
+                    font-size: 12px;
+                    line-height: 1.4;
+                }
+                QDialog#ModernAboutDialog QPushButton {
+                    background-color: #ffffff;
+                    color: #1e293b;
+                    border: 1px solid #cbd5e1;
+                    border-radius: 5px;
+                    padding: 7px 16px;
+                    font-weight: bold;
+                    font-size: 12px;
+                }
+                QDialog#ModernAboutDialog QPushButton:hover {
+                    background-color: #e2e8f0;
+                    color: #0f172a;
+                }
+                QDialog#ModernAboutDialog QPushButton#btnManual {
+                    background-color: #2563eb;
+                    color: #ffffff;
+                    border: 1px solid #1d4ed8;
+                }
+                QDialog#ModernAboutDialog QPushButton#btnManual:hover {
+                    background-color: #1d4ed8;
+                }
+            """)
 
         # ------------------------------------------------------------------ #
         # 1. Header Frame (Banner + Title/Subtitle)                           #
@@ -160,7 +205,6 @@ class ModernAboutDialog(QDialog):
         header_layout.setContentsMargins(10, 10, 10, 10)
         header_layout.setSpacing(16)
 
-        # Optional Banner Graphic
         if self._banner_path and os.path.exists(self._banner_path):
             lbl_banner = QLabel()
             lbl_banner.setObjectName("lblBanner")
@@ -174,7 +218,6 @@ class ModernAboutDialog(QDialog):
             lbl_banner.setPixmap(scaled_pixmap)
             header_layout.addWidget(lbl_banner)
 
-        # Title + Version + Subtitle
         header_text_layout = QVBoxLayout()
         header_text_layout.setSpacing(4)
 
@@ -195,6 +238,13 @@ class ModernAboutDialog(QDialog):
         # ------------------------------------------------------------------ #
         # 2. Metadata Body & Description                                      #
         # ------------------------------------------------------------------ #
+        link_color = "#60a5fa" if self._dark else "#2563eb"
+        hr_color = "#334155" if self._dark else "#cbd5e1"
+        desc_color = "#cbd5e1" if self._dark else "#334155"
+        credit_color = "#94a3b8" if self._dark else "#64748b"
+        badge_left_bg = "#222834" if self._dark else "#f1f5f9"
+        badge_left_fg = "#cbd5e1" if self._dark else "#334155"
+
         github_line = ""
         github_badge = ""
         if self._github_url:
@@ -203,12 +253,12 @@ class ModernAboutDialog(QDialog):
                 if "github.com/" in self._github_url
                 else self._github_url
             )
-            github_line = f'<b>GitHub:</b> <a href="{self._github_url}" style="color: #60a5fa; text-decoration: none;">{self._github_url}</a><br>'
+            github_line = f'<b>GitHub:</b> <a href="{self._github_url}" style="color: {link_color}; text-decoration: none;">{self._github_url}</a><br>'
             github_badge = f"""
         <table cellpadding="2" cellspacing="0" style="margin-top: 4px; margin-bottom: 2px;">
             <tr>
-                <td bgcolor="#1e293b" style="border: 1px solid #334155; border-right: none; padding: 2px 6px;">
-                    <font color="#94a3b8" size="2"><b>&nbsp;GitHub&nbsp;</b></font>
+                <td bgcolor="{badge_left_bg}" style="border: 1px solid {hr_color}; border-right: none; padding: 2px 6px;">
+                    <font color="{badge_left_fg}" size="2"><b>&nbsp;GitHub&nbsp;</b></font>
                 </td>
                 <td bgcolor="#2563eb" style="border: 1px solid #3b82f6; padding: 2px 6px;">
                     <a href="{self._github_url}" style="color: #ffffff; text-decoration: none;"><font color="#ffffff" size="2"><b>&nbsp;{repo_slug}&nbsp;</b></font></a>
@@ -218,7 +268,7 @@ class ModernAboutDialog(QDialog):
         """
 
         website_line = (
-            f'<b>Website:</b> <a href="{self._website_url}" style="color: #60a5fa; text-decoration: none;">{self._website_url}</a><br>'
+            f'<b>Website:</b> <a href="{self._website_url}" style="color: {link_color}; text-decoration: none;">{self._website_url}</a><br>'
             if self._website_url
             else ""
         )
@@ -228,20 +278,20 @@ class ModernAboutDialog(QDialog):
             <b>Author:</b> {self._author}<br>
             <b>Department:</b> {self._department}<br>
             <b>Institution:</b> {self._institution}<br>
-            <b>Contact:</b> <a href="mailto:{self._contact_email}" style="color: #60a5fa; text-decoration: none;">{self._contact_email}</a><br>
+            <b>Contact:</b> <a href="mailto:{self._contact_email}" style="color: {link_color}; text-decoration: none;">{self._contact_email}</a><br>
             {website_line}{github_line}<b>License:</b> {self._license_name}
         </p>
         {github_badge}
-        <hr style="border: 0; border-top: 1px solid #334155; margin: 8px 0;">
+        <hr style="border: 0; border-top: 1px solid {hr_color}; margin: 8px 0;">
 
-        <p style="color: #94a3b8; font-size: 11px; margin-top: 6px; margin-bottom: 6px;">
+        <p style="color: {desc_color}; font-size: 11.5px; margin-top: 6px; margin-bottom: 6px;">
             {self._description}
         </p>
         """
 
         if self._ai_credit:
             body_html += f"""
-            <p style="color: #64748b; font-size: 10.5px; margin-top: 6px; margin-bottom: 0px;">
+            <p style="color: {credit_color}; font-size: 10.5px; margin-top: 6px; margin-bottom: 0px;">
                 <em>{self._ai_credit}</em>
             </p>
             """
@@ -261,20 +311,20 @@ class ModernAboutDialog(QDialog):
         btn_layout.setSpacing(10)
 
         if self._manual_pdf_path:
-            btn_manual = QPushButton("📖 Open User Manual (PDF)")
+            btn_manual = QPushButton("Open User Manual (PDF)")
             btn_manual.setObjectName("btnManual")
             btn_manual.setCursor(Qt.CursorShape.PointingHandCursor)
             btn_manual.clicked.connect(self._on_open_manual)
             btn_layout.addWidget(btn_manual)
 
         if self._github_url:
-            btn_github = QPushButton("🌐 GitHub")
+            btn_github = QPushButton("GitHub")
             btn_github.setObjectName("btnGithub")
             btn_github.setCursor(Qt.CursorShape.PointingHandCursor)
             btn_github.clicked.connect(self._on_open_github)
             btn_layout.addWidget(btn_github)
 
-            btn_updates = QPushButton("🔄 Check for Updates")
+            btn_updates = QPushButton("Check for Updates")
             btn_updates.setObjectName("btnUpdates")
             btn_updates.setCursor(Qt.CursorShape.PointingHandCursor)
             btn_updates.clicked.connect(self._on_check_updates)
@@ -293,17 +343,17 @@ class ModernAboutDialog(QDialog):
         """Trigger an online update check for the latest release on GitHub."""
         if not self._github_url:
             return
-        from .updater import check_for_updates_interactive
+        from pymorgan.gui.updater import check_for_updates_interactive
 
         btn = self.findChild(QPushButton, "btnUpdates")
         if btn is not None:
             btn.setEnabled(False)
-            btn.setText("⏳ Checking...")
+            btn.setText("Checking...")
 
         def restore_btn(*_):
             if btn is not None:
                 btn.setEnabled(True)
-                btn.setText("🔄 Check for Updates")
+                btn.setText("Check for Updates")
 
         try:
             check_for_updates_interactive(
