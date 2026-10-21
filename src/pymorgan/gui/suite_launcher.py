@@ -265,10 +265,10 @@ class SuiteLauncherDialog(QDialog):
         )
 
         lib_desc = QLabel(
-            "The standalone installer bundles an isolated runtime for the GUI apps. "
             "To import <span style='font-family: Consolas, monospace; font-weight: bold; color: #1e40af;'>pymorgan</span> "
             "and <span style='font-family: Consolas, monospace; font-weight: bold; color: #0f766e;'>pyrate_ta</span> "
-            "in your own Python &gt;= 3.12 environment, install from PyPI:"
+            "in your own Python &gt;= 3.11 environment (Conda, Jupyter, Spyder, VS Code), click "
+            "<b>Setup in Local Python...</b> to auto-link your environment, or install via pip:"
         )
         lib_desc.setTextFormat(Qt.TextFormat.RichText)
         lib_desc.setWordWrap(True)
@@ -277,7 +277,7 @@ class SuiteLauncherDialog(QDialog):
         )
 
         cmd_pill = QLabel(
-            "pip install pymorgan pyrate-ta     |     uv pip install pymorgan pyrate-ta"
+            "pip install -U pymorgan pyrate-ta     |     uv pip install -U pymorgan pyrate-ta"
         )
         cmd_pill.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         cmd_pill.setStyleSheet(
@@ -294,25 +294,29 @@ class SuiteLauncherDialog(QDialog):
         lib_btn_box = QVBoxLayout()
         lib_btn_box.setSpacing(6)
 
-        self.btn_copy_pip = QPushButton("Copy pip Command")
-        self.btn_copy_pip.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_copy_pip.setStyleSheet(
-            "QPushButton { font-size: 8.8pt; font-weight: bold; color: #1e293b; "
-            "background-color: #f8fafc; border: 1px solid #cbd5e1; border-radius: 4px; padding: 5px 10px; }"
-            "QPushButton:hover { background-color: #e2e8f0; }"
+        self.btn_setup_python = QPushButton("Setup in Local Python...")
+        self.btn_setup_python.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_setup_python.setToolTip(
+            "Auto-detect Conda / system / virtualenv Python installations and link or install "
+            "pymorgan & pyrate_ta with 1 click"
         )
-        self.btn_copy_pip.clicked.connect(self._copy_pip_command)
+        self.btn_setup_python.setStyleSheet(
+            "QPushButton { font-size: 8.8pt; font-weight: bold; color: #ffffff; "
+            "background-color: #0d9488; border: 1px solid #0f766e; border-radius: 4px; padding: 5px 12px; }"
+            "QPushButton:hover { background-color: #0f766e; }"
+        )
+        self.btn_setup_python.clicked.connect(self._open_local_python_setup)
 
         btn_api_guide = QPushButton("Python API Guide...")
         btn_api_guide.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_api_guide.setStyleSheet(
             "QPushButton { font-size: 8.8pt; font-weight: bold; color: #1d4ed8; "
-            "background-color: #eff6ff; border: 1px solid #bfdbfe; border-radius: 4px; padding: 5px 10px; }"
+            "background-color: #eff6ff; border: 1px solid #bfdbfe; border-radius: 4px; padding: 5px 12px; }"
             "QPushButton:hover { background-color: #dbeafe; }"
         )
         btn_api_guide.clicked.connect(self._show_python_library_guide)
 
-        lib_btn_box.addWidget(self.btn_copy_pip)
+        lib_btn_box.addWidget(self.btn_setup_python)
         lib_btn_box.addWidget(btn_api_guide)
         lib_layout.addLayout(lib_btn_box)
 
@@ -531,13 +535,11 @@ class SuiteLauncherDialog(QDialog):
         vbox.addWidget(btn)
         return card
 
-    def _copy_pip_command(self):
-        """Copy pip install command to clipboard."""
-        clipboard = QApplication.clipboard()
-        if clipboard is not None:
-            clipboard.setText("pip install pymorgan pyrate-ta")
-        self.btn_copy_pip.setText("Copied!")
-        QTimer.singleShot(1800, lambda: self.btn_copy_pip.setText("Copy pip Command"))
+    def _open_local_python_setup(self):
+        """Open 1-click wizard to link or install PyMORGAN & PyRATE-TA into a local Python environment."""
+        from pymorgan.gui.python_env_setup import open_local_python_setup_dialog
+
+        open_local_python_setup_dialog(self)
 
     def _reinstall_fonts(self):
         """Run the TeX Gyre Heros font installer twice and report status."""
@@ -760,6 +762,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--pyrate", action="store_true", help="Launch PyRATE-TA directly")
     parser.add_argument("--settings", action="store_true", help="Launch Settings Editor directly")
     parser.add_argument(
+        "--setup-python",
+        action="store_true",
+        help="Configure PyMORGAN & PyRATE-TA in a local Python >= 3.11 environment",
+    )
+    parser.add_argument(
         "--install-fonts",
         action="store_true",
         help="Install and verify TeX Gyre Heros fonts in Matplotlib (runs 2 passes)",
@@ -801,6 +808,11 @@ def main(argv: list[str] | None = None) -> int:
         from pymorgan.gui.settings_app import main as settings_main
 
         return settings_main(unknown)
+
+    if args.setup_python:
+        from pymorgan.gui.python_env_setup import cli_main as setup_env_main
+
+        return setup_env_main(unknown)
 
     # Hide host console window if running on Windows
     set_windows_app_id("PyMORGAN.SuiteLauncher")

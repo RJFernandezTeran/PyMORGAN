@@ -7,23 +7,24 @@ name = "pymorgan"
 dynamic = ["version"]
 description = "Plotting and analysis of ultrafast time-resolved spectroscopy data (1D and 2D)."
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 license = { file = "LICENSE" }
 authors = [{ name = "Dr. Ricardo J. Fernández-Terán" }]
 urls = { Homepage = "https://github.com/RJFernandezTeran/PyMORGAN", Documentation = "https://github.com/RJFernandezTeran/PyMORGAN#readme", Repository = "https://github.com/RJFernandezTeran/PyMORGAN.git", "Bug Tracker" = "https://github.com/RJFernandezTeran/PyMORGAN/issues" }
 
 dependencies = [
-    "matplotlib>=3.11.1",
-    "numpy>=2.5.2",
-    "pandas>=3.0.5",
-    "scipy>=1.18.0",
+    "matplotlib>=3.8.0",
+    "numpy>=1.26.0",
+    "pandas>=2.1.0",
+    "scipy>=1.12.0",
     "mpl-axes-aligner>=1.3",
-    "tomlkit>=0.15.1",
-    "h5py>=3.16.0",
-    "PyQt6>=6.11.0",
-    "PyQt6-sip>=13.12.0",
+    "tomlkit>=0.12.0",
+    "h5py>=3.10.0",
+    "Pillow>=10.0.0",
+    "PyQt6>=6.6.0",
+    "PyQt6-sip>=13.6.0",
     "rinoh-typeface-texgyreheros",
-    "cmcrameri>=1.10",
+    "cmcrameri>=1.8",
 ]
 
 [project.optional-dependencies]
@@ -39,6 +40,7 @@ pymorgan-suite = "pymorgan.gui.suite_launcher:main"
 pymorgan-install-fonts = "pymorgan.fonts:main"
 pymorgan-edit-gui = "pymorgan.gui.designer:main"
 pymorgan-settings = "pymorgan.gui.settings_app:main"
+pymorgan-setup-env = "pymorgan.gui.python_env_setup:cli_main"
 pymorgan-test = "pymorgan.test_runner:main"
 
 [project.gui-scripts]

@@ -330,6 +330,15 @@ class ModernAboutDialog(QDialog):
             btn_updates.clicked.connect(self._on_check_updates)
             btn_layout.addWidget(btn_updates)
 
+            btn_py_env = QPushButton("Setup in Python...")
+            btn_py_env.setObjectName("btnPyEnv")
+            btn_py_env.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn_py_env.setToolTip(
+                "Configure Conda, Homebrew, or system Python so you can 'import pymorgan' and 'import pyrate_ta'"
+            )
+            btn_py_env.clicked.connect(self._on_setup_python_env)
+            btn_layout.addWidget(btn_py_env)
+
         btn_layout.addStretch()
 
         btn_close = QPushButton("Close")
@@ -371,6 +380,15 @@ class ModernAboutDialog(QDialog):
         except Exception as exc:
             restore_btn()
             QMessageBox.warning(self, "Update Check Error", str(exc))
+
+    def _on_setup_python_env(self) -> None:
+        """Open the Local Python Environment Setup wizard."""
+        try:
+            from pymorgan.gui.python_env_setup import open_local_python_setup_dialog
+
+            open_local_python_setup_dialog(self)
+        except Exception as exc:
+            QMessageBox.warning(self, "Python Setup Error", str(exc))
 
     def _on_open_github(self) -> None:
         """Open the project GitHub repository in the default web browser."""
