@@ -1,12 +1,13 @@
-"""Dialog for creating GIF and video animations of 2D contour maps as a function of t2."""
+"""Dialog for creating lightweight GIF, WebP, and APNG animations of 2D contour maps across t2."""
 
 from __future__ import annotations
 
 import os
 from typing import TYPE_CHECKING
 
-import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.backends.backend_agg import FigureCanvasAgg
+from matplotlib.figure import Figure
 from PIL import Image
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
@@ -36,8 +37,8 @@ class MakeMovieDialog(QDialog):
 
     def __init__(self, dataset: Dataset2D, parent=None, plot_controls=None):
         super().__init__(parent)
-        self.setWindowTitle("Make 2D Movie / GIF")
-        self.resize(450, 380)
+        self.setWindowTitle("Export 2D Animation (GIF / WebP / APNG)")
+        self.resize(450, 360)
 
         self.dataset = dataset
         self.plot_controls = plot_controls
@@ -47,7 +48,6 @@ class MakeMovieDialog(QDialog):
         max_delay = float(np.nanmax(delays))
 
         layout = QVBoxLayout(self)
-
         form = QFormLayout()
 
         # t2 range controls
@@ -93,17 +93,16 @@ class MakeMovieDialog(QDialog):
         self.scale_cbx = QComboBox(self)
         self.scale_cbx.addItems([
             "Constant z-limits across all frames (global vmin/vmax)",
-            "Rescale z-limits dynamically per frame (local vmin/vmax)"
+            "Rescale z-limits dynamically per frame (local vmin/vmax)",
         ])
         form.addRow("Colorbar Scaling:", self.scale_cbx)
 
-        # Output format
+        # Output format (lightweight, zero external binary dependencies)
         self.format_cbx = QComboBox(self)
         self.format_cbx.addItems([
-            "GIF Movie (*.gif)",
-            "MP4 Video (*.mp4)",
+            "Animated GIF (*.gif)",
+            "WebP Animation (*.webp)",
             "Animated PNG (*.png)",
-            "WebP Animation (*.webp)"
         ])
         self.format_cbx.currentIndexChanged.connect(self._on_format_changed)
         form.addRow("Format:", self.format_cbx)
@@ -139,7 +138,7 @@ class MakeMovieDialog(QDialog):
         )
         ok_btn = self.button_box.button(QDialogButtonBox.StandardButton.Ok)
         if ok_btn:
-            ok_btn.setText("Generate Movie")
+            ok_btn.setText("Export Animation")
             ok_btn.setStyleSheet(
                 "QPushButton { font-weight: bold; color: #196f3d; background-color: #d5f5e3; border: 1px solid #abebc6; border-radius: 4px; padding: 4px 12px; }"
                 "QPushButton:hover { background-color: #abebc6; border-color: #58d68d; }"
@@ -164,20 +163,18 @@ class MakeMovieDialog(QDialog):
     def _on_format_changed(self, index: int):
         curr_text = self.file_path_edit.text()
         base, _ = os.path.splitext(curr_text)
-        exts = [".gif", ".mp4", ".png", ".webp"]
+        exts = [".gif", ".webp", ".png"]
         if 0 <= index < len(exts):
             self.file_path_edit.setText(base + exts[index])
 
     def _browse_output_file(self):
         fmt = self.format_cbx.currentText()
-        if "MP4" in fmt:
-            filter_str = "MP4 Files (*.mp4);;All Files (*)"
+        if "WebP" in fmt:
+            filter_str = "WebP Files (*.webp);;GIF Files (*.gif);;PNG Files (*.png);;All Files (*)"
         elif "PNG" in fmt:
-            filter_str = "PNG Files (*.png);;All Files (*)"
-        elif "WebP" in fmt:
-            filter_str = "WebP Files (*.webp);;All Files (*)"
+            filter_str = "PNG Files (*.png);;GIF Files (*.gif);;WebP Files (*.webp);;All Files (*)"
         else:
-            filter_str = "GIF Files (*.gif);;All Files (*)"
+            filter_str = "GIF Files (*.gif);;WebP Files (*.webp);;PNG Files (*.png);;All Files (*)"
 
         path, _ = QFileDialog.getSaveFileName(
             self, "Save Animation", self.file_path_edit.text(), filter_str
@@ -207,9 +204,8 @@ class MakeMovieDialog(QDialog):
 
         delay_ms = self.frame_delay_sbx.value()
         loop_count = self.loop_count_sbx.value()
-        constant_scale = (self.scale_cbx.currentIndex() == 0)
+        constant_scale = self.scale_cbx.currentIndex() == 0
 
-        # Generate frames
         success = create_2d_movie_animation(
             dataset=self.dataset,
             indices=indices,
@@ -223,7 +219,7 @@ class MakeMovieDialog(QDialog):
 
         if success:
             QMessageBox.information(
-                self, "Movie Exported", f"Successfully saved animation to:\n{output_path}"
+                self, "Animation Exported", f"Successfully saved animation to:\n{output_path}"
             )
             self.accept()
 
@@ -238,19 +234,21 @@ def create_2d_movie_animation(
     plot_controls=None,
     parent_widget=None,
 ) -> bool:
-    """Render 2D contour maps for selected delay indices and write animated movie file."""
+    """Render 2D contour maps on a single offscreen Agg canvas and write an animated image."""
     delays = np.asarray(dataset.delays, dtype=float)
 
     # Determine global vmin/vmax if constant scaling is requested
     global_vmin, global_vmax = None, None
     if constant_scale:
-        Z_data = dataset.Z_C if (dataset.is_corrected and dataset.Z_C is not None) else dataset.Z_R
+        Z_data = (
+            dataset.Z_C if (dataset.is_corrected and dataset.Z_C is not None) else dataset.Z_R
+        )
         sub_cube = Z_data[:, :, indices]
         max_abs = np.nanmax(np.abs(sub_cube))
         if not np.isfinite(max_abs) or max_abs == 0:
             max_abs = 1.0
-        global_vmax = max_abs
-        global_vmin = -max_abs
+        global_vmax = float(max_abs)
+        global_vmin = -float(max_abs)
 
     # Extract plot controls settings if provided
     kwargs = {}
@@ -268,11 +266,14 @@ def create_2d_movie_animation(
         if hasattr(plot_controls, "cut_chk") and plot_controls.cut_chk.isChecked():
             kwargs["cut_plot"] = True
             kwargs["pump_lim"] = (plot_controls.pump_min.value(), plot_controls.pump_max.value())
-            kwargs["probe_lim"] = (plot_controls.probe_min.value(), plot_controls.probe_max.value())
+            kwargs["probe_lim"] = (
+                plot_controls.probe_min.value(),
+                plot_controls.probe_max.value(),
+            )
 
     n_frames = len(indices)
-    progress = QProgressDialog("Rendering movie frames...", "Cancel", 0, n_frames, parent_widget)
-    progress.setWindowTitle("Generating 2D Movie")
+    progress = QProgressDialog("Rendering frames...", "Cancel", 0, n_frames, parent_widget)
+    progress.setWindowTitle("Exporting 2D Animation")
     progress.setWindowModality(Qt.WindowModality.WindowModal)
     progress.setMinimumDuration(0)
     progress.setValue(0)
@@ -280,6 +281,17 @@ def create_2d_movie_animation(
     QApplication.processEvents()
 
     frames: list[Image.Image] = []
+    main_win = parent_widget
+    if (
+        main_win is not None
+        and not hasattr(main_win, "render_twoD_contour_frame")
+        and hasattr(main_win, "parent")
+    ):
+        main_win = main_win.parent()
+
+    # Reuse one offscreen Figure + FigureCanvasAgg across all frames (fast, no GUI window overhead)
+    fig = Figure(figsize=(5.5, 5.5), dpi=100, facecolor="white")
+    canvas = FigureCanvasAgg(fig)
 
     try:
         for idx_count, delay_idx in enumerate(indices):
@@ -288,15 +300,14 @@ def create_2d_movie_animation(
                 return False
 
             progress.setValue(idx_count)
-            t2_val = delays[delay_idx]
-            progress.setLabelText(f"Rendering frame {idx_count + 1}/{n_frames} (t₂ = {t2_val:.2f} ps)")
+            t2_val = float(delays[delay_idx])
+            progress.setLabelText(
+                f"Rendering frame {idx_count + 1}/{n_frames} (t₂ = {t2_val:.2f} ps)"
+            )
             QApplication.processEvents()
 
-            fig, ax = plt.subplots(figsize=(6, 6), dpi=100)
-
-            main_win = parent_widget
-            if main_win is not None and not hasattr(main_win, "render_twoD_contour_frame") and hasattr(main_win, "parent"):
-                main_win = main_win.parent()
+            fig.clear()
+            ax = fig.add_subplot(111)
 
             if main_win is not None and hasattr(main_win, "render_twoD_contour_frame"):
                 main_win.render_twoD_contour_frame(
@@ -312,93 +323,35 @@ def create_2d_movie_animation(
                 )
 
             fig.tight_layout()
-            fig.canvas.draw()
-            buf = fig.canvas.buffer_rgba()
-            img = Image.fromarray(np.asarray(buf))
-            frames.append(img.convert("RGB"))
-            plt.close(fig)
+            canvas.draw()
+            buf = np.asarray(canvas.buffer_rgba())
+            frames.append(Image.fromarray(buf).convert("RGB"))
 
         progress.setValue(n_frames)
         QApplication.processEvents()
 
-        if len(frames) == 0:
+        if not frames:
             return False
 
         ext = os.path.splitext(output_path)[1].lower()
+        if ext not in (".gif", ".webp", ".png"):
+            output_path = os.path.splitext(output_path)[0] + ".gif"
 
-        if ext in (".mp4", ".avi"):
-            # Try saving via matplotlib animation PillowWriter or FFMpegWriter or imageio
-            try:
-                import matplotlib.animation as animation
-                fig, ax = plt.subplots(figsize=(6, 6), dpi=100)
-                fps = 1000.0 / max(10, delay_ms)
-                writer = animation.FFMpegWriter(fps=fps)
-
-                # Re-render frames with writer
-                with writer.saving(fig, output_path, dpi=100):
-                    for delay_idx in indices:
-                        QApplication.processEvents()
-                        if progress.wasCanceled():
-                            plt.close(fig)
-                            return False
-                        ax.clear()
-                        t2_v = delays[delay_idx]
-                        if main_win is not None and hasattr(main_win, "render_twoD_contour_frame"):
-                            main_win.render_twoD_contour_frame(
-                                t2_v, ax=ax, vmin=global_vmin, vmax=global_vmax
-                            )
-                        else:
-                            dataset.plot_map(
-                                t2=t2_v,
-                                ax=ax,
-                                vmin=global_vmin,
-                                vmax=global_vmax,
-                                **kwargs,
-                            )
-                        fig.tight_layout()
-                        writer.grab_frame()
-                plt.close(fig)
-            except Exception as e:
-                # If MP4 writing fails, fall back to GIF
-                gif_path = os.path.splitext(output_path)[0] + ".gif"
-                frames[0].save(
-                    gif_path,
-                    save_all=True,
-                    append_images=frames[1:],
-                    duration=delay_ms,
-                    loop=loop_count,
-                )
-                if parent_widget:
-                    QMessageBox.warning(
-                        parent_widget,
-                        "MP4 Export Warning",
-                        f"MP4 encoding requires ffmpeg: {e}\nSaved as GIF instead: {gif_path}",
-                    )
-        elif ext in (".webp", ".png"):
-            frames[0].save(
-                output_path,
-                save_all=True,
-                append_images=frames[1:],
-                duration=delay_ms,
-                loop=loop_count,
-            )
-        else:
-            # GIF (default)
-            frames[0].save(
-                output_path,
-                save_all=True,
-                append_images=frames[1:],
-                duration=delay_ms,
-                loop=loop_count,
-            )
-
+        frames[0].save(
+            output_path,
+            save_all=True,
+            append_images=frames[1:],
+            duration=delay_ms,
+            loop=loop_count,
+            optimize=True,
+        )
         return True
 
     except Exception as e:
-        import traceback
-        traceback.print_exc()
         if parent_widget:
-            QMessageBox.critical(parent_widget, "Movie Render Error", f"Error generating movie:\n{e}")
+            QMessageBox.critical(
+                parent_widget, "Animation Export Error", f"Error exporting animation:\n{e}"
+            )
         return False
     finally:
         progress.close()

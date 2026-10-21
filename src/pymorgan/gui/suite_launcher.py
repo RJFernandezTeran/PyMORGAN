@@ -767,9 +767,17 @@ def main(argv: list[str] | None = None) -> int:
     args, unknown = parser.parse_known_args(argv)
 
     if args.install_fonts:
+        import io
+        from matplotlib.figure import Figure
         from pymorgan.fonts import install_fonts_twice
 
         install_fonts_twice(quiet=False)
+        fig = Figure(figsize=(2, 2))
+        ax = fig.add_subplot(111)
+        ax.plot([0, 1], [0, 1])
+        for fmt in ("png", "pdf", "svg", "eps"):
+            buf = io.BytesIO()
+            fig.savefig(buf, format=fmt)
         return 0
 
     # Fast dispatch if flag is provided

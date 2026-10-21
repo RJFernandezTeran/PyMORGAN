@@ -376,6 +376,13 @@ class BleedingEdgeSyncWorker(QThread):
             import pymorgan as pm
 
             bundled_ver = getattr(pm, "__version__", "0.0.0")
+            meta_file = BLEEDING_EDGE_DIR / "sync_meta.json"
+            if str(BLEEDING_EDGE_DIR) in sys.path and meta_file.is_file():
+                try:
+                    prev_meta = json.loads(meta_file.read_text(encoding="utf-8"))
+                    bundled_ver = prev_meta.get("bundled_version_at_sync") or bundled_ver
+                except Exception:
+                    pass
 
             # Determine target root(s)
             pm_target = self._resolve_writable_target_for_pkg("pymorgan") or BLEEDING_EDGE_DIR

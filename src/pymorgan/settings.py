@@ -602,8 +602,10 @@ class Settings:
                     # Non-numeric sizes (e.g. 'medium') are left untouched.
                     pass
 
-        # PyMORGAN never uses a LaTeX backend for text rendering.
+        # PyMORGAN never uses a LaTeX backend or external PS distiller for rendering/saving.
         plt.rcParams["text.usetex"] = False
+        plt.rcParams["ps.usedistiller"] = False
+        plt.rcParams["ps.useafm"] = False
 
     # ------------------------------------------------------------------ #
     #                        Units-convention helper                     #

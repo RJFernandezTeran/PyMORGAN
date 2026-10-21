@@ -46,7 +46,22 @@ hiddenimports = [
     "scipy.interpolate",
     "scipy.linalg",
     "matplotlib.backends.backend_qtagg",
+    "matplotlib.backends.backend_qt",
+    "matplotlib.backends.backend_agg",
+    "matplotlib.backends.backend_pdf",
+    "matplotlib.backends.backend_ps",
+    "matplotlib.backends.backend_svg",
+    "matplotlib.backends.backend_pgf",
+    "matplotlib.backends._backend_pdf_ps",
     "matplotlib.style.core",
+    "PIL",
+    "PIL.Image",
+    "PIL.PngImagePlugin",
+    "PIL.JpegImagePlugin",
+    "PIL.TiffImagePlugin",
+    "PIL.WebPImagePlugin",
+    "PIL.GifImagePlugin",
+    "PIL.BmpImagePlugin",
     "cmcrameri",
     "pandas",
     "h5py",
@@ -61,6 +76,12 @@ hiddenimports = [
     "pymorgan.gui.console",
     "pymorgan.integrations.pyrate_bridge",
 ]
+
+mpl_hooksconfig = {
+    "matplotlib": {
+        "backends": ["QtAgg", "Agg", "PDF", "PS", "SVG", "PGF"],
+    },
+}
 
 if PYRATE_SRC.exists():
     hiddenimports += [
@@ -99,7 +120,7 @@ a_suite = Analysis(
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
-    hooksconfig={},
+    hooksconfig=mpl_hooksconfig,
     runtime_hooks=[],
     excludes=["tkinter"],
     noarchive=False,
@@ -132,7 +153,7 @@ a_morgan = Analysis(
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
-    hooksconfig={},
+    hooksconfig=mpl_hooksconfig,
     runtime_hooks=[],
     excludes=["tkinter"],
     noarchive=False,
@@ -166,7 +187,7 @@ if PYRATE_SRC.exists():
         datas=datas,
         hiddenimports=hiddenimports,
         hookspath=[],
-        hooksconfig={},
+        hooksconfig=mpl_hooksconfig,
         runtime_hooks=[],
         excludes=["tkinter"],
         noarchive=False,
@@ -236,4 +257,3 @@ app = BUNDLE(
         "NSRequiresAquaSystemAppearance": False,
     },
 )
-
