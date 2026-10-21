@@ -7,17 +7,12 @@ import os
 # Ensure matplotlib selects the same Qt binding we use (PyQt6).
 os.environ.setdefault("QT_API", "pyqt6")
 
-for _backend_mod in (
-    "matplotlib.backends.backend_agg",
-    "matplotlib.backends.backend_pdf",
-    "matplotlib.backends.backend_pgf",
-    "matplotlib.backends.backend_ps",
-    "matplotlib.backends.backend_svg",
-):
-    try:
-        __import__(_backend_mod)
-    except ImportError:
-        pass
+try:
+    from pymorgan.gui._mpl_export_shim import ensure_mpl_export_backends
+
+    ensure_mpl_export_backends()
+except Exception:
+    pass
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 
 try:  # toolbar moved across matplotlib versions

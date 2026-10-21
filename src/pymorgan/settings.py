@@ -606,6 +606,12 @@ class Settings:
         plt.rcParams["text.usetex"] = False
         plt.rcParams["ps.usedistiller"] = False
         plt.rcParams["ps.useafm"] = False
+        try:
+            from pymorgan.gui._mpl_export_shim import ensure_mpl_export_backends
+
+            ensure_mpl_export_backends()
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------ #
     #                        Units-convention helper                     #

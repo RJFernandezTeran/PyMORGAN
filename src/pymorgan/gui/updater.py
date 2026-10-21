@@ -519,11 +519,18 @@ class BleedingEdgeSyncWorker(QThread):
             pr_target = self._resolve_writable_target_for_pkg("pyrate_ta") or BLEEDING_EDGE_DIR
 
             pm_ver = self._download_and_extract_pkg(
-                "RJFernandezTeran/PyMORGAN", "pymorgan", pm_target, 10, 55
+                "RJFernandezTeran/PyMORGAN", "pymorgan", pm_target, 10, 50
             )
             pr_ver = self._download_and_extract_pkg(
-                "RJFernandezTeran/PyRATE-TA", "pyrate_ta", pr_target, 55, 95
+                "RJFernandezTeran/PyRATE-TA", "pyrate_ta", pr_target, 50, 90
             )
+            self.progress.emit(92, "Verifying Matplotlib export backends...")
+            try:
+                from pymorgan.gui._mpl_export_shim import ensure_mpl_export_backends
+
+                ensure_mpl_export_backends()
+            except Exception:
+                pass
 
             # Always also populate BLEEDING_EDGE_DIR if frozen or if overlay is used
             if (
