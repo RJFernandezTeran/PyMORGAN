@@ -850,7 +850,7 @@ def test_oneD_plot_anisotropy_limits():
 def test_gui_recalc_average_checkbox(window, monkeypatch):
     """Test PP_NoiseWeighted_chk checkbox and its wiring in _recalc_average."""
     from PyQt6.QtWidgets import QDialog
-    from pymorgan.gui.tabs.oneD import RecalcAverageDialog
+
 
     # Checkbox exists and is checked by default
     assert hasattr(window, "PP_NoiseWeighted_chk")
@@ -911,8 +911,6 @@ def test_gui_recalc_average_checkbox(window, monkeypatch):
 
 def test_gui_send_to_pyrate_ta(window, tmp_path, monkeypatch):
     """Test that actionSendToPyRATE is enabled on dataset load and hands off properly."""
-    from unittest.mock import patch
-    from pathlib import Path
     import synthetic
 
     # Initially disabled before loading dataset

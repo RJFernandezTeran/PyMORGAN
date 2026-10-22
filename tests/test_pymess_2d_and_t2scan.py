@@ -11,11 +11,9 @@ from pymorgan.oneD.load import (
     _pymess_pp_is_file,
     classify_pymess_h5,
     describe_dataset,
-    read_PyMESS_PP,
 )
 from pymorgan.twoD.load import (
     is_map_dataset_file,
-    read_PyMESS_2D,
 )
 
 
@@ -141,7 +139,7 @@ def td_2d_file(tmp_path: Path) -> Path:
         grp.create_dataset("surface_absorptive", data=fd_dummy)
 
         scans = f.create_group("scans")
-        for idx, (sk, t2_val, scale) in enumerate([("scan_001", 200.0, 1.0), ("scan_002", 1000.0, 0.5)]):
+        for _idx, (sk, t2_val, scale) in enumerate([("scan_001", 200.0, 1.0), ("scan_002", 1000.0, 0.5)]):
             sgrp = scans.create_group(sk)
             sgrp.attrs["t2_delay_fs"] = t2_val
             sgrp.create_dataset("interferograms_raw", data=td_signal * scale)
@@ -484,7 +482,7 @@ def test_new_schema_td_2d_3d_no_omega1_axis(tmp_path: Path):
 def test_new_schema_fd_2d_3d_no_surface_absorptive(tmp_path: Path):
     """Verify new PyMESS .h5 schema for Frequency-Domain 2D (3D interferograms_raw, no surface_absorptive)."""
     p = tmp_path / "new_schema_fd_2d.h5"
-    n_t2, n_pump, n_pix = 2, 15, 20
+    _n_t2, n_pump, n_pix = 2, 15, 20
     pump_axis = np.linspace(1950.0, 2060.0, n_pump)
     probe_axis = np.linspace(1940.0, 2070.0, n_pix)
     t2_fs = np.array([300.0, 1500.0])

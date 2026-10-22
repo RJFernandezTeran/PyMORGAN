@@ -1,4 +1,5 @@
 import os
+import shutil
 import subprocess
 import sys
 
@@ -12,12 +13,13 @@ def main():
     if len(sys.argv) > 1:
         ui_path = sys.argv[1]
 
-    cmd = ["uvx", "--from", "pyside6-essentials", "pyside6-designer", ui_path]
+    uvx = shutil.which("uvx") or "uvx"
+    cmd = [uvx, "--from", "pyside6-essentials", "pyside6-designer", ui_path]
     print(f"Running: {' '.join(cmd)}")
 
     try:
         # Launching the designer
-        subprocess.Popen(cmd, shell=True)
+        subprocess.Popen(cmd)
     except Exception as e:
         print(f"Error running command: {e}")
         sys.exit(1)

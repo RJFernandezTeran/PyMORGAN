@@ -14,9 +14,9 @@ import os
 import shutil
 import subprocess
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 
 # Required third-party packages (import_name, pip_spec)
 REQUIRED_THIRD_PARTY_DEPS: tuple[tuple[str, str], ...] = (

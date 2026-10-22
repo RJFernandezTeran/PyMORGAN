@@ -847,7 +847,7 @@ def _extract_pymess_2d_t2_ps(f, path: Path, meta_dict: dict[str, str], n_scans: 
 
 
 def _extract_pymess_2d_stack_from_group(
-    grp: h5py.Group,
+    grp: Any,
     is_freq_domain: bool,
     n_t1_or_w1_expected: int | None = None,
     n_pix_expected: int | None = None,

@@ -609,7 +609,9 @@ class SuiteLauncherDialog(QDialog):
                     )
                     if self.isVisible():
                         import time
+
                         from PyQt6.QtCore import QSettings
+
                         from pymorgan.gui.updater import UpdateDialog
 
                         shared_settings = QSettings("RJFernandezTeran", "PyMORGAN_Suite_Updater")
@@ -785,7 +787,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.install_fonts:
         import io
+
         from matplotlib.figure import Figure
+
         from pymorgan.fonts import install_fonts_twice
 
         install_fonts_twice(quiet=False)

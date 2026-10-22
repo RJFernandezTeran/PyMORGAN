@@ -25,6 +25,7 @@ dependencies = [
     "PyQt6-sip>=13.6.0",
     "rinoh-typeface-texgyreheros",
     "cmcrameri>=1.8",
+    "defusedxml>=0.7.1",
 ]
 
 [project.optional-dependencies]

@@ -14,7 +14,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from pymorgan.test_runner import main
+from pymorgan.test_runner import main  # noqa: E402
 
 if __name__ == "__main__":
     sys.exit(main())
