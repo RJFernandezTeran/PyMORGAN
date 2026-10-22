@@ -534,3 +534,12 @@ The time-resolved anisotropy $r(\tau, \lambda)$, the isotropic (magic-angle equi
 \end{equation}
 The calculated $\Delta A_{\mathrm{iso}}$ is completely devoid of rotational reorientation dynamics, matching what would be measured directly at the magic angle ($54.7^\circ$). In addition to the rich interactive dialog—featuring simultaneous intensity and $r(\tau)$ kinetic traces, denominator noise thresholding, and probe wavelength slicing—the \textbf{Anisotropy} menu provides instant 1-click execution to replace the active workspace dataset with $r(\tau,\lambda)$, $\Delta A_{\mathrm{iso}}$, or the polarized components for immediate downstream kinetic analysis.
 
+\subsubsection{Time Derivative of Spectra ($\mathrm{d}(\Delta A)/\mathrm{d}t$)}\label{sec:oneD:timederiv}
+
+Accessed via \textbf{Pre-Processing $\to$ Time Derivative of Spectra\ldots} (\code{time\_derivative\_dialog.py}) or programmatically through \code{pymorgan.oneD.process.time\_derivative}, this tool computes the numerical derivative $\partial \Delta A(\tau, \lambda) / \partial \tau$ along the delay axis to accentuate rapid kinetic inflection points and coherent oscillations:
+\begin{enumerate}
+  \item \textbf{Early-delay cutoff:} Optionally trims delays $\tau < \tau_{\min}$ prior to differentiation so that the intense time-zero coherent artefact does not dominate the derivative scale.
+  \item \textbf{Time-domain interpolation:} Optionally resamples the signal onto a uniform or denser temporal grid ($N_{\text{interp}}$ points) before differentiation.
+  \item \textbf{Pre-smoothing:} Supports Savitzky--Golay polynomial filtering or moving-average smoothing along the delay dimension, with a live interactive preview comparing raw and differentiated kinetic traces at selected probe wavelengths.
+\end{enumerate}
+

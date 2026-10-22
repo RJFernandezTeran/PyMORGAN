@@ -1,51 +1,69 @@
 PyMORGAN Documentation
 ======================
 
-**Plotting, Calibration, and Analysis of Ultrafast Time-Resolved Spectroscopy Data (1D & 2D)**
+**Multidimensional Optical Spectroscopy Graphical Analysis Interface (1D & 2D)**
 
-PyMORGAN is a scientific Python package and PyQt6 graphical user interface for loading,
-calibrating, processing, and visualising one-dimensional (pump–probe TA, TRIR, nsTA,
-fluorescence upconversion) and two-dimensional (2D-IR, 2D-ES) time-resolved spectroscopy
-datasets, as well as steady-state reference spectra.
+PyMORGAN provides a unified Python interface and PyQt6 graphical application to load, calibrate,
+process, and plot ultrafast time-resolved spectroscopy data. The package is organised by
+dimensionality:
+
+- **One-Dimensional Spectroscopy (**\ :mod:`pymorgan.oneD`\ **):** Transient absorption (fs-TA,
+  ns-TA / flash photolysis), time-resolved infrared (TRIR), fluorescence up-conversion, and
+  polarisation anisotropy / magic-angle spectroscopy.
+- **Two-Dimensional Spectroscopy (**\ :mod:`pymorgan.twoD`\ **):** General two-dimensional optical
+  correlation spectroscopy across homonuclear and cross-regime modalities — **2D-IR**
+  (vibrational–vibrational), **2D-ES** (electronic–electronic), **2D-EV**
+  (electronic–vibrational), and **2D-VE** (vibrational–electronic) — from raw interferograms
+  through closed-form bin-zero detection, apodisation, IRLS phasing, and Fourier transformation
+  to spectral-diffusion (CLS / IvCLS / NLS), 2D Gaussian peak fitting, ROI volume integration,
+  and direct Kubo lineshape response-function fitting.
+- **Wavelength & Pulse-Shaper Calibration (**\ :mod:`pymorgan.cal`\ **):** Non-linear least-squares
+  dispersion fitting (linear grating, 2nd/3rd-order polynomial grating, and SF10 glass Sellmeier
+  prism models) across 12 pre-configured spectrograph and pulse-shaper setups.
+- **Steady-State Reference Spectra (**\ :mod:`pymorgan.steadyState`\ **):** Absorption, emission,
+  excitation, and stimulated-emission cross-section (:math:`\tilde{\nu}^4`) overlays.
 
 .. grid:: 2
    :gutter: 3
 
-   .. grid-item-card:: 🚀 Installation & Setup
+   .. grid-item-card:: 🚀 Installation & Cross-Platform Suite
       :link: installation
       :link-type: doc
 
-      Install via ``pip`` / ``uv``, set up local Python environments in 1 click, or run the
-      standalone Windows **PyMORGAN Suite** installer.
+      Install via ``pip`` / ``uv``, deploy standalone **PyMORGAN Suite** installers on
+      **Windows**, **macOS**, and **Linux**, or link local Python environments in 1 click.
 
    .. grid-item-card:: 📈 1D Pump–Probe Pipeline
       :link: user_guide/oneD
       :link-type: doc
 
       Load 12+ instrument formats (including PyMESS ``.h5``, HARPIA, Helios, TRIR), correct
-      background & Cauchy chirp dispersion, stitch windows, perform SVD, and calculate
-      polarisation anisotropy.
+      background, solvent, shockwaves & Cauchy chirp dispersion, stitch wavelength/time windows,
+      compute time derivatives, perform SVD, and calculate polarisation anisotropy.
 
-   .. grid-item-card:: 🗺️ 2D-IR & 2D Spectroscopy
+   .. grid-item-card:: 🗺️ 2D Spectroscopy (2D-IR, 2D-ES, 2D-EV, 2D-VE)
       :link: user_guide/twoD
       :link-type: doc
 
       Closed-form Fourier Shift Theorem bin-zero detection, apodisation, IRLS phasing,
-      spectral diffusion (CLS / IvCLS / NLS), and Kubo lineshape analysis.
+      spectral diffusion (CLS / IvCLS / NLS), Kubo lineshape fitting, 2D Gaussian peak fitting,
+      ROI volume integration, and 2D difference maps.
 
    .. grid-item-card:: 🎯 Wavelength & Shaper Calibration
       :link: user_guide/calibration
       :link-type: doc
 
       Calibrate spectrometer probe arrays and pulse-shaper pump masks across 12 hardware
-      setups (including HARPIA UV/Vis presets and auto-routed PyMESS ``.h5`` regimes).
+      setups (including HARPIA UV/Vis presets and auto-routed PyMESS ``.h5`` regimes) in a
+      unified 3-column inspector GUI.
 
    .. grid-item-card:: ⚙️ Steady-State, Aesthetics & Extending
       :link: user_guide/steady_state
       :link-type: doc
 
       Overlay steady-state FTIR/UV-Vis/emission spectra, customize publication-ready
-      Matplotlib profiles via ``settings.toml``, or register custom instrument loaders.
+      Matplotlib profiles via ``settings.toml``, edit the Qt Designer GUI, or register custom
+      instrument loaders.
 
    .. grid-item-card:: 📚 Full Python API Reference
       :link: api/index

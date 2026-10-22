@@ -1,8 +1,15 @@
-\section{Two-dimensional data}\label{sec:twoD}
+\section{Two-dimensional data (2D-IR, 2D-ES, 2D-EV, and 2D-VE)}\label{sec:twoD}
 
 The two-dimensional branch follows the same \emph{load $\to$ process $\to$
 plot $\to$ analyse} pipeline as the one-dimensional one (chapter~\ref{sec:oneD}),
-built around a single \code{Dataset2D} object. Table~\ref{tab:stages2d}
+built around a single \code{Dataset2D} object. It is designed for general two-dimensional optical correlation spectroscopy across all spectral regimes:
+\begin{itemize}
+  \item \textbf{2D-IR} (Two-Dimensional Infrared Spectroscopy: vibrational pump $\omega_1$ and vibrational probe $\omega_3$ in the mid-IR).
+  \item \textbf{2D-ES} (Two-Dimensional Electronic Spectroscopy: electronic pump $\omega_1$ and electronic probe $\omega_3$ in the UV/Vis/NIR).
+  \item \textbf{2D-EV} (Two-Dimensional Electronic--Vibrational Spectroscopy: electronic excitation $\omega_1$ in the UV/Vis coupled to vibrational detection $\omega_3$ in the mid-IR).
+  \item \textbf{2D-VE} (Two-Dimensional Vibrational--Electronic Spectroscopy: vibrational excitation $\omega_1$ in the mid-IR coupled to electronic detection $\omega_3$ in the UV/Vis/NIR).
+\end{itemize}
+Because \code{Dataset2D} stores the pump ($\omega_1$) and probe ($\omega_3$) axes independently, both homonuclear (2D-IR, 2D-ES) and cross-regime heteronuclear (2D-EV, 2D-VE) measurements are handled uniformly. Table~\ref{tab:stages2d}
 maps each stage to its module.
 
 \begin{table}[h]
@@ -408,3 +415,33 @@ through all population times~$t_2$. Controls include:
 A progress bar reports frame rendering. The dialog uses the plot-controls
 panel settings (CLS/IvCLS overlays, quick-plot mode, etc.) that are active
 in the main window when the dialog is opened.
+
+\subsubsection{Direct Kubo Lineshape \& Spectral Diffusion Fitting}\label{sec:twoD:kubo}
+
+The \textbf{Kubo Fit\ldots} dialog (\code{kubo\_dialog.py}, backed by \code{pymorgan.twoD.kubo\_fit}) performs full third-order response-function simulation and non-linear least-squares fitting of 2D spectra using the Kubo frequency-fluctuation correlation function. The dephasing lineshape function $g(t)$ combines static inhomogeneous broadening ($\Delta\omega_0$), Kubo spectral diffusion ($\Delta\omega_1$, correlation time $\tau_c$), and pure homogeneous dephasing ($T_2$):
+\begin{equation}
+  g(t) = \frac{1}{2}\sigma_0^2 t^2 + \sigma_1^2 \tau_c^2 \left( e^{-t/\tau_c} + \frac{t}{\tau_c} - 1 \right) + \frac{t}{T_2},
+  \qquad \sigma_i = \frac{2\pi c_0 \, \Delta\omega_i}{2\sqrt{2\ln 2}}.
+\end{equation}
+The dialog supports:
+\begin{itemize}
+  \item Multiple anharmonic oscillator bands $(\omega_{01}, \Delta)$ and multiple Kubo decay components $(\Delta\omega_i, \tau_{c,i}, T_2)$.
+  \item Joint fitting of 2D correlation maps across selected $t_2$ delays together with steady-state FTIR spectra (weighted by \code{kubo\_ftir\_weight}).
+  \item Rotating-frame Nyquist undersampling (\code{w\_rot}, \code{undersampling\_factor}) and fine-grid interpolation for fast, accurate response evaluation.
+\end{itemize}
+
+\subsubsection{Interactive 2D Gaussian Peak Fitting \& Cross-Peak Generator}\label{sec:twoD:gaussian}
+
+The \textbf{2D Gaussian Fit\ldots} dialog (\code{twoD\_gaussian\_dialog.py}, backed by \code{fit\_2d\_gaussian\_map} and \code{fit\_2d\_gaussian\_global}) fits a sum of 2D correlated elliptical Gaussian peaks to diagonal and off-diagonal features:
+\begin{equation}
+  G(\omega_1, \omega_3) = A \exp\!\left( -\frac{1}{2(1-\rho^2)} \left[ \frac{(\omega_1 - \omega_{1,0})^2}{\sigma_1^2} + \frac{(\omega_3 - \omega_{3,0})^2}{\sigma_3^2} - \frac{2\rho(\omega_1 - \omega_{1,0})(\omega_3 - \omega_{3,0})}{\sigma_1 \sigma_3} \right] \right).
+\end{equation}
+Users can click directly on the 2D contour map to seed peaks, automatically generate linked cross-peak pairs from diagonal modes via the \code{CrossPeakGeneratorDialog}, link centers/anharmonicities across peaks, and fit either single $t_2$ slices or globally across the entire $t_2$ stack.
+
+\subsubsection{2D ROI Volume Integration \& Dynamics}\label{sec:twoD:integral}
+
+The \textbf{2D Integral Dynamics\ldots} dialog (\code{twoD\_integral\_dialog.py}) allows interactive rectangular region-of-interest (ROI) selection on the $(\omega_1, \omega_3)$ map using a draggable \code{RectangleSelector}. It integrates the 2D signal volume $I(t_2) = \iint_{\mathrm{ROI}} Z(\omega_1, \omega_3, t_2)\,\mathrm{d}\omega_1\,\mathrm{d}\omega_3$ across all population waiting times $t_2$, plots the resulting kinetic trace, and fits it with single- or multi-exponential decay models.
+
+\subsubsection{2D Spectrum Subtraction}\label{sec:twoD:subtraction}
+
+The \textbf{Subtract 2D Spectra\ldots} dialog (\code{twoD\_subtraction\_dialog.py}) loads a reference 2D dataset (such as pure solvent or buffer), interpolates it onto the sample dataset's $(\omega_1, \omega_3, t_2)$ grid, and performs scaled subtraction $Z_{\mathrm{corr}} = Z_{\mathrm{sample}} - k \, Z_{\mathrm{ref}}$ with a live three-panel preview (Sample, Scaled Reference, and Difference Map).
