@@ -33,6 +33,12 @@ gui = []
 dev = ["ruff>=0.16.2", "pytest>=9.1.1"]
 # Optional: GUI test helpers (qtbot); needs Qt runtime libs present.
 gui-dev = ["pytest-qt>=4"]
+docs = [
+    "sphinx>=7.0",
+    "pydata-sphinx-theme>=0.15",
+    "sphinx-copybutton>=0.5",
+    "sphinx-design>=0.5",
+]
 
 [project.scripts]
 pymorgan = "pymorgan.launcher:main"

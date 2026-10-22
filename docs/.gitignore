@@ -6,3 +6,8 @@
 *.out
 *.toc
 *.synctex.gz
+
+# Sphinx build artifacts
+_build/
+_autosummary/
+

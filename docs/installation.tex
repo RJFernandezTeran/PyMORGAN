@@ -178,6 +178,7 @@ installed automatically by \code{uv pip install -e .}; no manual
     \code{tomlkit}         & 0.15.1 & Settings file read/write \\
     \code{PyQt6}           & 6.11.0 & Graphical interface framework \\
     \code{PyQt6\_sip}      & 13.12.0& Qt bindings interface \\
+    \code{defusedxml}      & 0.7.1  & Hardened XML parsing for Qt Designer UI files \\
     \bottomrule
   \end{tabular}
   \caption{Core runtime dependencies (minimum version floors as of August 2026).
@@ -213,7 +214,7 @@ uv sync               # install the resolved versions into .venv
 % ---------------------------------------------------------------------------
 \subsection{Console scripts}\label{sec:scripts}
 
-Four console scripts are installed with the package:
+Five console scripts are installed with the package:
 
 \begin{table}[h]
   \centering
@@ -225,6 +226,7 @@ Four console scripts are installed with the package:
     \code{pymorgan-install-fonts} & Install bundled fonts into matplotlib \\
     \code{pymorgan-edit-gui}      & Open the GUI layout in Qt Designer \\
     \code{pymorgan-settings}      & Standalone settings editor (no data loaded) \\
+    \code{pymorgan-setup-env}     & 1-click local Python environment setup wizard \\
     \bottomrule
   \end{tabular}
   \caption{Console scripts installed with the package.}

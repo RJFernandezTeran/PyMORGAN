@@ -10,7 +10,7 @@ The calibration workflow matches an experimentally measured absorption spectrum 
 The workflow proceeds in six stages:
 \begin{enumerate}
   \item \textbf{Load Reference Spectrum:} Load $A_\text{ref}(\lambda)$ or $A_\text{ref}(\tilde{\nu})$ with automatic delimiter and unit detection (\code{load\_reference\_spectrum}).
-  \item \textbf{Load Experimental Data:} Parse raw detector intensity or absorbance arrays for one of ten hardware setups (\code{load\_experimental\_spectrum}).
+  \item \textbf{Load Experimental Data:} Parse raw detector intensity or absorbance arrays for one of twelve hardware setups (\code{load\_experimental\_spectrum}).
   \item \textbf{Pre-alignment (Template Scanning):} Perform 1D cross-correlation scanning to estimate initial wavelength shift $\lambda_1$ at pixel~1.
   \item \textbf{NLS Parameter Fitting:} Optimise dispersion coefficients and additive polynomial baseline using \code{scipy.optimise.least\_squares} with 1st or 2nd derivative filtering.
   \item \textbf{Axis Inversion:} Invert pixel-to-wavelength mapping $p(\lambda) \to \lambda(p)$ analytically or numerically.
@@ -40,6 +40,7 @@ class ExperimentalData(NamedTuple):
     file_path: Path               # File path on disk
     min_wl: float | None = None   # Lower spectral bound from metadata
     max_wl: float | None = None   # Upper spectral bound from metadata
+    spectral_range: str | None = None  # Detected regime ('Mid-IR', 'UV/Vis', 'NIR')
 \end{lstlisting}
 
   \item[\code{CalibrationResult}:] Output container returned by \code{fit\_wavelength\_axis}.
@@ -159,37 +160,56 @@ where $A$ is peak amplitude, $\omega_0$ is central frequency (\text{cm}$^{-1}$),
 
 \subsection{Supported Hardware Setup Configurations}
 
-The calibration engine pre-configures ten spectrograph hardware setups:
+The calibration engine pre-configures twelve spectrograph hardware setups:
 
 \begin{table}[h]
   \centering
+  \small
   \caption{Pre-configured calibration setup codes and default parameter estimates.}\label{tab:cal_setups}
   \begin{tabular}{llcccc}
     \toprule
     Code & Setup Name & Default $\lambda_0$ & Dispersion Guess & Degree & Default Bounds ($\Delta\lambda_\text{rel}$) \\
     \midrule
-    1  & UoS TRIR                 & 2000 cm$^{-1}$ & 0.30 px/cm$^{-1}$ & 2      & [-1000, +1666] nm \\
-    2  & UniGE TA                 & 530 nm         & 1.10 px/nm        & 2      & [-180, +210] nm \\
-    3  & UniGE nsTA               & 530 nm         & 1.10 px/nm        & 2      & [-180, +210] nm \\
-    4  & UZH Lab 2                & 2000 cm$^{-1}$ & 0.30 px/cm$^{-1}$ & 2      & [-455, +1250] nm \\
-    5  & UniGE NIR-TA             & 1000 nm        & 1.00 px/nm        & Prism  & [-200, +600] nm \\
-    6  & RAL Absorbance           & 2000 cm$^{-1}$ & 0.30 px/cm$^{-1}$ & 2      & [-653, +882] nm \\
-    7  & RAL Intensity            & 2000 cm$^{-1}$ & 0.30 px/cm$^{-1}$ & 2      & [-653, +882] nm \\
-    8  & UniGE TRIR (Int.)        & 2000 cm$^{-1}$ & 0.30 px/cm$^{-1}$ & 2      & [-200, +200] nm \\
-    9  & UniGE TRIR (Abs.)        & 2000 cm$^{-1}$ & 0.30 px/cm$^{-1}$ & 2      & [-200, +200] nm \\
-    10 & UniGE TRUVIS-II          & 530 nm         & 1.20 px/nm        & 3      & [-150, +220] nm \\
+    1  & UoS TRIR                         & 2000 cm$^{-1}$ & 0.30 px/cm$^{-1}$ & 2     & [-1000, +1666] nm \\
+    2  & UniGE TA                         & 530 nm         & 1.10 px/nm        & 2     & [-180, +210] nm \\
+    3  & UniGE nsTA                       & 530 nm         & 1.10 px/nm        & 2     & [-180, +210] nm \\
+    4  & UZH Lab 2                        & 2000 cm$^{-1}$ & 0.30 px/cm$^{-1}$ & 2     & [-455, +1250] nm \\
+    5  & UniGE NIR-TA                     & 1000 nm        & 1.00 px/nm        & Prism & [-200, +600] nm \\
+    6  & RAL Absorbance                   & 2000 cm$^{-1}$ & 0.30 px/cm$^{-1}$ & 2     & [-653, +882] nm \\
+    7  & RAL Intensity                    & 2000 cm$^{-1}$ & 0.30 px/cm$^{-1}$ & 2     & [-653, +882] nm \\
+    8  & UniGE TRIR (Int.)                & 2000 cm$^{-1}$ & 0.30 px/cm$^{-1}$ & 2     & [-200, +200] nm \\
+    9  & UniGE TRIR (Abs.)                & 2000 cm$^{-1}$ & 0.30 px/cm$^{-1}$ & 2     & [-200, +200] nm \\
+    10 & UniGE TRUVIS-II                  & 530 nm         & 1.20 px/nm        & 3     & [-150, +220] nm \\
+    11 & Light Conversion HARPIA-TA (Int.) & 515 / 440 nm   & 1.00 / 1.15 px/nm & 2     & [-165,+235] / [-120,+160] nm \\
+    12 & PyMESS (\code{.h5})              & Auto-routed    & Auto-routed       & Auto  & Routed by spectral range \\
     \bottomrule
   \end{tabular}
 \end{table}
 
+\paragraph{HARPIA Range Presets (Setup 11).}
+Setup 11 (\code{Light Conversion HARPIA-TA (Int.)}) provides two dedicated optical range presets selectable in the GUI via \code{harpia\_preset}:
+\begin{itemize}
+  \item \textbf{Vis Range} (\code{"Vis"}): $\lambda_0 = 515$\,nm, dispersion guess $d_0 = 1.0$\,px/nm, relative fit bounds $[-165, +235]$\,nm (spanning $350$--$750$\,nm).
+  \item \textbf{UV Range} (\code{"UV"}): $\lambda_0 = 440$\,nm, dispersion guess $d_0 = 1.15$\,px/nm, relative fit bounds $[-120, +160]$\,nm (spanning $320$--$600$\,nm).
+\end{itemize}
+When loading a HARPIA \code{.dat} file containing a calibrated wavelength header, PyMORGAN automatically inspects the minimum wavelength ($\lambda_{\min} < 365$\,nm) to select the appropriate preset.
+
+\paragraph{PyMESS HDF5 Automatic Pathway Routing (Setup 12).}
+Setup 12 (\code{PyMESS}) reads \code{.h5} calibration datasets produced by PyMESS (supporting both spectrometer \code{probe\_*} and pulse shaper \code{pump\_*} measurements). PyMORGAN inspects the HDF5 metadata (\code{/meta/spectrometer/range}, \code{type}, central wavelength \code{cwl}, and grating density) to classify the spectral regime into \code{"Mid-IR"}, \code{"UV/Vis"}, or \code{"NIR"}, and routes the dispersion model and parameter bounds automatically via \code{resolve\_effective\_cal\_type(12, spectral\_range)}:
+\begin{itemize}
+  \item \textbf{Mid-IR} ($\lambda_0 \ge 2500$\,nm or $1000 < \lambda_0 < 2500$ with grating $< 200$\,l/mm): Follows the \textbf{UniGE TRIR} pathway (Setup~8, 2nd-order polynomial in wavenumber space).
+  \item \textbf{UV/Vis} ($\lambda_0 < 850$\,nm): Follows the \textbf{UniGE TRUVIS-II} pathway (Setup~10, 3rd-order polynomial grating model in wavelength space).
+  \item \textbf{NIR} ($850 \le \lambda_0 < 2500$\,nm): Follows the \textbf{UniGE NIR-TA} pathway (Setup~5, SF10 glass prism Sellmeier dispersion model).
+\end{itemize}
+
 The initial parameter bounds and dispersion guesses for each mode can be
-queried programmatically with \code{get\_default\_calibration\_params(cal\_type\_code)},
+queried programmatically with \code{get\_default\_calibration\_params(cal\_type\_code, spectral\_range=..., harpia\_preset=...)},
 which returns a dictionary with keys \code{p0}, \code{lb}, \code{ub},
 \code{cwl\_guess} and \code{degree}.
 
 \subsection{Graphical User Interface (Calibration Tab)}
 
-The GUI incorporates a dedicated \textbf{Calibration Tab} featuring 4 synchronized subplots:
+The GUI incorporates a dedicated \textbf{Calibration Tab} featuring a 3-Column Inspector Panel at the bottom that keeps all file selectors, dispersion parameters, and fit controls simultaneously visible alongside 4 synchronized subplots:
 \begin{enumerate}
   \item \textbf{Raw Measurements:} Overlay of Pump (Air) black curve, Pump (Solvent) red curve, Single Mask cyan shaded area ($\alpha=0.4$), and Multiple Mask blue curve.
   \item \textbf{Calculated Absorbance \& Physical Baseline:} Purple absorbance spectrum with dashed orange background polynomial baseline.
@@ -197,7 +217,12 @@ The GUI incorporates a dedicated \textbf{Calibration Tab} featuring 4 synchroniz
   \item \textbf{Calibration Fit:} Calibrated Wavelength (nm) vs.\ Pixel index dispersion curve with linear reference line and central crosshairs.
 \end{enumerate}
 
-The \textbf{Fit Controls} panel provides a global \emph{``Do baseline correction''} checkbox and defaults the \emph{``Fit Axis Unit''} selector to \textbf{Wavelength (nm)}. A standalone interactive Gaussian pump spectrum popup window allows interactive zoom/pan toolbar navigation and legend dragging.
+The bottom \textbf{3-Column Inspector Layout} is organised into:
+\begin{itemize}
+  \item \textbf{Column 1 ( Calibration Files \& Type):} Hardware setup selector (\code{combo\_cal\_type}), contextual sub-selectors for \code{HARPIA Range} (\emph{Vis Range} / \emph{UV Range}) or \code{PyMESS Regime} (\emph{Auto}, \emph{Mid-IR}, \emph{UV/Vis}, \emph{NIR}), Reference FTIR dropdown, and file browsers for Pump (Air), Pump (Solvent), Single Mask, and Multiple Mask.
+  \item \textbf{Column 2 (Calibration Parameters):} Side-by-side cards for \textbf{Spectrometer Setup \& Bounds} (Detector array, Grating, CWL, Fit Axis Unit, and Relative Cut Range $[\Delta\lambda_{\min}, \Delta\lambda_{\max}]$) and \textbf{Dispersion Model \& Fit Options} (Dispersion model radio buttons, Derivative mode, Baseline correction checkbox, Smoothing window, and Initial/Fitted Dispersion $px/x$).
+  \item \textbf{Column 3 (Fit Control):} One-click \textbf{$\circlearrowright$ Fit Spec.} and \textbf{$\circlearrowright$ Fit Shaper} action buttons, calibration status banner, and export buttons (\emph{Save Spec. Cal.}, \emph{Save Shaper Cal.}, \emph{Pump Fit}).
+\end{itemize}
 
 \subsection{Programmatic Usage Example}
 

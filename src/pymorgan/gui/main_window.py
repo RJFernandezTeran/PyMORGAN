@@ -1529,12 +1529,25 @@ class MainWindow(
         if menu_help is not None and not hasattr(self, "actionCheckUpdates"):
             from PyQt6.QtGui import QAction
 
+            about_act = getattr(self, "actionAbout", None)
+
+            act_sphinx = QAction("Web Documentation (Sphinx)...", self)
+            act_sphinx.setShortcut(QKeySequence("Ctrl+F1"))
+            act_sphinx.setToolTip(
+                "Open the interactive PyData Sphinx HTML documentation (local build or GitHub Pages)"
+            )
+            act_sphinx.triggered.connect(self._open_sphinx_docs)
+            if about_act is not None:
+                menu_help.insertAction(about_act, act_sphinx)
+            else:
+                menu_help.addAction(act_sphinx)
+            self.actionSphinxDocs = act_sphinx
+
             act_upd = QAction("Check for Updates (Release / Bleeding Edge)...", self)
             act_upd.setToolTip(
                 "Check GitHub for new releases or sync bleeding-edge updates from the main branch"
             )
             act_upd.triggered.connect(self._check_for_updates)
-            about_act = getattr(self, "actionAbout", None)
             if about_act is not None:
                 menu_help.insertAction(about_act, act_upd)
                 menu_help.insertSeparator(about_act)
@@ -1846,9 +1859,23 @@ class MainWindow(
         """Open the bundled manual PDF with the system default application."""
         manual = Path(pm.__file__).resolve().parent.parent.parent / "docs" / "main.pdf"
         if not manual.is_file():
-            QMessageBox.information(self, "Manual", f"Manual not found at {manual}.")
+            QDesktopServices.openUrl(QUrl("https://rjfernandezteran.github.io/PyMORGAN/main.pdf"))
             return
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(manual)))
+
+    def _open_sphinx_docs(self):
+        """Open the Sphinx HTML documentation (local build if present, otherwise GitHub Pages)."""
+        local_html = (
+            Path(pm.__file__).resolve().parent.parent.parent
+            / "docs"
+            / "_build"
+            / "html"
+            / "index.html"
+        )
+        if local_html.is_file():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(local_html)))
+        else:
+            QDesktopServices.openUrl(QUrl("https://rjfernandezteran.github.io/PyMORGAN/"))
 
     def _check_for_updates(self):
         """Interactive check for new GitHub releases or bleeding-edge main branch updates."""
@@ -1875,6 +1902,13 @@ class MainWindow(
         banner_path = icons_dir / "window.png"
         icon_path = icons_dir / "pirate-hat.png"
         manual_path = Path(pm.__file__).resolve().parent.parent.parent / "docs" / "main.pdf"
+        sphinx_path = (
+            Path(pm.__file__).resolve().parent.parent.parent
+            / "docs"
+            / "_build"
+            / "html"
+            / "index.html"
+        )
 
         dlg = ModernAboutDialog(
             parent=self,
@@ -1896,6 +1930,8 @@ class MainWindow(
             banner_path=str(banner_path) if banner_path.exists() else None,
             icon_path=str(icon_path) if icon_path.exists() else None,
             manual_pdf_path=str(manual_path) if manual_path.exists() else None,
+            docs_html_path=str(sphinx_path) if sphinx_path.exists() else None,
+            docs_url="https://rjfernandezteran.github.io/PyMORGAN/",
             ai_credit="Developed with AI assistance from <b>Google Antigravity</b>.",
         )
         dlg.exec()

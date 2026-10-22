@@ -48,6 +48,8 @@ class ModernAboutDialog(QDialog):
         banner_path: str | None = None,
         icon_path: str | None = None,
         manual_pdf_path: str | None = None,
+        docs_html_path: str | None = None,
+        docs_url: str | None = None,
         ai_credit: str | None = "Developed with AI assistance from <b>Google Antigravity</b>.",
     ) -> None:
         super().__init__(parent)
@@ -68,6 +70,8 @@ class ModernAboutDialog(QDialog):
         self._banner_path = banner_path
         self._icon_path = icon_path
         self._manual_pdf_path = manual_pdf_path
+        self._docs_html_path = docs_html_path
+        self._docs_url = docs_url
         self._ai_credit = ai_credit
 
         self.setWindowTitle(title)
@@ -317,6 +321,14 @@ class ModernAboutDialog(QDialog):
             btn_manual.clicked.connect(self._on_open_manual)
             btn_layout.addWidget(btn_manual)
 
+        if self._docs_html_path or self._docs_url:
+            btn_docs = QPushButton("Web Docs")
+            btn_docs.setObjectName("btnDocs")
+            btn_docs.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn_docs.setToolTip("Open interactive Sphinx HTML documentation")
+            btn_docs.clicked.connect(self._on_open_docs)
+            btn_layout.addWidget(btn_docs)
+
         if self._github_url:
             btn_github = QPushButton("GitHub")
             btn_github.setObjectName("btnGithub")
@@ -394,6 +406,13 @@ class ModernAboutDialog(QDialog):
         """Open the project GitHub repository in the default web browser."""
         if self._github_url:
             QDesktopServices.openUrl(QUrl(self._github_url))
+
+    def _on_open_docs(self) -> None:
+        """Open the local Sphinx HTML documentation or fallback online URL."""
+        if self._docs_html_path and os.path.isfile(self._docs_html_path):
+            QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.abspath(self._docs_html_path)))
+        elif self._docs_url:
+            QDesktopServices.openUrl(QUrl(self._docs_url))
 
     def _on_open_manual(self) -> None:
         """Locate and open the user manual PDF using the default desktop PDF reader."""
