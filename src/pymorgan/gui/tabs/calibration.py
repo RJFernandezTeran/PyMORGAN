@@ -108,6 +108,9 @@ class CalibrationTabMixin:
         if hasattr(self, "cal_chk_do_baseline") and self.cal_chk_do_baseline is not None:
             self.cal_chk_do_baseline.toggled.connect(self._on_cal_baseline_toggled)
 
+        if hasattr(self, "cal_range_combo") and self.cal_range_combo is not None:
+            self.cal_range_combo.currentIndexChanged.connect(self._on_cal_range_changed)
+
         if hasattr(self, "cal_type_combo") and self.cal_type_combo is not None:
             default_cal_type = getattr(pm.get_settings(), "default_calibration_datatype", "UniGE TRIR (Intensity)")
             idx = self.cal_type_combo.findText(default_cal_type)
@@ -167,11 +170,104 @@ class CalibrationTabMixin:
         if hasattr(self, "cal_shaper_btn_reset") and self.cal_shaper_btn_reset is not None:
             self.cal_shaper_btn_reset.clicked.connect(self._on_cal_shaper_reset)
 
+        if hasattr(self, "cal_set_btn_refit_spec") and self.cal_set_btn_refit_spec is not None:
+            self.cal_set_btn_refit_spec.clicked.connect(self._on_cal_do_fit)
+
+        if hasattr(self, "cal_set_btn_refit_shaper") and self.cal_set_btn_refit_shaper is not None:
+            self.cal_set_btn_refit_shaper.clicked.connect(self._on_cal_shaper_do_fit)
+
+    def _get_cal_spectral_range(self) -> str | None:
+        """Return active canonical spectral range ('mid-ir', 'uv-vis', 'nir', 'uv', 'vis') for PyMESS or HARPIA."""
+        type_combo = getattr(self, "cal_type_combo", None)
+        type_text = type_combo.currentText() if type_combo is not None else ""
+        range_combo = getattr(self, "cal_range_combo", None)
+        range_text = range_combo.currentText().lower() if range_combo is not None else ""
+
+        if type_text == "PyMESS":
+            if "uv" in range_text or "truvis" in range_text:
+                return "uv-vis"
+            if "nir" in range_text:
+                return "nir"
+            return "mid-ir"
+        if type_text == "Light Conversion HARPIA-TA (Int.)":
+            if "vis" in range_text:
+                return "vis"
+            return "uv"
+        return None
+
+    def _get_effective_cal_type_code(self) -> int:
+        """Return the effective pathway calibration code (resolving PyMESS into 8=TRIR, 10=TRUVIS-II, or 5=NIR-TA)."""
+        combo = getattr(self, "cal_type_combo", None)
+        cal_type_code = (combo.currentIndex() + 1) if (combo is not None and combo.currentIndex() >= 0) else 2
+        if cal_type_code == 12:
+            rng = self._get_cal_spectral_range()
+            if rng == "uv-vis":
+                return 10
+            if rng == "nir":
+                return 5
+            return 8
+        return cal_type_code
+
+    def _sync_pymess_range_combo(self, detected_range: str | None):
+        """Sync the PyMESS Spectral Range selector to the range auto-detected from an HDF5 file."""
+        if not detected_range:
+            return
+        type_combo = getattr(self, "cal_type_combo", None)
+        range_combo = getattr(self, "cal_range_combo", None)
+        if type_combo is None or range_combo is None or type_combo.currentText() != "PyMESS":
+            return
+        idx_map = {"mid-ir": 0, "uv-vis": 1, "nir": 2}
+        target_idx = idx_map.get(detected_range.lower())
+        if target_idx is not None and range_combo.currentIndex() != target_idx and target_idx < range_combo.count():
+            range_combo.setCurrentIndex(target_idx)
+
     def _on_cal_type_changed(self, index: int):
-        """Update Detector 2 tab, fit axis unit mode, and Pulse Shaper group enablement based on selected setup type."""
+        """Update Spectral Range selector, Detector 2 tab, fit axis unit mode, and Pulse Shaper group enablement."""
         combo = getattr(self, "cal_type_combo", None)
         text = combo.itemText(index) if combo is not None and index >= 0 else ""
-        cal_type_code = index + 1
+
+        range_widget = getattr(self, "cal_range_widget", None)
+        range_combo = getattr(self, "cal_range_combo", None)
+        if range_combo is not None:
+            range_combo.blockSignals(True)
+            range_combo.clear()
+            if text == "PyMESS":
+                range_combo.addItems([
+                    "Mid-IR (UniGE TRIR)",
+                    "UV/Vis (UniGE TRUVIS-II)",
+                    "NIR (UniGE NIR-TA)",
+                ])
+                range_combo.setCurrentIndex(0)
+                range_combo.setToolTip("Select PyMESS spectrometer range (auto-detected when loading .h5 files).")
+                if range_widget is not None:
+                    range_widget.setVisible(True)
+            elif text == "Light Conversion HARPIA-TA (Int.)":
+                range_combo.addItems([
+                    "UV Range",
+                    "Vis Range",
+                ])
+                range_combo.setCurrentIndex(0)
+                range_combo.setToolTip("Select Light Conversion HARPIA-TA spectrograph range preset (UV vs. Vis).")
+                if range_widget is not None:
+                    range_widget.setVisible(True)
+            else:
+                if range_widget is not None:
+                    range_widget.setVisible(False)
+            range_combo.blockSignals(False)
+
+        pm.update_settings(default_calibration_datatype=text)
+        self._apply_cal_pathway_settings()
+
+    def _on_cal_range_changed(self, _index: int):
+        """Update pathway settings and default parameters when the Spectral Range combo box changes."""
+        self._apply_cal_pathway_settings()
+
+    def _apply_cal_pathway_settings(self):
+        """Apply pathway UI visibility and default fit parameters for the active Calibration Type and Spectral Range."""
+        combo = getattr(self, "cal_type_combo", None)
+        cal_type_code = (combo.currentIndex() + 1) if (combo is not None and combo.currentIndex() >= 0) else 2
+        eff_code = self._get_effective_cal_type_code()
+        spec_range = self._get_cal_spectral_range()
 
         # Default fit axis unit to Wavelength (nm) (index 0) for ALL data types
         unit_combo = getattr(self, "cal_combo_unit_mode", None)
@@ -179,21 +275,11 @@ class CalibrationTabMixin:
             if unit_combo.currentIndex() != 0:
                 unit_combo.setCurrentIndex(0)
 
-        # 2-Detector setups: UoS TRIR, RAL LIFEtime (Absorbance), RAL LIFEtime (Intensity)
-        is_two_detector = text in (
-            "UoS TRIR",
-            "RAL LIFEtime (Absorbance)",
-            "RAL LIFEtime (Intensity)",
-        )
+        # 2-Detector setups: UoS TRIR (1), RAL LIFEtime (6, 7)
+        is_two_detector = eff_code in (1, 6, 7)
 
-        # Setups supporting pulse shaper (UniGE TRIR, UoS, RAL)
-        has_shaper = text in (
-            "UoS TRIR",
-            "RAL LIFEtime (Absorbance)",
-            "RAL LIFEtime (Intensity)",
-            "UniGE TRIR (Intensity)",
-            "UniGE TRIR (Absorbance)",
-        )
+        # Setups supporting pulse shaper (UniGE TRIR, UoS, RAL, and PyMESS Mid-IR)
+        has_shaper = eff_code in (1, 6, 7, 8, 9)
 
         # Update Detector 2 tab enablement & visibility
         tab_widget = getattr(self, "cal_detector_tabWidget", None)
@@ -215,12 +301,15 @@ class CalibrationTabMixin:
             shaper_group.setEnabled(has_shaper)
             shaper_group.setVisible(has_shaper)
 
-        pm.update_settings(default_calibration_datatype=text)
+        refit_shaper_btn = getattr(self, "cal_set_btn_refit_shaper", None)
+        if refit_shaper_btn is not None:
+            refit_shaper_btn.setEnabled(has_shaper)
+            refit_shaper_btn.setVisible(has_shaper)
 
         # Update Grating Model combo box enablement & default selection
+        is_prism = eff_code == 5
         model_combo = getattr(self, "cal_combo_grating_model", None)
         if model_combo is not None:
-            is_prism = text == "UniGE NIR-TA"
             model_combo.setEnabled(not is_prism)
             if is_prism:
                 model_combo.setToolTip("NIR-TA uses the SF10 Prism Sellmeier dispersion model")
@@ -229,11 +318,12 @@ class CalibrationTabMixin:
                 default_idx = 0 if is_prism else 1
                 model_combo.setCurrentIndex(default_idx)
 
+        if hasattr(self, "cal_set_grating_model") and self.cal_set_grating_model is not None:
+            self.cal_set_grating_model.setEnabled(not is_prism)
 
-
-        # Pre-fill Fit Settings tab widgets according to selected setup type
+        # Pre-fill Fit Settings tab widgets according to selected setup type & range
         from pymorgan.cal import get_default_calibration_params
-        p_def = get_default_calibration_params(cal_type_code)
+        p_def = get_default_calibration_params(cal_type_code, spectral_range=spec_range)
 
         if hasattr(self, "cal_set_cwl") and self.cal_set_cwl is not None:
             self.cal_set_cwl.setValue(round(float(p_def["cwl"]), 2))
@@ -280,8 +370,10 @@ class CalibrationTabMixin:
             "UniGE TRIR (Intensity)": ("UniGE TRIR files (*.csv);;All Files (*.*)", "*ds0_intensity*.csv"),
             "UniGE TRIR (Absorbance)": ("UniGE TRIR files (*.csv);;All Files (*.*)", "*ds0_intensity*.csv"),
             "UniGE TRUVIS-II (Intensity)": ("UniGE TRUVIS-II files (*.csv);;All Files (*.*)", "*ds0_intensity*.csv"),
+            "Light Conversion HARPIA-TA (Int.)": ("HARPIA files (*.txt *.dat *.csv);;All Files (*.*)", ""),
+            "PyMESS": ("PyMESS HDF5 files (*.h5 *.hdf5);;All Files (*.*)", "*.h5"),
         }
-        return specs.get(text, ("Data Files (*.dat *.csv *.2D *.txt);;All Files (*.*)", ""))
+        return specs.get(text, ("Data Files (*.dat *.csv *.2D *.txt *.h5);;All Files (*.*)", ""))
 
     def _update_cal_raw_plots(self):
         """Update Top-Left raw intensities plot with Probe (black) and Svt/Filt (red) spectra."""
@@ -352,7 +444,7 @@ class CalibrationTabMixin:
 
         unit_idx = self.cal_combo_unit_mode.currentIndex() if hasattr(self, "cal_combo_unit_mode") else 0
         fit_unit_mode = "nm" if unit_idx == 0 else "cm-1"
-        cal_type_idx = self.cal_type_combo.currentIndex() + 1 if hasattr(self, "cal_type_combo") else 2
+        cal_type_idx = self._get_effective_cal_type_code()
         is_ir = cal_type_idx in (1, 4, 6, 7, 8, 9)
 
         exp_data = getattr(self, "_cal_exp_data", None)
@@ -616,20 +708,23 @@ class CalibrationTabMixin:
         try:
             exp_data = load_experimental_spectrum(file_path, cal_type_idx)
             self._cal_exp_data = exp_data
+            if cal_type_idx == 12 and getattr(exp_data, "spectral_range", None):
+                self._sync_pymess_range_combo(exp_data.spectral_range)
+            eff_code = self._get_effective_cal_type_code()
             if led:
                 led.set_state("loaded")
             self.statusBar().showMessage(f"Loaded Probe Spectrum: {Path(file_path).name}")
 
-            # Update Fit Settings tab with parsed metadata
-            is_ir = cal_type_idx in (1, 4, 6, 7, 8, 9)
-            if hasattr(self, "cal_set_cwl") and exp_data.cwl and exp_data.cwl[0] > 0:
+            # Update Fit Settings tab with parsed metadata (preserving HARPIA UV/Vis preset CWL)
+            is_ir = eff_code in (1, 4, 6, 7, 8, 9)
+            if hasattr(self, "cal_set_cwl") and exp_data.cwl and exp_data.cwl[0] > 0 and cal_type_idx != 11:
                 cwl_val = exp_data.cwl[0]
                 self.cal_set_cwl.setValue(round(float(cwl_val), 2))
-            if hasattr(self, "cal_set_ppnm") and exp_data.gratings and exp_data.gratings[0] > 0 and cal_type_idx != 10:
+            if hasattr(self, "cal_set_ppnm") and exp_data.gratings and exp_data.gratings[0] > 0 and eff_code != 10:
                 g_val = exp_data.gratings[0]
                 ppnm = (g_val / 500.0) if is_ir else (1.1 * g_val / 150.0)
                 self.cal_set_ppnm.setValue(ppnm)
-                if cal_type_idx in (8, 9) and abs(g_val - 150) < 1e-3:
+                if eff_code in (8, 9) and abs(g_val - 150) < 1e-3:
                     if hasattr(self, "cal_set_rel_min_nm"):
                         self.cal_set_rel_min_nm.setValue(-200.0)
                     if hasattr(self, "cal_set_rel_max_nm"):
@@ -770,11 +865,13 @@ class CalibrationTabMixin:
             return
 
         cal_type_idx = self.cal_type_combo.currentIndex() + 1 if hasattr(self, "cal_type_combo") else 2
+        eff_code = self._get_effective_cal_type_code()
+        spec_range = self._get_cal_spectral_range()
 
         if ref_spec is None:
             ref_dir = Path(__file__).resolve().parent.parent.parent / "cal" / "ref_spectra"
             holmium_ref = ref_dir / "UVVis-Holmium.csv"
-            if cal_type_idx in (2, 3, 10, 11) and holmium_ref.exists():
+            if eff_code in (2, 3, 10, 11) and holmium_ref.exists():
                 from pymorgan.cal import load_reference_spectrum
                 ref_spec = load_reference_spectrum(holmium_ref)
                 self._cal_ref_spec = ref_spec
@@ -788,7 +885,7 @@ class CalibrationTabMixin:
             ref_y = ref_spec.absorbance
 
         from pymorgan.cal import get_default_calibration_params
-        p_def = get_default_calibration_params(cal_type_idx)
+        p_def = get_default_calibration_params(cal_type_idx, spectral_range=spec_range)
 
         # Read fitting parameters directly from Fit Settings sub-tab widgets
         cwl_val = self.cal_set_cwl.value() if hasattr(self, "cal_set_cwl") else p_def["cwl"]
@@ -818,7 +915,7 @@ class CalibrationTabMixin:
                 meas_y=meas_y,
                 ref_x=ref_x,
                 ref_y=ref_y,
-                cal_type_code=cal_type_idx,
+                cal_type_code=eff_code,
                 cwl=cwl_val,
                 ppnm_guess=ppnm_val,
                 rel_min_nm=rel_min_val,
@@ -829,6 +926,7 @@ class CalibrationTabMixin:
                 use_derivative=deriv_mode,
                 savgol_window=savgol_win,
                 convolve_ref=do_convolve,
+                spectral_range=spec_range,
             )
             self._cal_fit_result_det1 = res
             self._update_cal_fit_plot_det1(res)
@@ -885,7 +983,8 @@ class CalibrationTabMixin:
                 if hasattr(self, "cal_type_combo") and self.cal_type_combo is not None
                 else None
             )
-            is_ir = cal_code in (1, 4, 6, 7, 8, 9) if cal_code is not None else False
+            eff_code = self._get_effective_cal_type_code()
+            is_ir = eff_code in (1, 4, 6, 7, 8, 9)
             probe_vector = res1.wavenumber_cm1 if is_ir else res1.wavelength_nm
             primary, _ = save_calibration_file(
                 probe_vector, target_path, save_timestamped=False, cal_type_code=cal_code
@@ -980,16 +1079,20 @@ class CalibrationTabMixin:
             self._cal_shaper_pump_air_x = x_axis
             self._cal_shaper_pump_air_y = y_pump
 
+            if cal_type_idx == 12 and getattr(exp_data, "spectral_range", None):
+                self._sync_pymess_range_combo(exp_data.spectral_range)
+            eff_code = self._get_effective_cal_type_code()
+
             # Update Fit Settings tab with parsed metadata (EXACTLY LIKE SPECTROMETER PROBE LOADER)
-            is_ir = cal_type_idx in (1, 4, 6, 7, 8, 9)
+            is_ir = eff_code in (1, 4, 6, 7, 8, 9)
             if hasattr(self, "cal_set_cwl") and getattr(exp_data, "cwl", None) and len(exp_data.cwl) > 0 and exp_data.cwl[0] > 0:
                 cwl_val = exp_data.cwl[0]
                 self.cal_set_cwl.setValue(round(float(cwl_val), 2))
-            if hasattr(self, "cal_set_ppnm") and getattr(exp_data, "gratings", None) and len(exp_data.gratings) > 0 and exp_data.gratings[0] > 0 and cal_type_idx != 10:
+            if hasattr(self, "cal_set_ppnm") and getattr(exp_data, "gratings", None) and len(exp_data.gratings) > 0 and exp_data.gratings[0] > 0 and eff_code != 10:
                 g_val = exp_data.gratings[0]
                 ppnm = (g_val / 500.0) if is_ir else (1.1 * g_val / 150.0)
                 self.cal_set_ppnm.setValue(ppnm)
-                if cal_type_idx in (8, 9) and abs(g_val - 150) < 1e-3:
+                if eff_code in (8, 9) and abs(g_val - 150) < 1e-3:
                     if hasattr(self, "cal_set_rel_min_nm"):
                         self.cal_set_rel_min_nm.setValue(-200.0)
                     if hasattr(self, "cal_set_rel_max_nm"):

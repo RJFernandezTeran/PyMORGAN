@@ -309,7 +309,11 @@ def test_load_and_process_fd_2d(fd_2d_file: Path):
 
 def test_real_20261016_datasets():
     """Integration test against all experimental files in 20261016 if present."""
-    base_dir = Path(r"C:\Users\ricar\switchdrive\Ambizione UniGE\Scripts\testData\PyMESS\20261016")
+    import os
+    env_dir = os.environ.get("PYMORGAN_TESTDATA_DIR")
+    if not env_dir:
+        pytest.skip("PYMORGAN_TESTDATA_DIR environment variable not set")
+    base_dir = Path(env_dir) / "PyMESS" / "20261016"
     if not base_dir.is_dir():
         pytest.skip(f"Directory {base_dir} not found")
 

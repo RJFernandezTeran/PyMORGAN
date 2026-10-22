@@ -3151,7 +3151,7 @@ The magnitude sets the smoothing window width.</string>
           <widget class="QScrollArea" name="cal_scroll_area">
            <property name="maximumSize">
             <size>
-             <width>320</width>
+             <width>290</width>
              <height>16777215</height>
             </size>
            </property>
@@ -3269,6 +3269,34 @@ The magnitude sets the smoothing window width.</string>
                  <item><property name="text"><string>UniGE TRIR (Absorbance)</string></property></item>
                  <item><property name="text"><string>UniGE TRUVIS-II (Intensity)</string></property></item>
                  <item><property name="text"><string>Light Conversion HARPIA-TA (Int.)</string></property></item>
+                 <item><property name="text"><string>PyMESS</string></property></item>
+                </widget>
+               </item>
+               <item>
+                <widget class="QWidget" name="cal_range_widget" native="true">
+                 <layout class="QVBoxLayout" name="cal_range_layout">
+                  <property name="leftMargin"><number>0</number></property>
+                  <property name="topMargin"><number>0</number></property>
+                  <property name="rightMargin"><number>0</number></property>
+                  <property name="bottomMargin"><number>0</number></property>
+                  <property name="spacing"><number>2</number></property>
+                  <item>
+                   <widget class="QLabel" name="cal_range_label">
+                    <property name="text">
+                     <string>Spectral Range</string>
+                    </property>
+                    <property name="alignment">
+                     <set>Qt::AlignCenter</set>
+                    </property>
+                    <property name="styleSheet">
+                     <string notr="true">font-weight: bold;</string>
+                    </property>
+                   </widget>
+                  </item>
+                  <item>
+                   <widget class="QComboBox" name="cal_range_combo"/>
+                  </item>
+                 </layout>
                 </widget>
                </item>
                <item>
@@ -3386,38 +3414,6 @@ The magnitude sets the smoothing window width.</string>
                   </property>
                   <property name="text">
                    <string>Reset</string>
-                  </property>
-                 </widget>
-                </item>
-               </layout>
-              </widget>
-             </item>
-             <item>
-              <widget class="QGroupBox" name="cal_fit_group">
-               <property name="styleSheet">
-                <string notr="true">QGroupBox { color: magenta; font-weight: bold; }</string>
-               </property>
-               <property name="title">
-                <string>Fit control</string>
-               </property>
-               <layout class="QVBoxLayout" name="cal_fit_layout">
-                <item>
-                 <widget class="QCheckBox" name="cal_chk_do_fit">
-                  <property name="text">
-                   <string>Do Fit</string>
-                  </property>
-                  <property name="checked">
-                   <bool>true</bool>
-                  </property>
-                 </widget>
-                </item>
-                <item>
-                 <widget class="QCheckBox" name="cal_chk_do_baseline">
-                  <property name="text">
-                   <string>Do baseline correction</string>
-                  </property>
-                  <property name="checked">
-                   <bool>true</bool>
                   </property>
                  </widget>
                 </item>
@@ -3584,162 +3580,234 @@ The magnitude sets the smoothing window width.</string>
                 </item>
                </layout>
               </widget>
-               <widget class="QWidget" name="cal_settings_tab">
-                <attribute name="title">
-                 <string>Fit Settings</string>
-                </attribute>
-                <layout class="QVBoxLayout" name="cal_settings_main_layout">
-                 <property name="leftMargin"><number>8</number></property>
-                 <property name="topMargin"><number>8</number></property>
-                 <property name="rightMargin"><number>8</number></property>
-                 <property name="bottomMargin"><number>8</number></property>
-                 <property name="spacing"><number>8</number></property>
-                 <item>
-                  <widget class="QGroupBox" name="cal_set_geom_group">
-                   <property name="title">
-                    <string>Spectrometer Setup &amp;&amp; Wavelength Bounds</string>
-                   </property>
-                   <layout class="QGridLayout" name="cal_set_geom_layout">
-                    <item row="0" column="0">
-                     <widget class="QLabel" name="cal_set_lbl_cwl">
-                      <property name="text"><string>Central Wavelength/Wavenumber:</string></property>
-                      <property name="styleSheet"><string notr="true">font-weight: bold;</string></property>
-                     </widget>
-                    </item>
-                    <item row="0" column="1">
-                     <widget class="QDoubleSpinBox" name="cal_set_cwl">
-                      <property name="decimals"><number>2</number></property>
-                      <property name="minimum"><double>0.0</double></property>
-                      <property name="maximum"><double>100000.0</double></property>
-                      <property name="value"><double>2000.0</double></property>
-                     </widget>
-                    </item>
-                    <item row="1" column="0">
-                     <widget class="QLabel" name="cal_set_lbl_ppnm">
-                      <property name="text"><string>Initial Dispersion Guess (px/unit):</string></property>
-                      <property name="styleSheet"><string notr="true">font-weight: bold;</string></property>
-                     </widget>
-                    </item>
-                    <item row="1" column="1">
-                     <widget class="QDoubleSpinBox" name="cal_set_ppnm">
-                      <property name="decimals"><number>4</number></property>
-                      <property name="minimum"><double>0.0001</double></property>
-                      <property name="maximum"><double>100.0</double></property>
-                      <property name="singleStep"><double>0.05</double></property>
-                      <property name="value"><double>0.30</double></property>
-                     </widget>
-                    </item>
-                    <item row="2" column="0">
-                     <widget class="QLabel" name="cal_set_lbl_rel_min_nm">
-                      <property name="text"><string>Lower Wavelength Bound (rel. nm):</string></property>
-                      <property name="styleSheet"><string notr="true">font-weight: bold;</string></property>
-                     </widget>
-                    </item>
-                    <item row="2" column="1">
-                     <widget class="QDoubleSpinBox" name="cal_set_rel_min_nm">
-                      <property name="decimals"><number>1</number></property>
-                      <property name="minimum"><double>-5000.0</double></property>
-                      <property name="maximum"><double>0.0</double></property>
-                      <property name="singleStep"><double>10.0</double></property>
-                      <property name="value"><double>-1000.0</double></property>
-                     </widget>
-                    </item>
-                    <item row="3" column="0">
-                     <widget class="QLabel" name="cal_set_lbl_rel_max_nm">
-                      <property name="text"><string>Upper Wavelength Bound (rel. nm):</string></property>
-                      <property name="styleSheet"><string notr="true">font-weight: bold;</string></property>
-                     </widget>
-                    </item>
-                    <item row="3" column="1">
-                     <widget class="QDoubleSpinBox" name="cal_set_rel_max_nm">
-                      <property name="decimals"><number>1</number></property>
-                      <property name="minimum"><double>0.0</double></property>
-                      <property name="maximum"><double>5000.0</double></property>
-                      <property name="singleStep"><double>10.0</double></property>
-                      <property name="value"><double>1666.0</double></property>
-                     </widget>
-                    </item>
-                   </layout>
-                  </widget>
-                 </item>
-                 <item>
-                  <widget class="QGroupBox" name="cal_set_model_group">
-                   <property name="title">
-                    <string>Dispersion Model &amp;&amp; Fitting Options</string>
-                   </property>
-                   <layout class="QGridLayout" name="cal_set_model_layout">
-                    <item row="0" column="0">
-                     <widget class="QLabel" name="cal_set_lbl_model">
-                      <property name="text"><string>Grating Dispersion Model:</string></property>
-                      <property name="styleSheet"><string notr="true">font-weight: bold;</string></property>
-                     </widget>
-                    </item>
-                    <item row="0" column="1">
-                     <widget class="QComboBox" name="cal_set_grating_model">
-                      <item><property name="text"><string>1st Order (Linear)</string></property></item>
-                      <item><property name="text"><string>2nd Order (Quadratic)</string></property></item>
-                      <item><property name="text"><string>3rd Order (Cubic)</string></property></item>
-                     </widget>
-                    </item>
-                    <item row="1" column="0">
-                     <widget class="QLabel" name="cal_set_lbl_deriv">
-                      <property name="text"><string>Derivative Fitting Mode:</string></property>
-                      <property name="styleSheet"><string notr="true">font-weight: bold;</string></property>
-                     </widget>
-                    </item>
-                    <item row="1" column="1">
-                     <widget class="QComboBox" name="cal_set_deriv_mode">
-                      <item><property name="text"><string>Standard Absorbance</string></property></item>
-                      <item><property name="text"><string>1st Derivative (dY/dx)</string></property></item>
-                      <item><property name="text"><string>2nd Derivative (d²Y/dx²)</string></property></item>
-                     </widget>
-                    </item>
-                    <item row="2" column="0">
-                     <widget class="QLabel" name="cal_set_lbl_savgol">
-                      <property name="text"><string>Savitzky-Golay Window:</string></property>
-                      <property name="styleSheet"><string notr="true">font-weight: bold;</string></property>
-                     </widget>
-                    </item>
-                    <item row="2" column="1">
-                     <widget class="QSpinBox" name="cal_set_savgol_win">
-                      <property name="minimum"><number>5</number></property>
-                      <property name="maximum"><number>51</number></property>
-                      <property name="singleStep"><number>2</number></property>
-                      <property name="value"><number>9</number></property>
-                     </widget>
-                    </item>
-                    <item row="3" column="0" colspan="2">
-                     <widget class="QCheckBox" name="cal_set_cross_corr">
-                      <property name="text"><string>Enable Peak Pre-alignment (Cross-Correlation)</string></property>
-                     </widget>
-                    </item>
-                    <item row="4" column="0" colspan="2">
-                     <widget class="QCheckBox" name="cal_set_subtract_ref_baseline">
-                      <property name="text"><string>Apply Baseline Correction to Reference Spectrum</string></property>
-                      <property name="checked"><bool>false</bool></property>
-                     </widget>
-                    </item>
-                    <item row="5" column="0" colspan="2">
-                     <widget class="QCheckBox" name="cal_set_convolve_ref">
-                      <property name="text"><string>Convolve Reference Spectrum (Gaussian FWHM kernel)</string></property>
-                     </widget>
-                    </item>
-                   </layout>
-                  </widget>
-                 </item>
-                 <item>
-                  <spacer name="cal_settings_vspacer">
-                   <property name="orientation"><enum>Qt::Vertical</enum></property>
-                   <property name="sizeHint">
-                    <size><width>20</width><height>40</height></size>
-                   </property>
-                  </spacer>
-                 </item>
-                </layout>
-               </widget>
              </widget>
             </item>
            </layout>
+          </widget>
+         </item>
+         <item>
+          <widget class="QScrollArea" name="cal_settings_scroll_area">
+           <property name="minimumSize">
+            <size>
+             <width>305</width>
+             <height>0</height>
+            </size>
+           </property>
+           <property name="maximumSize">
+            <size>
+             <width>335</width>
+             <height>16777215</height>
+            </size>
+           </property>
+           <property name="widgetResizable">
+            <bool>true</bool>
+           </property>
+           <widget class="QWidget" name="cal_settings_tab">
+            <layout class="QVBoxLayout" name="cal_settings_main_layout">
+             <property name="leftMargin"><number>6</number></property>
+             <property name="topMargin"><number>6</number></property>
+             <property name="rightMargin"><number>6</number></property>
+             <property name="bottomMargin"><number>6</number></property>
+             <property name="spacing"><number>8</number></property>
+             <item>
+              <widget class="QGroupBox" name="cal_set_geom_group">
+               <property name="title">
+                <string>Spectrometer Setup &amp;&amp; Bounds</string>
+               </property>
+               <layout class="QGridLayout" name="cal_set_geom_layout">
+                <item row="0" column="0">
+                 <widget class="QLabel" name="cal_set_lbl_cwl">
+                  <property name="text"><string>Central WL / WN:</string></property>
+                  <property name="styleSheet"><string notr="true">font-weight: bold;</string></property>
+                 </widget>
+                </item>
+                <item row="0" column="1">
+                 <widget class="QDoubleSpinBox" name="cal_set_cwl">
+                  <property name="decimals"><number>2</number></property>
+                  <property name="minimum"><double>0.0</double></property>
+                  <property name="maximum"><double>100000.0</double></property>
+                  <property name="value"><double>2000.0</double></property>
+                 </widget>
+                </item>
+                <item row="1" column="0">
+                 <widget class="QLabel" name="cal_set_lbl_ppnm">
+                  <property name="text"><string>Dispersion (px/unit):</string></property>
+                  <property name="styleSheet"><string notr="true">font-weight: bold;</string></property>
+                 </widget>
+                </item>
+                <item row="1" column="1">
+                 <widget class="QDoubleSpinBox" name="cal_set_ppnm">
+                  <property name="decimals"><number>4</number></property>
+                  <property name="minimum"><double>0.0001</double></property>
+                  <property name="maximum"><double>100.0</double></property>
+                  <property name="singleStep"><double>0.05</double></property>
+                  <property name="value"><double>0.30</double></property>
+                 </widget>
+                </item>
+                <item row="2" column="0">
+                 <widget class="QLabel" name="cal_set_lbl_rel_min_nm">
+                  <property name="text"><string>Lower Bound (rel. nm):</string></property>
+                  <property name="styleSheet"><string notr="true">font-weight: bold;</string></property>
+                 </widget>
+                </item>
+                <item row="2" column="1">
+                 <widget class="QDoubleSpinBox" name="cal_set_rel_min_nm">
+                  <property name="decimals"><number>1</number></property>
+                  <property name="minimum"><double>-5000.0</double></property>
+                  <property name="maximum"><double>0.0</double></property>
+                  <property name="singleStep"><double>10.0</double></property>
+                  <property name="value"><double>-1000.0</double></property>
+                 </widget>
+                </item>
+                <item row="3" column="0">
+                 <widget class="QLabel" name="cal_set_lbl_rel_max_nm">
+                  <property name="text"><string>Upper Bound (rel. nm):</string></property>
+                  <property name="styleSheet"><string notr="true">font-weight: bold;</string></property>
+                 </widget>
+                </item>
+                <item row="3" column="1">
+                 <widget class="QDoubleSpinBox" name="cal_set_rel_max_nm">
+                  <property name="decimals"><number>1</number></property>
+                  <property name="minimum"><double>0.0</double></property>
+                  <property name="maximum"><double>5000.0</double></property>
+                  <property name="singleStep"><double>10.0</double></property>
+                  <property name="value"><double>1666.0</double></property>
+                 </widget>
+                </item>
+               </layout>
+              </widget>
+             </item>
+             <item>
+              <widget class="QGroupBox" name="cal_set_model_group">
+               <property name="title">
+                <string>Dispersion Model &amp;&amp; Fit Options</string>
+               </property>
+               <layout class="QGridLayout" name="cal_set_model_layout">
+                <item row="0" column="0">
+                 <widget class="QLabel" name="cal_set_lbl_model">
+                  <property name="text"><string>Grating Model:</string></property>
+                  <property name="styleSheet"><string notr="true">font-weight: bold;</string></property>
+                 </widget>
+                </item>
+                <item row="0" column="1">
+                 <widget class="QComboBox" name="cal_set_grating_model">
+                  <item><property name="text"><string>1st Order (Linear)</string></property></item>
+                  <item><property name="text"><string>2nd Order (Quadratic)</string></property></item>
+                  <item><property name="text"><string>3rd Order (Cubic)</string></property></item>
+                 </widget>
+                </item>
+                <item row="1" column="0">
+                 <widget class="QLabel" name="cal_set_lbl_deriv">
+                  <property name="text"><string>Derivative Mode:</string></property>
+                  <property name="styleSheet"><string notr="true">font-weight: bold;</string></property>
+                 </widget>
+                </item>
+                <item row="1" column="1">
+                 <widget class="QComboBox" name="cal_set_deriv_mode">
+                  <item><property name="text"><string>Standard Absorbance</string></property></item>
+                  <item><property name="text"><string>1st Derivative (dY/dx)</string></property></item>
+                  <item><property name="text"><string>2nd Derivative (d²Y/dx²)</string></property></item>
+                 </widget>
+                </item>
+                <item row="2" column="0">
+                 <widget class="QLabel" name="cal_set_lbl_savgol">
+                  <property name="text"><string>SavGol Window:</string></property>
+                  <property name="styleSheet"><string notr="true">font-weight: bold;</string></property>
+                 </widget>
+                </item>
+                <item row="2" column="1">
+                 <widget class="QSpinBox" name="cal_set_savgol_win">
+                  <property name="minimum"><number>5</number></property>
+                  <property name="maximum"><number>51</number></property>
+                  <property name="singleStep"><number>2</number></property>
+                  <property name="value"><number>9</number></property>
+                 </widget>
+                </item>
+                <item row="3" column="0" colspan="2">
+                 <widget class="QCheckBox" name="cal_set_cross_corr">
+                  <property name="text"><string>Peak Pre-alignment (Cross-Correlation)</string></property>
+                 </widget>
+                </item>
+                <item row="4" column="0" colspan="2">
+                 <widget class="QCheckBox" name="cal_set_subtract_ref_baseline">
+                  <property name="text"><string>Subtract Reference Baseline</string></property>
+                  <property name="checked"><bool>false</bool></property>
+                 </widget>
+                </item>
+                <item row="5" column="0" colspan="2">
+                 <widget class="QCheckBox" name="cal_set_convolve_ref">
+                  <property name="text"><string>Convolve Reference (Gaussian FWHM)</string></property>
+                 </widget>
+                </item>
+               </layout>
+              </widget>
+             </item>
+             <item>
+              <widget class="QGroupBox" name="cal_fit_group">
+               <property name="styleSheet">
+                <string notr="true">QGroupBox { color: magenta; font-weight: bold; }</string>
+               </property>
+               <property name="title">
+                <string>Fit Control</string>
+               </property>
+               <layout class="QVBoxLayout" name="cal_fit_layout">
+                <item>
+                 <widget class="QCheckBox" name="cal_chk_do_fit">
+                  <property name="text">
+                   <string>Do Fit</string>
+                  </property>
+                  <property name="checked">
+                   <bool>true</bool>
+                  </property>
+                 </widget>
+                </item>
+                <item>
+                 <widget class="QCheckBox" name="cal_chk_do_baseline">
+                  <property name="text">
+                   <string>Do baseline correction</string>
+                  </property>
+                  <property name="checked">
+                   <bool>true</bool>
+                  </property>
+                 </widget>
+                </item>
+                <item>
+                 <layout class="QHBoxLayout" name="cal_set_refit_layout">
+                  <item>
+                   <widget class="QPushButton" name="cal_set_btn_refit_spec">
+                    <property name="styleSheet">
+                     <string notr="true">font-weight: bold; background-color: #707070; color: white;</string>
+                    </property>
+                    <property name="text">
+                     <string>↻ Fit Spec.</string>
+                    </property>
+                   </widget>
+                  </item>
+                  <item>
+                   <widget class="QPushButton" name="cal_set_btn_refit_shaper">
+                    <property name="styleSheet">
+                     <string notr="true">font-weight: bold; background-color: #707070; color: white;</string>
+                    </property>
+                    <property name="text">
+                     <string>↻ Fit Shaper</string>
+                    </property>
+                   </widget>
+                  </item>
+                 </layout>
+                </item>
+               </layout>
+              </widget>
+             </item>
+             <item>
+              <spacer name="cal_settings_vspacer">
+               <property name="orientation"><enum>Qt::Vertical</enum></property>
+               <property name="sizeHint">
+                <size><width>20</width><height>40</height></size>
+               </property>
+              </spacer>
+             </item>
+            </layout>
+           </widget>
           </widget>
          </item>
         </layout>

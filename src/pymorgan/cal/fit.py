@@ -91,8 +91,14 @@ def prealign_peaks_cross_correlation(
     return best_cwl0, float(ppnm_guess)
 
 
-def get_default_calibration_params(cal_type_code: int) -> dict:
-    """Return default hardware parameters and relative nm bounds for setup (1..10)."""
+def get_default_calibration_params(
+    cal_type_code: int,
+    spectral_range: str | None = None,
+) -> dict:
+    """Return default hardware parameters and relative nm bounds for setup (1..12)."""
+    from .load import normalize_spectral_range
+
+    norm_range = normalize_spectral_range(spectral_range)
     defaults = {
         1: {"cwl": 2000.0, "ppnm_guess": 0.30, "min_wl": 1500.0, "max_wl": 2500.0, "rel_min_nm": -1000.0, "rel_max_nm": 1666.0, "grating_degree": 2, "use_derivative": "1st", "use_cross_corr": False},  # UoS TRIR
         2: {"cwl": 535.0,  "ppnm_guess": 1.1,  "min_wl": 350.0,  "max_wl": 740.0,  "rel_min_nm": -180.0,  "rel_max_nm": 210.0,  "grating_degree": 2, "use_derivative": "1st", "use_cross_corr": False},  # UniGE fsTA
@@ -104,9 +110,32 @@ def get_default_calibration_params(cal_type_code: int) -> dict:
         8: {"cwl": 2000.0, "ppnm_guess": 0.30, "min_wl": 1500.0, "max_wl": 2500.0, "rel_min_nm": -200.0,  "rel_max_nm": 200.0,   "grating_degree": 2, "use_derivative": "1st", "use_cross_corr": False},  # UniGE TRIR Intensity
         9: {"cwl": 2000.0, "ppnm_guess": 0.30, "min_wl": 1500.0, "max_wl": 2500.0, "rel_min_nm": -200.0,  "rel_max_nm": 200.0,   "grating_degree": 2, "use_derivative": "1st", "use_cross_corr": False},  # UniGE TRIR Absorbance
         10: {"cwl": 530.0, "ppnm_guess": 1.2,  "min_wl": 320.0,  "max_wl": 780.0,  "rel_min_nm": -150.0,  "rel_max_nm": 220.0,  "grating_degree": 2, "use_derivative": "1st", "use_cross_corr": False},  # UniGE TRUVIS-II
-        11: {"cwl": 430.0, "ppnm_guess": 1.23, "min_wl": 360.0,  "max_wl": 515.0,  "rel_min_nm": -40.0,   "rel_max_nm": 115.0,  "grating_degree": 2, "use_derivative": "1st", "use_cross_corr": False},  # Light Conversion HARPIA-TA (Int.)
+        11: {"cwl": 430.0, "ppnm_guess": 1.23, "min_wl": 360.0,  "max_wl": 515.0,  "rel_min_nm": -40.0,   "rel_max_nm": 115.0,  "grating_degree": 2, "use_derivative": "1st", "use_cross_corr": False},  # Light Conversion HARPIA-TA (Int.) UV
+        12: {"cwl": 2000.0, "ppnm_guess": 0.30, "min_wl": 1500.0, "max_wl": 2500.0, "rel_min_nm": -200.0, "rel_max_nm": 200.0,  "grating_degree": 2, "use_derivative": "1st", "use_cross_corr": False},  # PyMESS (defaults to Mid-IR TRIR)
     }
-    return defaults.get(cal_type_code, {"cwl": 535.0, "ppnm_guess": 1.1, "min_wl": 350.0, "max_wl": 740.0, "rel_min_nm": -180.0, "rel_max_nm": 210.0, "grating_degree": 2, "use_derivative": "1st", "use_cross_corr": False})
+
+    if cal_type_code == 11 and norm_range == "vis":
+        # Light Conversion HARPIA-TA (Int.) Vis Range
+        return {
+            "cwl": 685.0,
+            "ppnm_guess": 0.62,
+            "min_wl": 480.0,
+            "max_wl": 890.0,
+            "rel_min_nm": -190.0,
+            "rel_max_nm": 190.0,
+            "grating_degree": 2,
+            "use_derivative": "1st",
+            "use_cross_corr": False,
+        }
+
+    if cal_type_code == 12:
+        if norm_range == "uv-vis":
+            return dict(defaults[10])  # Follow UniGE TRUVIS-II pathway
+        if norm_range == "nir":
+            return dict(defaults[5])   # Follow UniGE NIR-TA pathway
+        return dict(defaults[8])       # Follow UniGE TRIR pathway
+
+    return dict(defaults.get(cal_type_code, {"cwl": 535.0, "ppnm_guess": 1.1, "min_wl": 350.0, "max_wl": 740.0, "rel_min_nm": -180.0, "rel_max_nm": 210.0, "grating_degree": 2, "use_derivative": "1st", "use_cross_corr": False}))
 
 
 def fit_wavelength_axis(
@@ -126,12 +155,38 @@ def fit_wavelength_axis(
     use_derivative: str = "1st",  # "none", "1st", "2nd"
     savgol_window: int = 9,
     convolve_ref: bool = False,
+    spectral_range: str | None = None,
 ) -> CalibrationResult:
     """Optimise dispersion parameters and compute calibrated wavelength/wavenumber axes."""
+    from .load import normalize_spectral_range
+
     meas_pixels = np.arange(1, len(meas_y) + 1, dtype=float)
     n_pix = len(meas_y)
 
-    spec_defaults = get_default_calibration_params(cal_type_code)
+    # Preserve full reference spectrum arrays before cutting
+    ref_x_full = np.asarray(ref_x, dtype=float).ravel().copy()
+    ref_y_full = np.asarray(ref_y, dtype=float).ravel().copy()
+
+    # Resolve PyMESS (cal_type_code == 12) pathway into UniGE TRIR (8), TRUVIS-II (10), or NIR-TA (5)
+    norm_range = normalize_spectral_range(spectral_range)
+    if cal_type_code == 12:
+        if norm_range == "uv-vis":
+            cal_type_code = 10
+        elif norm_range == "nir":
+            cal_type_code = 5
+        elif norm_range == "mid-ir":
+            cal_type_code = 8
+        else:
+            # Infer from cwl or reference spectrum axis
+            ref_mean = float(np.mean(ref_x_full)) if len(ref_x_full) > 0 else 0.0
+            if (cwl is not None and cwl > 1600.0) or ref_mean > 1500.0:
+                cal_type_code = 8
+            elif (cwl is not None and 800.0 <= cwl <= 1600.0) or (850.0 <= ref_mean <= 1500.0):
+                cal_type_code = 5
+            else:
+                cal_type_code = 10
+
+    spec_defaults = get_default_calibration_params(cal_type_code, spectral_range=norm_range)
     if cwl is None:
         cwl = spec_defaults["cwl"]
     if ppnm_guess is None:
@@ -142,10 +197,6 @@ def fit_wavelength_axis(
         rel_max_nm = spec_defaults.get("rel_max_nm", 200.0)
     if grating_degree is None:
         grating_degree = spec_defaults.get("grating_degree", 1)
-
-    # Preserve full reference spectrum arrays before cutting
-    ref_x_full = np.asarray(ref_x, dtype=float).ravel().copy()
-    ref_y_full = np.asarray(ref_y, dtype=float).ravel().copy()
 
     ref_x = ref_x_full
     ref_y = ref_y_full

@@ -480,7 +480,11 @@ def test_harpia_corrupted_and_spliced_blocks(tmp_path):
 
 def test_harpia_real_20260929_datasets():
     """Verify loading real datasets from 20260929 directory (which had byte splices in scan 6)."""
-    folder = Path(r"C:\Users\ricar\switchdrive\Ambizione UniGE\Scripts\testData\HARPIA\20260929")
+    import os
+    env_dir = os.environ.get("PYMORGAN_TESTDATA_DIR")
+    if not env_dir:
+        pytest.skip("PYMORGAN_TESTDATA_DIR environment variable not set")
+    folder = Path(env_dir) / "HARPIA" / "20260929"
     if not folder.is_dir():
         pytest.skip(f"HARPIA 20260929 directory not found at {folder}")
 
@@ -924,7 +928,11 @@ def test_read_pymess_pp_is_file_based_not_directory(tmp_path):
 
 
 def test_read_pymess_pp_real_dataset_reco_irpp():
-    real_path = Path(r"C:\Users\ricar\switchdrive\Ambizione UniGE\Scripts\testData\PyMESS\ReCO_DCM_IRpp_154555.h5")
+    import os
+    env_dir = os.environ.get("PYMORGAN_TESTDATA_DIR")
+    if not env_dir:
+        pytest.skip("PYMORGAN_TESTDATA_DIR environment variable not set")
+    real_path = Path(env_dir) / "PyMESS" / "ReCO_DCM_IRpp_154555.h5"
     if not real_path.is_file():
         pytest.skip(f"Test dataset not found at {real_path}")
 
@@ -962,7 +970,11 @@ def test_read_pymess_pp_real_dataset_reco_irpp():
 
 
 def test_pymess_discriminator_rejects_magic_angle_real():
-    magic_path = Path(r"C:\Users\ricar\switchdrive\Ambizione UniGE\Scripts\testData\PyMESS\ReCO_PPagain_magic_160703.h5")
+    import os
+    env_dir = os.environ.get("PYMORGAN_TESTDATA_DIR")
+    if not env_dir:
+        pytest.skip("PYMORGAN_TESTDATA_DIR environment variable not set")
+    magic_path = Path(env_dir) / "PyMESS" / "ReCO_PPagain_magic_160703.h5"
     if not magic_path.is_file():
         pytest.skip(f"Magic angle test file not found at {magic_path}")
 

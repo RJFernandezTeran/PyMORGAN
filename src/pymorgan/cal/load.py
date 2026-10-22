@@ -23,6 +23,7 @@ class ExperimentalData(NamedTuple):
     max_wl: float | None = None
     wavenumbers: np.ndarray | None = None
     wavelengths: np.ndarray | None = None
+    spectral_range: str | None = None
 
 
 CALIBRATION_TYPES: dict[int, str] = {
@@ -37,6 +38,7 @@ CALIBRATION_TYPES: dict[int, str] = {
     9: "UniGE TRIR (Absorbance)",
     10: "UniGE TRUVIS-II (Intensity)",
     11: "Light Conversion HARPIA-TA (Int.)",
+    12: "PyMESS",
 }
 
 
@@ -269,21 +271,237 @@ def parse_meta_file(meta_path: Path, is_ir: bool) -> dict:
     }
 
 
+def normalize_spectral_range(spectral_range: str | None) -> str | None:
+    """Normalize spectral range string to canonical form ('mid-ir', 'uv-vis', 'nir', 'uv', 'vis')."""
+    if spectral_range is None:
+        return None
+    s = spectral_range.lower().strip()
+    if not s:
+        return None
+    if any(k in s for k in ("mid-ir", "mid_ir", "midir", "trir", "ir-ta")):
+        return "mid-ir"
+    if "nir" in s:
+        return "nir"
+    if any(k in s for k in ("uv/vis", "uv-vis", "uv_vis", "uvvis", "truvis")):
+        return "uv-vis"
+    if s in ("uv", "uv range"):
+        return "uv"
+    if s in ("vis", "vis range", "visible"):
+        return "vis"
+    if "ir" in s:
+        return "mid-ir"
+    return s
+
+
+def parse_pymess_calibration_h5(h5_path: Path, spectral_range: str | None = None) -> dict:
+    """Parse a PyMESS HDF5 (.h5) file for calibration spectrum, grating, CWL, and spectral range.
+
+    Parameters
+    ----------
+    h5_path : Path
+        Path to PyMESS .h5 measurement file.
+    spectral_range : str, optional
+        Explicit spectral range override ('mid-ir', 'uv-vis', 'nir'). If None, auto-detected from HDF5 metadata and axis.
+
+    Returns
+    -------
+    dict
+        Parsed dictionary containing ``detector_data``, ``grating``, ``cwl``, ``min_wl``,
+        ``max_wl``, ``wn_axis``, ``wl_axis``, and ``spectral_range``.
+    """
+    import re
+
+    import h5py
+
+    def _attr_str(val) -> str:
+        if val is None:
+            return ""
+        if isinstance(val, (bytes, np.bytes_)):
+            return val.decode("utf-8", errors="ignore").strip()
+        if isinstance(val, np.ndarray) and val.ndim == 0:
+            return _attr_str(val.item())
+        return str(val).strip()
+
+    with h5py.File(h5_path, "r") as f:
+        # 1. Extract 1D detector intensity / spectrum array
+        data_grp = f["data"] if "data" in f and isinstance(f["data"], h5py.Group) else f
+        spec_arr = None
+        if "probe_spectrum" in data_grp:
+            spec_arr = np.asarray(data_grp["probe_spectrum"][()], dtype=float).ravel()
+        elif "intensity" in data_grp:
+            arr = np.asarray(data_grp["intensity"][()], dtype=float)
+            spec_arr = np.mean(arr, axis=0).ravel() if arr.ndim > 1 else arr.ravel()
+        elif "probe_shots" in data_grp:
+            shots = np.asarray(data_grp["probe_shots"][()], dtype=float)
+            spec_arr = np.mean(shots, axis=0).ravel() if shots.ndim > 1 else shots.ravel()
+            if "calibration" in f and "probe_dark_background" in f["calibration"]:
+                dark = np.asarray(f["calibration/probe_dark_background"][()], dtype=float).ravel()
+                if len(dark) == len(spec_arr):
+                    spec_arr = spec_arr - dark
+        elif "delta_A" in data_grp:
+            arr = np.asarray(data_grp["delta_A"][()], dtype=float)
+            spec_arr = np.mean(arr, axis=0).ravel() if arr.ndim > 1 else arr.ravel()
+        elif "signal_mOD" in data_grp:
+            arr = np.asarray(data_grp["signal_mOD"][()], dtype=float)
+            spec_arr = np.mean(arr, axis=0).ravel() if arr.ndim > 1 else arr.ravel()
+
+        if spec_arr is None or len(spec_arr) == 0:
+            raise ValueError(f"No valid spectrum dataset found in PyMESS HDF5 file: {h5_path}")
+
+        # 2. Extract wavelength / wavenumber axis if present
+        raw_axis = None
+        if "wavelengths" in data_grp:
+            raw_axis = np.asarray(data_grp["wavelengths"][()], dtype=float).ravel()
+
+        # 3. Extract metadata attributes
+        meta_attrs = f["metadata"].attrs if "metadata" in f else f.attrs
+        setup_id = _attr_str(meta_attrs.get("setup_id", ""))
+        setup_name = _attr_str(meta_attrs.get("setup_name", ""))
+        fast_mod = _attr_str(meta_attrs.get("fast_modulation", ""))
+        cwl_nm_str = _attr_str(meta_attrs.get("spectrometer_cwl_nm", ""))
+        cwn_cm1_str = _attr_str(meta_attrs.get("spectrometer_cwn_cm1", ""))
+        grating_str = _attr_str(meta_attrs.get("spectrometer_grating", ""))
+        summary_str = _attr_str(meta_attrs.get("spectrometer_summary", ""))
+
+    # Parse numeric CWL, CWN, and grating from explicit metadata attributes
+    cwl_nm_meta = 0.0
+    if cwl_nm_str:
+        try:
+            cwl_nm_meta = float(cwl_nm_str)
+        except ValueError:
+            pass
+
+    cwn_cm1_meta = 0.0
+    if cwn_cm1_str:
+        try:
+            cwn_cm1_meta = float(cwn_cm1_str)
+        except ValueError:
+            pass
+
+    grating_val = 0.0
+    if grating_str:
+        nums = re.findall(r"[-+]?\d*\.\d+|\d+", grating_str)
+        if nums:
+            grating_val = float(nums[0])
+    elif summary_str:
+        m_grat = re.search(r"(\d+(?:\.\d+)?)\s*l/mm", summary_str, re.IGNORECASE)
+        if m_grat:
+            grating_val = float(m_grat.group(1))
+
+    # 4. Determine spectral range ('mid-ir', 'uv-vis', 'nir')
+    n_pix = len(spec_arr)
+    axis_is_physical = (
+        raw_axis is not None
+        and len(raw_axis) > 1
+        and float(np.max(raw_axis)) > float(len(raw_axis)) + 10.0
+    )
+
+    detected_range: str | None = None
+    # Priority 1: Explicit spectrometer_cwl_nm attribute (written when spectrometer is active)
+    if cwl_nm_meta > 2500.0:
+        detected_range = "mid-ir"
+    elif 850.0 <= cwl_nm_meta <= 2500.0:
+        detected_range = "nir"
+    elif 200.0 <= cwl_nm_meta < 850.0:
+        detected_range = "uv-vis"
+
+    # Priority 2: Physical values in /data/wavelengths dataset
+    if detected_range is None and axis_is_physical and raw_axis is not None:
+        mean_ax = float(np.mean(raw_axis))
+        if 200.0 <= mean_ax <= 850.0:
+            detected_range = "uv-vis"
+        elif mean_ax > 1650.0 or (n_pix <= 128 and mean_ax > 1000.0):
+            detected_range = "mid-ir"
+        elif 850.0 < mean_ax <= 1650.0:
+            detected_range = "nir"
+
+    # Priority 3: Setup ID / Name / Fast modulation strings
+    if detected_range is None:
+        meta_combined = f"{setup_id} {setup_name} {fast_mod}".lower()
+        if any(k in meta_combined for k in ("trir", "2dir", "ir_pp", "ir-pp", "mid_ir", "mid-ir")):
+            detected_range = "mid-ir"
+        elif "nir" in meta_combined:
+            detected_range = "nir"
+        elif any(k in meta_combined for k in ("truvis", "uvvis", "uv-vis", "fsta")):
+            detected_range = "uv-vis"
+
+    norm_override = normalize_spectral_range(spectral_range)
+    active_range = norm_override if norm_override in ("mid-ir", "uv-vis", "nir") else (detected_range or "mid-ir")
+
+    # 5. Populate pathway-specific CWL, grating, and axis bounds
+    cwl_val = 0.0
+    min_wl_val = None
+    max_wl_val = None
+    wn_axis = None
+    wl_axis = None
+
+    if active_range == "mid-ir":
+        # Follow UniGE TRIR pathway (wavenumbers cm-1)
+        if axis_is_physical and raw_axis is not None:
+            if float(np.mean(raw_axis)) > 3000.0:
+                wn_axis = 1e7 / np.clip(raw_axis, 1.0, None)
+            else:
+                wn_axis = raw_axis.copy()
+            min_wl_val = float(np.min(wn_axis)) - 50.0
+            max_wl_val = float(np.max(wn_axis)) + 50.0
+
+        if cwn_cm1_meta > 0:
+            cwl_val = cwn_cm1_meta
+        elif cwl_nm_meta > 2500.0:
+            cwl_val = 1e7 / cwl_nm_meta
+        elif wn_axis is not None and len(wn_axis) > 0:
+            cwl_val = float(wn_axis[len(wn_axis) // 2])
+    else:
+        # Follow UniGE TRUVIS-II ('uv-vis') or UniGE NIR-TA ('nir') pathway (wavelengths nm)
+        if axis_is_physical and raw_axis is not None:
+            wl_axis = raw_axis.copy()
+            min_wl_val = float(np.min(wl_axis)) - 20.0
+            max_wl_val = float(np.max(wl_axis)) + 20.0
+
+        # TRUVIS-II and NIR-TA pathways do not use grating metadata to overwrite ppnm_guess
+        grating_val = 0.0
+
+        if active_range == "uv-vis":
+            if 200.0 <= cwl_nm_meta <= 900.0:
+                cwl_val = cwl_nm_meta
+            elif wl_axis is not None and len(wl_axis) > 0 and 200.0 <= float(np.mean(wl_axis)) <= 900.0:
+                cwl_val = float(wl_axis[len(wl_axis) // 2])
+        elif active_range == "nir":
+            if 800.0 <= cwl_nm_meta <= 2500.0:
+                cwl_val = cwl_nm_meta
+            elif wl_axis is not None and len(wl_axis) > 0 and 800.0 <= float(np.mean(wl_axis)) <= 2500.0:
+                cwl_val = float(wl_axis[len(wl_axis) // 2])
+
+    return {
+        "detector_data": [spec_arr],
+        "grating": grating_val,
+        "cwl": cwl_val,
+        "min_wl": min_wl_val,
+        "max_wl": max_wl_val,
+        "wn_axis": wn_axis,
+        "wl_axis": wl_axis,
+        "spectral_range": active_range,
+    }
+
+
 def load_experimental_spectrum(
     file_path: str | Path,
     cal_type_code: int,
     blank_file_path: str | Path | None = None,
+    spectral_range: str | None = None,
 ) -> ExperimentalData:
-    """Parse raw measurement data file based on setup type (1..10).
+    """Parse raw measurement data file based on setup type (1..12).
 
     Parameters
     ----------
     file_path : str or Path
         Path to experimental spectrum file.
     cal_type_code : int
-        Calibration setup type code (1..10).
+        Calibration setup type code (1..12).
     blank_file_path : str or Path, optional
         Optional path to blank measurement file for UniGE TA setups.
+    spectral_range : str, optional
+        Optional spectral range override for PyMESS ('mid-ir', 'uv-vis', 'nir') or HARPIA ('uv', 'vis').
 
     Returns
     -------
@@ -300,9 +518,30 @@ def load_experimental_spectrum(
     max_wl_val = None
     wn_axis = None
     wl_axis = None
+    detected_range = normalize_spectral_range(spectral_range)
     is_ir = cal_type_code in (1, 4, 6, 7, 8, 9)
 
-    if cal_type_code == 1:
+    if cal_type_code == 12 or path.suffix.lower() in (".h5", ".hdf5"):
+        # PyMESS HDF5 spectrum file (.h5)
+        implicit_range = spectral_range
+        if implicit_range is None and cal_type_code != 12:
+            if is_ir:
+                implicit_range = "mid-ir"
+            elif cal_type_code == 5:
+                implicit_range = "nir"
+            elif cal_type_code in (2, 3, 10, 11):
+                implicit_range = "uv-vis"
+        parsed_h5 = parse_pymess_calibration_h5(path, spectral_range=implicit_range)
+        data_list = parsed_h5["detector_data"]
+        gratings[0] = parsed_h5["grating"]
+        cwl[0] = parsed_h5["cwl"]
+        min_wl_val = parsed_h5["min_wl"]
+        max_wl_val = parsed_h5["max_wl"]
+        wn_axis = parsed_h5["wn_axis"]
+        wl_axis = parsed_h5["wl_axis"]
+        detected_range = parsed_h5["spectral_range"]
+
+    elif cal_type_code == 1:
         # UoS TRIR (4 detectors: probe1=96, probe2=96, ref1=32, ref2=32)
         det_sz = [96, 96, 32, 32]
         raw = read_numeric_matrix(path, default_delimiter="\t")
@@ -422,11 +661,23 @@ def load_experimental_spectrum(
         max_wl=max_wl_val,
         wavenumbers=wn_axis,
         wavelengths=wl_axis,
+        spectral_range=detected_range,
     )
 
 
-def load_HARPIA_calibration_spectrum(file_path: str | Path) -> ExperimentalData:
+def load_HARPIA_calibration_spectrum(
+    file_path: str | Path,
+    spectral_range: str | None = None,
+) -> ExperimentalData:
     """Load Light Conversion HARPIA-TA spectral calibration measurement text file."""
-    return load_experimental_spectrum(file_path, cal_type_code=11)
+    return load_experimental_spectrum(file_path, cal_type_code=11, spectral_range=spectral_range)
+
+
+def load_PyMESS_calibration_spectrum(
+    file_path: str | Path,
+    spectral_range: str | None = None,
+) -> ExperimentalData:
+    """Load PyMESS HDF5 (.h5) spectral calibration measurement file."""
+    return load_experimental_spectrum(file_path, cal_type_code=12, spectral_range=spectral_range)
 
 

@@ -348,7 +348,8 @@ def test_plot_noise_button_enabled_state(qapp, tmp_path):
     synthetic.make_synthetic_pdatn(pdat2_info["path"])
     win.load_path(pdat2_info["path"], "PDAT")
     assert win.PP_plotNoise_btn.isEnabled()
-    # Load MESS dataset with single scans -> enabled
+
+    # Load MESS dataset with single scans -> enabled
     mess_info = synthetic.make_synthetic_mess(tmp_path / "mess_noise", nscans=3)
     win.load_path(mess_info["folder"], "MESS_TRIR")
     assert win.PP_plotNoise_btn.isEnabled()
@@ -939,7 +940,82 @@ def test_gui_send_to_pyrate_ta(window, tmp_path, monkeypatch):
     assert "Handed off active dataset to PyRATE-TA" in window.statusBar().currentMessage()
 
 
+def test_dark_theme_icon_set_and_resolution(qapp):
+    """Verify that dark-theme icon files exist, have light foreground pixels, and are applied in dark mode."""
+    from PIL import Image
+    from PyQt6.QtGui import QImage
+    from PyQt6.QtWidgets import QStyleFactory
+
+    from pymorgan.gui.main_window import (
+        _BUTTON_ICONS,
+        _BUTTON_ICONS_DARK,
+        _ICON_DIR,
+        MainWindow,
+        _resolve_icon_path,
+    )
+    from pymorgan.gui.theme import dark_palette
+
+    # 1. Every *_md.png icon has a matching *_md_dark.png icon with bright RGB pixels
+    md_icons = [p for p in _ICON_DIR.glob("*_md.png") if not p.stem.endswith("_dark")]
+    assert len(md_icons) >= 9
+    for light_icon in md_icons:
+        dark_icon = _resolve_icon_path(light_icon.name, dark=True)
+        assert dark_icon.exists(), f"Missing dark icon for {light_icon.name}"
+        assert dark_icon.name == f"{light_icon.stem}_dark{light_icon.suffix}"
+        arr_l = np.array(Image.open(light_icon).convert("RGBA"))
+        arr_d = np.array(Image.open(dark_icon).convert("RGBA"))
+        # Alpha masks must be identical
+        np.testing.assert_array_equal(arr_l[:, :, 3], arr_d[:, :, 3])
+        mask = arr_d[:, :, 3] > 0
+        assert mask.any()
+        assert arr_l[mask][:, :3].mean() < 50
+        assert arr_d[mask][:, :3].mean() > 200
+
+    # 2. Check MainWindow._apply_icons switches between light and dark button icons
+    orig_palette = qapp.palette()
+    try:
+        fusion = QStyleFactory.create("Fusion")
+        if fusion is not None:
+            qapp.setPalette(fusion.standardPalette())
+        win = MainWindow()
+        for btn_name in _BUTTON_ICONS:
+            btn = getattr(win, btn_name)
+            pix = btn.icon().pixmap(24, 24)
+            qimg = pix.toImage().convertToFormat(QImage.Format.Format_RGBA8888)
+            ptr = qimg.bits()
+            ptr.setsize(qimg.sizeInBytes())
+            arr = np.frombuffer(ptr, dtype=np.uint8).reshape((qimg.height(), qimg.width(), 4))
+            fg = arr[arr[:, :, 3] > 128][:, :3]
+            assert fg.mean() < 50, f"Expected dark icon in light theme for {btn_name}"
+
+        # Switch to dark palette and re-apply icons
+        qapp.setPalette(dark_palette())
+        win._apply_icons()
+        for btn_name in _BUTTON_ICONS_DARK:
+            btn = getattr(win, btn_name)
+            pix = btn.icon().pixmap(24, 24)
+            qimg = pix.toImage().convertToFormat(QImage.Format.Format_RGBA8888)
+            ptr = qimg.bits()
+            ptr.setsize(qimg.sizeInBytes())
+            arr = np.frombuffer(ptr, dtype=np.uint8).reshape((qimg.height(), qimg.width(), 4))
+            fg = arr[arr[:, :, 3] > 128][:, :3]
+            assert fg.mean() > 200, f"Expected light icon in dark theme for {btn_name}"
+        win.close()
+    finally:
+        qapp.setPalette(orig_palette)
 
 
+def test_ui_files_never_expose_absolute_paths():
+    """Ensure main_window.ui and main_window_ui.py contain no machine-specific absolute paths."""
+    import re
 
+    from pymorgan.gui.main_window import _UI_FILE
+
+    ui_compiled = _UI_FILE.with_name("main_window_ui.py")
+    first_line = ui_compiled.read_text(encoding="utf-8").splitlines()[0]
+    assert first_line == "# Form implementation generated from reading ui file 'src/pymorgan/gui/main_window.ui'"
+    for p in (_UI_FILE, ui_compiled):
+        content = p.read_text(encoding="utf-8")
+        assert not re.search(r"[A-Za-z]:\\", content)
+        assert "/Users/" not in content and "/home/" not in content
 

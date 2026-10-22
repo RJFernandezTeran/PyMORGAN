@@ -69,6 +69,12 @@ _BUTTON_ICONS = {
     "UpDir_btn": "uparrow_md.png",
     "BrowseRootdir_btn": "screensearch_md.png",
 }
+_BUTTON_ICONS_DARK = {
+    "RefreshDir_btn": "refresh_md_dark.png",
+    "GoToToday_btn": "today_md_dark.png",
+    "UpDir_btn": "uparrow_md_dark.png",
+    "BrowseRootdir_btn": "screensearch_md_dark.png",
+}
 
 # Menu-action icons (applied programmatically, like _BUTTON_ICONS, to avoid
 # embedding fragile file paths in the .ui).
@@ -80,12 +86,38 @@ _ACTION_ICONS = {
     "actionExportFigure": "saveas_md.png",
     "actionExportData": "save_md.png",
     "actionExportPDAT": "savefile_md.png",
+    "actionExportP2DAT": "savefile_md.png",
     "actionLoadSpectrum": "upload_md.png",
     "actionPlotSteadyState": "gui.png",
     "actionAbout": "gui.png",
     "actionSendToPyRATE": "pyrate_ta.ico",
     "actionLaunchPyRATE": "pyrate_ta.ico",
 }
+_ACTION_ICONS_DARK = {
+    "actionOpen": "upload_md_dark.png",
+    "actionReload": "refresh_md_dark.png",
+    "actionSetRoot": "screensearch_md_dark.png",
+    "actionToday": "today_md_dark.png",
+    "actionExportFigure": "saveas_md_dark.png",
+    "actionExportData": "save_md_dark.png",
+    "actionExportPDAT": "savefile_md_dark.png",
+    "actionExportP2DAT": "savefile_md_dark.png",
+    "actionLoadSpectrum": "upload_md_dark.png",
+    "actionPlotSteadyState": "gui.png",
+    "actionAbout": "gui.png",
+    "actionSendToPyRATE": "pyrate_ta.ico",
+    "actionLaunchPyRATE": "pyrate_ta.ico",
+}
+
+
+def _resolve_icon_path(fname: str, dark: bool = False) -> Path:
+    """Resolve an icon filename in :data:`_ICON_DIR`, preferring ``*_dark`` in dark mode."""
+    p = _ICON_DIR / fname
+    if dark and not p.stem.endswith("_dark"):
+        dark_candidate = _ICON_DIR / f"{p.stem}_dark{p.suffix}"
+        if dark_candidate.exists():
+            return dark_candidate
+    return p
 
 
 class MainWindow(
@@ -180,8 +212,14 @@ class MainWindow(
                 )
             ):
                 try:
-                    with open(ui_compiled, "w", encoding="utf-8") as fh:
-                        uic.compileUi(str(_UI_FILE), fh)
+                    import io
+
+                    buf = io.StringIO()
+                    uic.compileUi(str(_UI_FILE), buf)
+                    compiled_src = buf.getvalue().replace(
+                        str(_UI_FILE), "src/pymorgan/gui/main_window.ui"
+                    )
+                    ui_compiled.write_text(compiled_src, encoding="utf-8")
                     logger.debug("main_window_ui.py recompiled in-process from main_window.ui")
                     mod_name = f"{__package__}.main_window_ui"
                     if mod_name in sys.modules:
@@ -811,6 +849,16 @@ class MainWindow(
                 "#ca8a04",
                 "#a16207",
             ),
+            "cal_shaper_btn_load_mask": style(
+                "#fdebd0",
+                "#7e5109",
+                "#f9e79f",
+                "#f9e79f",
+                "#451a03",
+                "#fde047",
+                "#ca8a04",
+                "#a16207",
+            ),
             "cal_shaper_btn_load_masks": style(
                 "#fdebd0",
                 "#7e5109",
@@ -1214,26 +1262,36 @@ class MainWindow(
         from .theme import dark_tab_stylesheet, is_dark_palette
 
         tabs = getattr(self, "MainTabs", None)
-        if tabs is not None and is_dark_palette():
-            tabs.setStyleSheet(dark_tab_stylesheet())
+        if tabs is not None:
+            if not hasattr(self, "_light_tab_stylesheet"):
+                self._light_tab_stylesheet = tabs.styleSheet()
+            if is_dark_palette():
+                tabs.setStyleSheet(dark_tab_stylesheet())
+            else:
+                tabs.setStyleSheet(self._light_tab_stylesheet)
 
     def _apply_icons(self):
-        """Restore the window and toolbar-button icons from shipped files."""
+        """Restore the window, toolbar-button, and menu-action icons for the active theme."""
         from PyQt6.QtCore import QSize
         from PyQt6.QtGui import QIcon
 
+        from .theme import is_dark_palette
+
+        dark = is_dark_palette()
         win_icon = _ICON_DIR / "pirate-hat.png"
         if win_icon.exists():
             self.setWindowIcon(QIcon(str(win_icon)))
-        for name, fname in _BUTTON_ICONS.items():
+        btn_icons = _BUTTON_ICONS_DARK if dark else _BUTTON_ICONS
+        for name, fname in btn_icons.items():
             widget = getattr(self, name, None)
-            path = _ICON_DIR / fname
+            path = _resolve_icon_path(fname, dark=dark)
             if widget is not None and path.exists() and hasattr(widget, "setIcon"):
                 widget.setIcon(QIcon(str(path)))
                 widget.setIconSize(QSize(20, 20))
-        for name, fname in _ACTION_ICONS.items():
+        act_icons = _ACTION_ICONS_DARK if dark else _ACTION_ICONS
+        for name, fname in act_icons.items():
             action = getattr(self, name, None)
-            path = _ICON_DIR / fname
+            path = _resolve_icon_path(fname, dark=dark)
             if action is not None and path.exists() and hasattr(action, "setIcon"):
                 action.setIcon(QIcon(str(path)))
 
@@ -1905,6 +1963,10 @@ class MainWindow(
         """Re-draw the embedded contour (Z scale or a global setting changed)."""
         if hasattr(self, "_apply_button_aesthetics"):
             self._apply_button_aesthetics()
+        if hasattr(self, "_apply_icons"):
+            self._apply_icons()
+        if hasattr(self, "_apply_tab_theme"):
+            self._apply_tab_theme()
         current_tab_idx = self.MainTabs.currentIndex()
         if current_tab_idx == 0:
             if self.plot_controls is not None:

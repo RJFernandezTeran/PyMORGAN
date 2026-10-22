@@ -239,7 +239,11 @@ def test_load_pymess_anisotropy_export():
 
 def test_read_real_20261007_datasets():
     """Verify loading real datasets recorded on 20261007 if present."""
-    base_dir = Path(r"C:\Users\ricar\switchdrive\Ambizione UniGE\Scripts\testData\PyMESS\20261007")
+    import os
+    env_dir = os.environ.get("PYMORGAN_TESTDATA_DIR")
+    if not env_dir:
+        pytest.skip("PYMORGAN_TESTDATA_DIR environment variable not set")
+    base_dir = Path(env_dir) / "PyMESS" / "20261007"
     if not base_dir.is_dir():
         pytest.skip(f"Directory {base_dir} not found")
 

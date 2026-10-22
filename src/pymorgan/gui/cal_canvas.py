@@ -144,7 +144,7 @@ class CalibrationCanvas(FigureCanvas):
 
         # Re-apply theme styling and adjust hspace & wspace for clear layout
         _style_cal_figure(self.fig)
-        self.fig.subplots_adjust(left=0.09, right=0.96, top=0.96, bottom=0.12, hspace=0.30, wspace=0.22)
+        self.fig.subplots_adjust(left=0.09, right=0.91, top=0.96, bottom=0.12, hspace=0.30, wspace=0.22)
         self.draw()
 
 
