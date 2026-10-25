@@ -9,14 +9,16 @@ dimensionality:
 
 - **One-Dimensional Spectroscopy (**\ :mod:`pymorgan.oneD`\ **):** Transient absorption (fs-TA,
   ns-TA / flash photolysis), time-resolved infrared (TRIR), fluorescence up-conversion, and
-  polarisation anisotropy / magic-angle spectroscopy.
+  polarisation anisotropy / magic-angle spectroscopy — including PyMESS ``.h5`` slow-modulation
+  states with per-state single scans and multi-signal fast modulation.
 - **Two-Dimensional Spectroscopy (**\ :mod:`pymorgan.twoD`\ **):** General two-dimensional optical
   correlation spectroscopy across homonuclear and cross-regime modalities — **2D-IR**
   (vibrational–vibrational), **2D-ES** (electronic–electronic), **2D-EV**
   (electronic–vibrational), and **2D-VE** (vibrational–electronic) — from raw interferograms
-  through closed-form bin-zero detection, apodisation, IRLS phasing, and Fourier transformation
-  to spectral-diffusion (CLS / IvCLS / NLS), 2D Gaussian peak fitting, ROI volume integration,
-  and direct Kubo lineshape response-function fitting.
+  through closed-form bin-zero detection, apodisation, IRLS phasing, Fourier transformation, and
+  interactive 2D single-scan contour array exploration / scan recombination to spectral-diffusion
+  (CLS / IvCLS / NLS), 2D Gaussian peak fitting, ROI volume integration, and generalized
+  multi-FFCF Kubo lineshape response-function fitting with Variable Projection (VarPro).
 - **Wavelength & Pulse-Shaper Calibration (**\ :mod:`pymorgan.cal`\ **):** Non-linear least-squares
   dispersion fitting (linear grating, 2nd/3rd-order polynomial grating, and SF10 glass Sellmeier
   prism models) across 12 pre-configured spectrograph and pulse-shaper setups.
@@ -37,17 +39,19 @@ dimensionality:
       :link: user_guide/oneD
       :link-type: doc
 
-      Load 12+ instrument formats (including PyMESS ``.h5``, HARPIA, Helios, TRIR), correct
-      background, solvent, shockwaves & Cauchy chirp dispersion, stitch wavelength/time windows,
-      compute time derivatives, perform SVD, and calculate polarisation anisotropy.
+      Load 12+ instrument formats (including PyMESS ``.h5`` slow-modulation & multi-signal schemas,
+      HARPIA, Helios, TRIR), correct background, solvent, shockwaves & Cauchy chirp dispersion,
+      stitch wavelength/time windows, compute time derivatives, perform SVD, and calculate
+      polarisation anisotropy.
 
    .. grid-item-card:: 🗺️ 2D Spectroscopy (2D-IR, 2D-ES, 2D-EV, 2D-VE)
       :link: user_guide/twoD
       :link-type: doc
 
       Closed-form Fourier Shift Theorem bin-zero detection, apodisation, IRLS phasing,
-      spectral diffusion (CLS / IvCLS / NLS), Kubo lineshape fitting, 2D Gaussian peak fitting,
-      ROI volume integration, and 2D difference maps.
+      interactive 2D single-scan contour array explorer & scan recombination, spectral diffusion
+      (CLS / IvCLS / NLS), generalized multi-FFCF Kubo lineshape fitting (VarPro), 2D Gaussian
+      peak fitting, ROI volume integration, and 2D difference maps.
 
    .. grid-item-card:: 🎯 Wavelength & Shaper Calibration
       :link: user_guide/calibration

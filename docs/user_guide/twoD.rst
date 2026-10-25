@@ -40,11 +40,14 @@ casing.
    * - **process**
      - :mod:`pymorgan.twoD.process`
      - :meth:`Dataset2D.process <pymorgan.twoD.dataset.Dataset2D.process>`,
-       :meth:`Dataset2D.background_correct <pymorgan.twoD.dataset.Dataset2D.background_correct>`
+       :meth:`Dataset2D.background_correct <pymorgan.twoD.dataset.Dataset2D.background_correct>`,
+       :meth:`Dataset2D.recalc_average <pymorgan.twoD.dataset.Dataset2D.recalc_average>`,
+       :meth:`Dataset2D.set_active_state <pymorgan.twoD.dataset.Dataset2D.set_active_state>`
    * - **plot**
      - :mod:`pymorgan.twoD.plot`
      - :meth:`Dataset2D.plot_map <pymorgan.twoD.dataset.Dataset2D.plot_map>`,
-       :meth:`Dataset2D.plot_surface <pymorgan.twoD.dataset.Dataset2D.plot_surface>`
+       :meth:`Dataset2D.plot_surface <pymorgan.twoD.dataset.Dataset2D.plot_surface>`,
+       :meth:`Dataset2D.plot_scan_maps <pymorgan.twoD.dataset.Dataset2D.plot_scan_maps>`
    * - **analyse**
      - :mod:`pymorgan.twoD.analyse`, :mod:`pymorgan.twoD.kubo_fit`
      - ``Dataset2D.slice_at``, ``diagonal``, ``center_line_slope``, ``nodal_line_slope``,
@@ -61,14 +64,15 @@ population waiting time :math:`t_2`. The signal is stored as a three-dimensional
    Z \in \mathbb{R}^{N_{\text{pump}} \times N_{\text{probe}} \times N_{t_2}}
 
 indexed by pump frequency :math:`\omega_1`, probe frequency :math:`\omega_3`, and population time
-:math:`t_2`.
+:math:`t_2`. When single-scan loading (``load_single_scans=True``) or slow-modulation state
+datasets are present, ``Dataset2D`` also tracks the per-scan and per-state tensors.
 
 .. list-table:: Fields Stored on ``Dataset2D``
    :header-rows: 1
-   :widths: 22 36 42
+   :widths: 24 34 42
 
    * - Field
-     - Shape
+     - Shape / Type
      - Meaning
    * - ``Z``
      - :math:`N_{\text{pump}} \times N_{\text{probe}} \times N_{t_2}`
@@ -84,7 +88,22 @@ indexed by pump frequency :math:`\omega_1`, probe frequency :math:`\omega_3`, an
      - Population waiting times :math:`t_2`
    * - ``units``
      - ``dict``
-     - Unit labels dictionary
+     - Unit labels and metadata dictionary
+   * - ``raw_signal_ss``
+     - :math:`N_{t_1/\text{pump}} \times N_{\text{probe}} \times N_{t_2} \times N_s`
+     - Per-scan raw signal tensor (when ``load_single_scans=True``)
+   * - ``states_data``
+     - ``dict[str, ndarray]``
+     - Slow-modulation / polarisation state cubes
+   * - ``states_signal_ss``
+     - ``dict[str, ndarray]``
+     - Per-state single-scan tensors
+   * - ``nscans``
+     - ``int``
+     - Total number of individual scans :math:`N_s`
+   * - ``active_scan_indices``
+     - ``list[int]``
+     - 0-based indices of scans included in the active average
 
 Loading and the Loader Registry
 -------------------------------
@@ -121,17 +140,23 @@ As in 1D, formats are resolved through a registry (:mod:`pymorgan.twoD.load`). C
    * - ``RAL_Proc``
      - STFC / Central Laser Facility
      - Processed Ultra 2D signal cubes
-   * - ``PyMESS_2DIR``
+   * - ``PyMESS_2D``
      - PyMESS HDF5
-     - Unified PyMESS 2D HDF5 datasets (``.h5``)
+     - Unified PyMESS 2D HDF5 datasets (``.h5``, alias ``PyMESS_2DIR``)
 
 - **The P2DAT format:** The first row is ``0, 0, t2^(1), t2^(2), ...`` (the population waiting
   times); each subsequent row is ``pump, probe, S(t2^(1)), ...``. The flat pump/probe ordering is
   reshaped with zero-copy Fortran order directly into the ``Z[pump, probe, t2]`` cube in
   :math:`\text{mOD}`.
-- **The MESS 2DIR / PyMESS_2DIR formats:** Automatically detect wobbler and chopper modulation
+- **The MESS 2DIR & PyMESS_2D formats:** Automatically detect wobbler and chopper modulation
   modes, perform interferogram normalisation (:math:`I / \text{counts}`), and compute optical
-  density :math:`\Delta\mathrm{OD} = -1000 \log_{10}(I_{\text{probe}} / I_{\text{ref}})`.
+  density :math:`\Delta\mathrm{OD} = -1000 \log_{10}(I_{\text{probe}} / I_{\text{ref}})`. For
+  PyMESS 2D HDF5 files, slow-modulated state datasets under
+  ``/data/slow_modulation/state_XX_<name>`` (with or without ``/data/interferograms_raw``) and
+  their ``*_individual_scans`` companions are loaded into ``states_data`` and
+  ``states_signal_ss``. Derived ``Magic Angle`` and ``Anisotropy`` states automatically inherit
+  per-scan tensors computed from the parallel and perpendicular states, and switching states via
+  :meth:`~pymorgan.twoD.dataset.Dataset2D.set_active_state` preserves ``active_scan_indices``.
 
 Interferogram Processing, Phasing, and Fourier Transformation
 -------------------------------------------------------------
@@ -255,6 +280,50 @@ Background :math:`t_2` map subtraction is performed via:
    data.background_correct(t2=50)             # by nearest t2 value
    data.background_correct(do_correct=False)  # passthrough
 
+2D Single-Scan Contour Array Explorer & Scan Recombination
+----------------------------------------------------------
+
+When ``load_single_scans=True`` is enabled in :class:`~pymorgan.settings.Settings`, multi-scan 2D
+datasets (``MESS_2DIR``, ``PyMESS_2D``, ``UoS_2DIR``, and ``RAL_RAW``) retain their individual scan
+tensors in ``raw_signal_ss`` (shape
+:math:`N_{t_1/\text{pump}} \times N_{\text{probe}} \times N_{t_2} \times N_s`) and optional
+per-scan interferograms ``raw_interferogram_ss``.
+
+- **Slice-level per-scan map evaluation (**\ :meth:`~pymorgan.twoD.dataset.Dataset2D.compute_scan_maps_at_t2`\ **):**
+  Computes 2D frequency-domain maps ``(label, scan_indices_0based, Z_map)`` at a chosen :math:`t_2`
+  delay for each individual scan or group of :math:`N` consecutive binned scans (``bin_size``).
+  For time-domain shaper/interferometer datasets, only the requested :math:`t_2` slice (plus the
+  scatter-subtraction reference slice if ``bkg_sub=True``) is Fourier-transformed and phased per
+  scan/bin.
+- **Multi-panel contour array (**\ :meth:`~pymorgan.twoD.dataset.Dataset2D.plot_scan_maps` /
+  :func:`~pymorgan.twoD.plot.plot_scan_map_array`\ **):** Renders a grid of 2D contour maps across
+  all individual or binned scans alongside an **Average** comparison panel on a shared colour scale.
+- **Scan recombination (**\ :meth:`~pymorgan.twoD.dataset.Dataset2D.recalc_average`\ **):**
+  Recomputes the averaged 2D dataset across any selected 0-based ``scan_indices``, updating
+  ``raw_signal``, ``raw_interferogram``, ``Z_R``, and ``active_scan_indices``.
+
+.. code-block:: python
+
+   pm.update_settings(load_single_scans=True)
+   d2 = pm.load_2D("scan_folder", data_type="MESS_2DIR")
+
+   # Plot a multi-panel grid of 2D contour maps at t2 = 0.5 ps (binning 2 scans per panel)
+   fig, axes, panels = d2.plot_scan_maps(0.5, bin_size=2, include_average=True)
+
+   # Recompute the dataset average excluding outlier scan index 3 (0-based)
+   keep = [i for i in range(d2.nscans) if i != 3]
+   d2.recalc_average(keep).process(apodise_method="1", phase_method="Linear")
+
+In ``pymorgan-gui``, the **Single Scans** box appears in the **2D** tab whenever a dataset with
+multiple scans is loaded:
+
+- **Bin Scans** sets the number of consecutive scans averaged into each subplot panel.
+- **Plot Scan Contours** opens an interactive multi-panel figure where clicking any scan panel
+  toggles its ``[Excluded]`` status (highlighted in red), and clicking the embedded
+  **Recalc. Avg. (Exclude Selected)** button recomputes the dataset average and refreshes the main
+  2D GUI in place.
+- **Recalc. Avg.** opens a dialog to enter custom 1-based scan ranges (e.g. ``1-4, 6-10``).
+
 Plotting, Cross-Regime Diagonal Handling & Unit Conversions
 -----------------------------------------------------------
 
@@ -332,27 +401,45 @@ two-stage sub-pixel extremum refinement:
 Advanced 2D Analysis Dialogs & Tools
 ------------------------------------
 
-Direct Kubo Lineshape & Spectral Diffusion Fitting
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Direct Kubo Lineshape & Generalized FFCF Fitting
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The **Kubo Fit...** dialog (``kubo_dialog.py``, backed by :mod:`pymorgan.twoD.kubo_fit`) performs
-full third-order response-function simulation and non-linear least-squares fitting of 2D spectra
-using the Kubo frequency-fluctuation correlation function. The dephasing lineshape function
-:math:`g(t)` combines static inhomogeneous broadening (:math:`\Delta\omega_0`), Kubo spectral
-diffusion (:math:`\Delta\omega_1`, correlation time :math:`\tau_c`), and homogeneous dephasing
-(:math:`T_2`):
+full third-order response-function simulation and multi-core non-linear least-squares fitting of 2D
+spectra using generalized Frequency Fluctuation Correlation Functions (FFCFs):
 
 .. math::
 
-   g(t) = \frac{1}{2}\sigma_0^2 t^2 + \sigma_1^2 \tau_c^2 \left( e^{-t/\tau_c} + \frac{t}{\tau_c} - 1 \right) + \frac{t}{T_2},
-   \qquad \sigma_i = \frac{2\pi c_0 \, \Delta\omega_i}{2\sqrt{2\ln 2}}
+   C(t) = \Delta_0^2 + \sum_{m=1}^{M} \Delta_m^2 e^{-t/\tau_{c,m}}
 
-- Supports multi-band anharmonic oscillators :math:`(\omega_{01}, \Delta)` and multi-component
-  Kubo decays :math:`(\Delta\omega_i, \tau_{c,i}, T_2)`.
-- Supports joint fitting of 2D correlation maps across selected :math:`t_2` delays together with
-  steady-state FTIR spectra (weighted by ``kubo_ftir_weight``).
-- Includes rotating-frame Nyquist undersampling (``w_rot``, ``undersampling_factor``) and fine
-  grid interpolation.
+The dephasing lineshape function :math:`g(t)` combines pure homogeneous dephasing
+(:math:`\Delta\omega_{T_2}`, with :math:`1/T_2^* = \pi c_0 \Delta\omega_{T_2}`), static
+inhomogeneous broadening (:math:`\Delta_0`), and an arbitrary number of Kubo exponential decay
+terms (:math:`\Delta_m`, correlation time :math:`\tau_{c,m}`):
+
+.. math::
+
+   g(t) = \pi c_0 \Delta\omega_{T_2}\, t + \frac{1}{2}\sigma_0^2 t^2 + \sum_{m=1}^{M} \sigma_m^2 \tau_{c,m}^2 \left( e^{-t/\tau_{c,m}} + \frac{t}{\tau_{c,m}} - 1 \right),
+   \qquad \sigma_i = \frac{2\pi c_0 \, \Delta_i}{2\sqrt{2\ln 2}}
+
+- **Shared or per-band independent FFCF groups:** Multiple FFCF groups can be defined and assigned
+  independently to the excitation (:math:`\omega_1`, ``ffcf_id``) and detection (:math:`\omega_3`,
+  ``ffcf_id_w3``) coordinates of each oscillator band.
+- **Diagonal and cross-peak bands with bath correlation:** Supports both diagonal oscillators
+  (:math:`\omega_1 = \omega_3`) and off-diagonal cross-peaks (:math:`\omega_1 \ne \omega_3`) with
+  parameter linking (``link_w1``, ``link_w3``, ``link_anharm``) and a tunable cross-peak bath
+  correlation factor :math:`\eta_{AB} \in [-1, 1]`.
+- **Variable Projection (VarPro) & multi-core parallelisation:** Uses Trust-Region Reflective
+  (``scipy.optimize.least_squares``) with analytical Variable Projection to solve the linear GSB
+  and ESA pathway amplitudes (:math:`A_{\text{GSB}}, A_{\text{ESA}}`) at each step, alongside
+  full-parameter TRF and ``L-BFGS-B`` solvers. Time-domain evaluation uses separable 1D outer
+  products, batched 2D FFTs, separable 2D rectilinear interpolation, and multi-core parallel
+  execution across :math:`t_2` delays (``ProcessPool`` / ``ThreadPool``) with parallel Jacobian
+  column evaluation.
+- **Joint 2D + 1st-order FTIR fitting & diagnostics:** Simultaneously fits 2D correlation maps
+  across selected :math:`t_2` delays and the analytical 1st-order steady-state FTIR spectrum
+  (weighted by ``kubo_ftir_weight``), with live FFCF :math:`C(t)` and :math:`g(t)` diagnostic
+  plots and JSON/TOML model preset import/export.
 
 Interactive 2D Gaussian Peak Fitting & Cross-Peak Generator
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -405,7 +492,6 @@ Graphical Interface Sub-Tabs & Movie Export
   time-domain interferogram (``TD``), Fourier amplitude + Gaussian fit + unwrapped phase & fit on
   a twin axis (``PH``), or the calibrated probe axis (``CAL``), with a **Pop** button to detach a
   synchronised resizable window.
-- **Movie / GIF / MP4 Export (**\ ``Make Movie...``\ **):** Exports animated GIF (via Pillow) or
-  MP4 (via ``FFMpegWriter``) videos stepping through :math:`t_2` population times with
-  configurable delay range, frame rate, figure dimensions, and fixed or per-frame normalised
-  :math:`Z`-scale.
+- **Movie / GIF / WebP / APNG Export (**\ ``Make Movie...``\ **):** Exports animated GIF, WebP, or
+  APNG videos (via Pillow) stepping through :math:`t_2` population times with configurable delay
+  range, frame rate, figure dimensions, and fixed or per-frame normalised :math:`Z`-scale.

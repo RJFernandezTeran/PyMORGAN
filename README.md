@@ -59,23 +59,31 @@ a dependency of this package.
 
 - **Unified 1-D pipeline** — `load → process → plot → analyse`, all hanging off
   a single `Dataset1D` object.
-- **Unified 2-D pipeline** — the same stages for 2D-IR / 2D-EV via `Dataset2D`
-  (pump–probe maps, overlap-aware diagonal, optional steady-state top panel).
+- **Unified 2-D pipeline** — the same stages for 2D-IR, 2D-ES, 2D-EV, and 2D-VE via `Dataset2D`
+  (pump–probe maps, overlap-aware diagonal, optional steady-state top panel, 2D single-scan contour array explorer `plot_scan_maps`, and interactive scan recombination `recalc_average`).
 - **Spectrometer & Pulse Shaper Calibration (`pymorgan.cal`)** — non-linear
   least-squares fitting of spectrograph dispersion curves to reference FTIR
-  absorption spectra (e.g. Dioxane) across 10 hardware setup configurations (UniGE
-  TRIR, UoS TRIR, UniGE TA, nsTA, UZH Lab 2, RAL LIFEtime, TRUVIS-II, etc.).
+  absorption spectra (e.g. Dioxane) across 12 hardware setup configurations (UniGE
+  TRIR, UoS TRIR, UniGE TA, nsTA, HARPIA UV/Vis, UZH Lab 2, RAL LIFEtime, TRUVIS-II, PyMESS `.h5`, etc.).
   Automatically parses dataset metadata (CWL, grating pitch) and exports calibrated
   frequency axes and pulse shaper mask files (`CalibratedPump.csv`, `SingleMask.txt`, `MultipleMask.txt`).
-- **2-D interferometric processing** — apodisation (Box, Cos, Cos², Cos³, Hanning,
-  Hamming, None), optional zero-padding, polynomial phase fitting (Constant /
+- **2-D interferometric processing** — closed-form Fourier Shift Theorem bin-zero detection, apodisation (Box, Cos, Cos², Cos³, Hanning,
+  Hamming, None), optional zero-padding, IRLS polynomial phase fitting (Constant /
   Linear / Quadratic / Cubic), and pump-correction; all exposed via the
   *Phasing/FT* sub-tab with live PH and TD diagnostic views.
+- **Generalized Kubo lineshape & FFCF fitting (`pymorgan.twoD.kubo_fit`)** — direct 3rd-order
+  response-function simulation and multi-core non-linear least-squares fitting of 2D spectra
+  using generalized Frequency Fluctuation Correlation Functions (FFCFs) with homogeneous dephasing
+  ($\Gamma_{\text{hom}} / T_2^*$), static inhomogeneity ($\Delta_0$), and arbitrary multi-exponential
+  Kubo decay terms ($\Delta_m, \tau_{c,m}$). Supports shared or per-band independent FFCF groups,
+  diagonal and cross-peak bands ($\omega_1 \ne \omega_3$) with parameter linking and cross-peak bath
+  correlation ($\eta_{AB}$), Variable Projection (VarPro) analytical pathway amplitudes
+  ($A_{\text{GSB}}, A_{\text{ESA}}$), and joint 2D + 1st-order FTIR fitting.
 - **Pluggable loader registry** — register new instrument formats with a
   decorator.
-  - **1-D Time-Resolved**: `UniGE_fsTA` (with automatic non-transient `.dat` file filtering and `CalibratedProbe.csv` / `pix2lam.mat` detection), `UniGE_nsTA`, `HARPIA_TA`, `Helios_TA`, `MESS_TRIR`, `MESS_TRUVIS`, `PyMESS_PP` (PyMESS transient absorption HDF5 datasets), `PDAT`, `UoS_IRpp`.
-  - **2-D Spectroscopy**: `P2DAT`, `MESS_2DIR`, `UoS_2DIR`, `RAL_RAW`, `RAL_Proc`.
-  - **Calibration Datasets**: UniGE fsTA / nsTA, UniGE TRIR Absorbance / ΔA, UniGE TRUVIS-II, UoS TRIR, UZH Lab 2, RAL LIFEtime.
+  - **1-D Time-Resolved**: `UniGE_fsTA` (with automatic non-transient `.dat` file filtering and `CalibratedProbe.csv` / `pix2lam.mat` detection), `UniGE_nsTA`, `HARPIA_TA`, `Helios_TA`, `MESS_TRIR`, `MESS_TRUVIS`, `PyMESS_PP`, `PyMESS_Aniso`, `PyMESS_t2scan` (PyMESS HDF5 datasets including slow-modulation states with per-state single scans and multi-signal fast modulation), `PDAT`, `UoS_IRpp`, `Exported_TXT`.
+  - **2-D Spectroscopy**: `P2DAT`, `MESS_2DIR`, `PyMESS_2D` (`PyMESS_2DIR`), `UoS_2DIR`, `RAL_RAW`, `RAL_Proc`.
+  - **Calibration Datasets**: UniGE fsTA / nsTA, UniGE TRIR Absorbance / ΔA, UniGE TRUVIS-II, HARPIA UV/Vis, UoS TRIR, UZH Lab 2, RAL LIFEtime, PyMESS `.h5`.
   - **Steady-State**: FTIR / OPUS (`ftir`, `opus`), UV-Vis (`uvvis`), fluorimeter (`fluorimeter`), and generic delimited files (`csv`, `txt`, `xy`).
 - **Steady-state spectra** — `Spectrum` / `SpectrumSeries` for absorption,
   emission and excitation, with automatic CSV/TXT delimiter detection.
@@ -138,15 +146,19 @@ PyMORGAN includes built-in loaders for a wide range of ultrafast time-resolved s
 | | `Helios_TA` | Ultrafast Systems Helios TA spectrometer datasets |
 | | `MESS_TRIR` | MESS Transient IR spectrometer datasets (TRIR) |
 | | `MESS_TRUVIS` | MESS Transient UV-Vis / TRUVIS-II spectrometer datasets |
-| | `PyMESS_PP` | PyMESS Pump-Probe transient absorption HDF5 datasets (`.h5`) |
+| | `PyMESS_PP` | PyMESS Pump-Probe transient absorption HDF5 datasets (`.h5`), supporting slow-modulation states (`/data/slow_modulation/state_XX_*` + `*_individual_scans`) and multi-signal fast modulation (`/data/signals/signal_XX_*`) |
+| | `PyMESS_Aniso` | PyMESS slow-modulation polarization anisotropy HDF5 datasets (`.h5`) with parallel, perpendicular, magic-angle, and anisotropy states |
+| | `PyMESS_t2scan` | PyMESS 2D-IR population waiting-time ($t_2$) scan HDF5 datasets (`.h5`) |
 | | `PDAT` | Standard PyMORGAN 1D binary/text transient dataset format |
 | | `UoS_IRpp` | University of Sheffield IR pump–probe datasets |
+| | `Exported_TXT` | Generic wavelength-vs-delay tabular text files (`.txt`) |
 | **2D Spectroscopy** | `P2DAT` | Standard PyMORGAN 2D binary/text dataset format |
-| | `MESS_2DIR` | MESS 2D-IR spectrometer population-time maps |
+| | `MESS_2DIR` | MESS 2D-IR spectrometer population-time maps (with single-scan loading) |
+| | `PyMESS_2D` | Unified PyMESS 2D HDF5 datasets (`.h5`, alias `PyMESS_2DIR`), supporting time-domain shaper/interferometer and frequency-domain maps, slow-modulation state cubes, and per-state single scans |
 | | `UoS_2DIR` | University of Sheffield 2D-IR population-time maps |
 | | `RAL_RAW` | Rutherford Appleton Laboratory LIFEtime raw 2D-IR maps |
 | | `RAL_Proc` | Rutherford Appleton Laboratory LIFEtime processed 2D-IR maps |
-| **Calibration** | Spectrometer / Shaper | UniGE fsTA / nsTA, UniGE TRIR Absorbance / ΔA, UniGE TRUVIS-II, UoS TRIR, UZH Lab 2, RAL LIFEtime |
+| **Calibration** | Spectrometer / Shaper | UniGE fsTA / nsTA, UniGE TRIR Absorbance / ΔA, UniGE TRUVIS-II, HARPIA UV/Vis, UoS TRIR, UZH Lab 2, RAL LIFEtime, PyMESS `.h5` |
 | **Steady-State** | `ftir`, `opus`, `uvvis`, `fluorimeter`, `csv`, `txt`, `xy` | FTIR absorption, Bruker OPUS files, UV-Vis, fluorimeter emission/excitation, and generic CSV/TXT/XY delimited matrices |
 
 ## Installation
@@ -275,13 +287,26 @@ interactively on the map; each opens in a new figure. The GUI includes dedicated
 tabs for 2-D interferometric phasing/FT and spectrograph/shaper wavelength
 calibration.
 
-Additional interactive dialogs:
+Additional interactive dialogs and tools:
 - **Chirp correction** (`Chirp…`) — guided automatic / step-function / manual
   chirp correction with per-pixel progress reporting.
 - **Solvent subtraction** (`Subtract Solvent…`) — manual or automatic
   (per-pixel IRF-convoluted) solvent response removal.
 - **Shockwave subtraction** (`Subtract Shockwave…`) — removes correlated
   acoustic artefacts by selecting a reference pixel range.
+- **2D Single-Scan Contour Array Explorer** (`Plot Scan Contours` & `Recalc. Avg.`) —
+  renders a multi-panel grid of 2-D contour maps across individual or binned scans at
+  the selected $t_2$ delay, allows clicking any scan panel to toggle its `[Excluded]`
+  state, and recomputes the dataset average on the fly.
+- **Kubo Lineshape & FFCF Fitting** (`Kubo Fit…`) — multi-core 3rd-order response-function
+  fitting with generalized multi-exponential FFCF groups, diagonal & cross-peak bands with
+  bath correlation ($\eta_{AB}$), Variable Projection (VarPro) linear amplitude solver,
+  and joint 2D + 1st-order FTIR fitting.
+- **2D Gaussian Peak Fitting & Cross-Peak Generator** (`2D Gaussian Fit…`) — interactive
+  correlated 2D elliptical Gaussian fitting across single slices or global $t_2$ stacks.
+- **2D ROI Volume Integration & Subtract 2D Spectra** (`2D Integral Dynamics…`, `Subtract 2D Spectra…`) —
+  rectangular ROI volume integration with exponential kinetics fitting, and scaled 2D reference
+  map subtraction.
 - **Make Movie** (`Make Movie…`) — exports a lightweight, high-compatibility animated
   **GIF**, **WebP**, or **APNG** movie of 2-D maps stepping through all population times $t_2$
   (powered natively by Pillow with zero external `ffmpeg` dependency).
@@ -296,7 +321,7 @@ back to `settings.toml`.
 
 ```
 src/pymorgan/
-  oneD/          load · process · plot · chirp · registry · dataset (Dataset1D)
+  oneD/          load · process · plot · chirp · stitch · svd · registry · dataset (Dataset1D)
   twoD/          load · process · plot · analyse · kubo_fit · progress · dataset (Dataset2D)
   steadyState/   Spectrum · SpectrumSeries · SpectrumKind · loader registry
   cal/           spectrometer & pulse shaper wavelength calibration (load, fit, models, export)
@@ -324,7 +349,7 @@ src/pymorgan/
 examples/        runnable example scripts (1D pump-probe, composite 1D, 2D-IR, steady-state)
 tests/           pytest suite (headless matplotlib, offscreen Qt)
 scripts/         run_checks.py · run_changed_tests.py · bump_version.py
-docs/            LaTeX manual (main + installation + oneD + twoD + steadyState + settings + calibration + extending)
+docs/            PyData Sphinx documentation (*.rst) & LaTeX manual (main.tex / main.pdf)
 ```
 
 ## Testing
@@ -351,23 +376,25 @@ uvx ruff@latest check src tests scripts examples
 uvx ruff@latest format src tests
 ```
 
-The version string in `src/pymorgan/__about__.py` follows `0.x.yymmdd.devN`
-(PEP 440) and is maintained by `python scripts/bump_version.py` (`--minor` for a
-design bump, `--check` to verify it was bumped today).
+The version string in `src/pymorgan/__about__.py` follows `<major>.<yymmdd>.<N>`
+(PEP 440) and is maintained by `python scripts/bump_version.py` (`--major` for a
+major bump, `--check` to verify it was bumped today).
 
 ## Documentation
 
-A LaTeX manual covering the data model, the settings, the full API and how to
-extend the loader registry lives in `docs/` (`installation`, `oneD`, `twoD`,
-`steadyState`, `settings`, `calibration`, `extending`). Build it with:
+Both an interactive **PyData Sphinx** web manual (`docs/index.rst`, published to
+[GitHub Pages](https://rjfernandezteran.github.io/PyMORGAN/)) and a typeset **LaTeX manual**
+(`docs/main.tex` → `docs/main.pdf`) covering the data model, settings, full API, and loader
+registry live in `docs/`. Build them with:
 
 ```bash
-cd docs && pdflatex main.tex && pdflatex main.tex   # twice, for the table of contents
+cd docs && pdflatex main.tex && pdflatex main.tex   # LaTeX PDF manual
+uv run sphinx-build -b html docs docs/_build/html   # PyData Sphinx HTML docs
 ```
 
 The kinetic-analysis side is documented separately, in
 [PyRATE-TA](https://github.com/RJFernandezTeran/PyRATE-TA)'s own manual
-(`docs/main.tex` there): the models and rate-matrix formalism, the fitting
+(`docs/main.tex` and [PyRATE-TA Docs](https://rjfernandezteran.github.io/PyRATE-TA/)): the models and rate-matrix formalism, the fitting
 engines, and the boundary between the two packages.
 
 

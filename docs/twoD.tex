@@ -19,9 +19,9 @@ maps each stage to its module.
     Stage & Module & Entry point(s) \\
     \midrule
     load    & \code{pymorgan.twoD.load}    & \code{pm.load\_2D}, \code{Dataset2D.from\_file} \\
-    process & \code{pymorgan.twoD.process} & \code{Dataset2D.background\_correct} \\
-    plot    & \code{pymorgan.twoD.plot}    & \code{Dataset2D.plot\_map} \\
-    analyse & \code{pymorgan.twoD.analyse} & \code{Dataset2D.slice\_at}, \code{diagonal} \\
+    process & \code{pymorgan.twoD.process} & \code{Dataset2D.process}, \code{background\_correct}, \code{recalc\_average} \\
+    plot    & \code{pymorgan.twoD.plot}    & \code{Dataset2D.plot\_map}, \code{plot\_surface}, \code{plot\_scan\_maps} \\
+    analyse & \code{pymorgan.twoD.analyse} / \code{kubo\_fit} & \code{Dataset2D.slice\_at}, \code{diagonal}, \code{doCLS}, \code{doKuboFit} \\
     \bottomrule
   \end{tabular}
   \caption{The 2-D pipeline stages and where they live.}
@@ -35,7 +35,7 @@ per population time $t_2$. The signal is stored as a cube
   Z \in \mathbb{R}^{N_{\text{pump}} \times N_{\text{probe}} \times N_{t_2}},
 \end{equation}
 indexed by the pump frequency $\omega_1$, the probe frequency $\omega_3$ and the
-population time $t_2$. The fields held by \code{Dataset2D} are listed in
+population time $t_2$. When single-scan loading (\code{load\_single\_scans=True}) or slow-modulation state datasets are present, \code{Dataset2D} also stores the per-scan and per-state tensors. The fields held by \code{Dataset2D} are listed in
 Table~\ref{tab:fields2d}.
 
 \begin{table}[h]
@@ -44,11 +44,16 @@ Table~\ref{tab:fields2d}.
     \toprule
     Field & Shape & Meaning \\
     \midrule
-    \code{Z}      & $N_{\text{pump}} \times N_{\text{probe}} \times N_{t_2}$ & signal cube \\
-    \code{pump}   & $N_{\text{pump}}$  & pump axis $\omega_1$ \\
-    \code{probe}  & $N_{\text{probe}}$ & probe axis $\omega_3$ \\
-    \code{delays} & $N_{t_2}$ & population times $t_2$ \\
-    \code{units}  & dict & unit labels \\
+    \code{Z}               & $N_{\text{pump}} \times N_{\text{probe}} \times N_{t_2}$ & signal cube (m\,OD) \\
+    \code{pump}            & $N_{\text{pump}}$  & pump axis $\omega_1$ \\
+    \code{probe}           & $N_{\text{probe}}$ & probe axis $\omega_3$ \\
+    \code{delays}          & $N_{t_2}$ & population times $t_2$ \\
+    \code{units}           & dict & unit labels and metadata \\
+    \code{raw\_signal\_ss} & $N_{t_1/\text{pump}} \times N_{\text{probe}} \times N_{t_2} \times N_s$ & per-scan raw signal tensor (optional) \\
+    \code{states\_data}    & dict & slow-modulation / polarization state cubes (optional) \\
+    \code{states\_signal\_ss} & dict & per-state single-scan tensors (optional) \\
+    \code{nscans}          & int & total number of individual scans $N_s$ \\
+    \code{active\_scan\_indices} & list[int] & 0-based indices of scans included in the active average \\
     \bottomrule
   \end{tabular}
   \caption{Fields stored on \code{Dataset2D}.}
@@ -58,7 +63,7 @@ Table~\ref{tab:fields2d}.
 \subsection{Loading and the loader registry}
 As in 1-D, formats are resolved through a registry
 (\code{pymorgan.twoD.load}). The registered readers are \code{P2DAT} (processed
-maps), \code{MESS\_2DIR}, \code{UoS\_2DIR}, \code{RAL\_RAW} (raw
+maps), \code{MESS\_2DIR}, \code{PyMESS\_2D} (alias \code{PyMESS\_2DIR}), \code{UoS\_2DIR}, \code{RAL\_RAW} (raw
 interferograms, phased and transformed on load) and \code{RAL\_Proc};
 \code{pm.available\_map\_loaders()} lists what the running installation
 recognises.
@@ -85,7 +90,7 @@ reader must return \code{(Z, pump, probe, delays, units, freq\_units)}.
     \code{UoS\_2DIR} & Univ. of Sheffield & Sheffield 2D-IR acquisition files \\
     \code{RAL\_RAW} & STFC / Central Laser Facility & Raw Ultra 2D-IR interferograms \\
     \code{RAL\_Proc} & STFC / Central Laser Facility & Processed Ultra 2D-IR cubes \\
-    \code{PyMESS\_2DIR} & PyMESS HDF5 & Unified PyMESS 2D-IR HDF5 datasets (\code{.h5}) \\
+    \code{PyMESS\_2D} & PyMESS HDF5 & Unified PyMESS 2D HDF5 datasets (\code{.h5}, alias \code{PyMESS\_2DIR}) \\
     \bottomrule
   \end{tabular}
   \caption{Supported two-dimensional data formats in PyMORGAN.}
@@ -98,8 +103,10 @@ times); each subsequent row is \code{pump, probe, S($t_2^{(1)}$), \dots}. The
 flat pump/probe ordering is reshaped with zero-copy Fortran order directly into the
 \code{Z[pump, probe, $t_2$]} cube. Data is in m\,OD.
 
-\paragraph{The MESS 2DIR format.}
+\paragraph{The MESS 2DIR and PyMESS 2D formats.}
 A MESS 2DIR dataset is stored as a folder containing separate CSV files for each measurement component across all data states ($N_{\text{datastates}}$), spectral modulations ($N_{\text{spectra}}$), slow modulations ($N_{\text{slowmod}}$), interleaves, and population delay times ($t_2$). The reader automatically detects wobbler and chopper modulation modes, performs interferogram normalization ($I / \text{counts}$), calculates optical density $\Delta\mathrm{OD} = -1000 \log_{10}(I_{\text{probe}} / I_{\text{ref}})$, and reads the multi-file structure using parallelised, C-accelerated parsers.
+
+For \textbf{PyMESS 2D HDF5 (\code{.h5})} datasets (\code{PyMESS\_2D} / \code{PyMESS\_2DIR}), the loader supports both time-domain (shaper and interferometer) and pre-processed frequency-domain cubes, including slow-modulation schemas where state datasets live under \code{/data/slow\_modulation/state\_XX\_<name>} (with or without \code{/data/interferograms\_raw}). Companion \code{state\_XX\_<name>\_individual\_scans} datasets are loaded into \code{Dataset2D.states\_signal\_ss} and \code{raw\_signal\_ss}. When parallel and perpendicular polarization states are present, PyMORGAN automatically derives the \code{Magic Angle} and \code{Anisotropy} state cubes — as well as their corresponding per-scan tensors — and preserves the user's active scan selection (\code{active\_scan\_indices}) across state switches via \code{set\_active\_state()}.
 
 \subsection{Interferogram processing, phasing, and Fourier transformation}\label{sec:twoD:processing}
 
@@ -181,6 +188,27 @@ The phased, purely absorptive transient signal is obtained by multiplying by the
     \end{equation}
   \item \textbf{Scatter subtraction:} A selected population delay map $t_2^{\text{scat}}$ (typically an early or pre-zero delay containing pump scattering without sample dynamics) can be subtracted from all subsequent maps.
 \end{itemize}
+
+\subsection{Single-scan contour array exploration and scan recombination}\label{sec:twoD:singlescans}
+When \code{load\_single\_scans} is enabled in the settings (\S\ref{sec:settings}), multi-scan 2-D datasets (\code{MESS\_2DIR}, \code{PyMESS\_2D}, \code{UoS\_2DIR}, and \code{RAL\_RAW}) populate \code{raw\_signal\_ss} (shape $N_{t_1/\text{pump}} \times N_{\text{probe}} \times N_{t_2} \times N_s$) and optional per-scan interferograms \code{raw\_interferogram\_ss}.
+
+\begin{itemize}
+  \item \textbf{Slice-level per-scan map computation (\code{compute\_scan\_maps\_at\_t2}):} Evaluates 2-D frequency-domain maps \code{(label, scan\_indices, Z\_map)} at a target $t_2$ delay for each individual scan or group of $N$ consecutive binned scans (\code{bin\_size}). For time-domain shaper or interferometer datasets, only the requested $t_2$ slice (plus the scatter-subtraction reference slice when \code{bkg\_sub=True}) is Fourier-transformed and phased per scan/bin, avoiding redundant full-cube FFTs.
+  \item \textbf{Multi-panel contour array (\code{plot\_scan\_maps}):} Calls \code{pymorgan.twoD.plot.plot\_scan\_map\_array} to render a responsive grid of 2-D contour maps across all individual or binned scans alongside an \textbf{Average} comparison panel on a shared colour scale.
+  \item \textbf{Scan recombination (\code{recalc\_average}):} Recomputes the dataset average across any subset of 0-based scan indices, updating \code{raw\_signal}, \code{raw\_interferogram}, \code{Z\_R}, and \code{active\_scan\_indices}.
+\end{itemize}
+
+\begin{lstlisting}
+pm.update_settings(load_single_scans=True)
+d2 = pm.load_2D("scan_folder", data_type="MESS_2DIR")
+
+# Plot a grid of 2D contour maps at t2 = 0.5 ps (binning 2 scans per panel)
+fig, axes, panels = d2.plot_scan_maps(0.5, bin_size=2, include_average=True)
+
+# Recompute the dataset average excluding outlier scan index 3 (0-based)
+keep = [i for i in range(d2.nscans) if i != 3]
+d2.recalc_average(keep).process(apodise_method="1", phase_method="Linear")
+\end{lstlisting}
 
 \subsection{Background correction}
 The 2-D background is a chosen $t_2$ map subtracted from the others,
@@ -397,10 +425,19 @@ that mirrors the same axes.  The window is linked to the main GUI: it
 updates whenever the delay or plot mode changes.  Closing the pop-out
 does not affect the embedded plot.
 
+\subsubsection{Single Scans panel \& interactive scan contour array}
+
+When a multi-scan 2-D dataset is loaded with \code{load\_single\_scans} enabled, the \textbf{Single Scans} group box (\code{twoD\_singleScan\_box}) appears in the 2-D tab:
+\begin{description}
+  \item[Bin Scans] Sets the number of consecutive scans averaged into each panel ($1 \le N_{\text{bin}} \le \lfloor N_s / 2 \rfloor$).
+  \item[Plot Scan Contours] Opens an interactive multi-panel figure displaying the 2-D contour map for each individual (or binned) scan at the currently selected $t_2$ delay alongside an \textbf{Average} reference panel. Clicking any scan panel toggles its \code{[Excluded]} status (highlighted in red), and clicking the embedded \textbf{Recalc.\ Avg.\ (Exclude Selected)} button recomputes the dataset average and refreshes the main 2-D workspace immediately.
+  \item[Recalc.\ Avg.] Opens a dialog to specify custom 1-based scan ranges (e.g.\ \code{1-4, 6-10}) to include in the dataset average.
+\end{description}
+
 \subsubsection{Movie / GIF export dialog}
 
 The \textbf{Make Movie\ldots} button opens \code{movie\_dialog.py}, which
-exports an animated GIF or MP4 video of the 2-D contour map stepping
+exports an animated GIF, WebP, or APNG video of the 2-D contour map stepping
 through all population times~$t_2$. Controls include:
 
 \begin{description}
@@ -408,26 +445,30 @@ through all population times~$t_2$. Controls include:
   \item[Frame rate / duration] Frames per second or per-frame hold time in ms.
   \item[Figure size] Figure width and height in inches.
   \item[Colour scale ($Z$-scale)] Fixed or per-frame normalised colour range.
-  \item[Output format] GIF (via Pillow) or MP4 (via the matplotlib
-        \code{FFMpegWriter}; requires \code{ffmpeg} on \code{PATH}).
+  \item[Output format] GIF, WebP, or APNG (via Pillow, with zero external \code{ffmpeg} dependency).
 \end{description}
 
 A progress bar reports frame rendering. The dialog uses the plot-controls
 panel settings (CLS/IvCLS overlays, quick-plot mode, etc.) that are active
 in the main window when the dialog is opened.
 
-\subsubsection{Direct Kubo Lineshape \& Spectral Diffusion Fitting}\label{sec:twoD:kubo}
+\subsubsection{Direct Kubo Lineshape \& Generalized FFCF Fitting}\label{sec:twoD:kubo}
 
-The \textbf{Kubo Fit\ldots} dialog (\code{kubo\_dialog.py}, backed by \code{pymorgan.twoD.kubo\_fit}) performs full third-order response-function simulation and non-linear least-squares fitting of 2D spectra using the Kubo frequency-fluctuation correlation function. The dephasing lineshape function $g(t)$ combines static inhomogeneous broadening ($\Delta\omega_0$), Kubo spectral diffusion ($\Delta\omega_1$, correlation time $\tau_c$), and pure homogeneous dephasing ($T_2$):
+The \textbf{Kubo Fit\ldots} dialog (\code{kubo\_dialog.py}, backed by \code{pymorgan.twoD.kubo\_fit}) performs full third-order response-function simulation and multi-core non-linear least-squares fitting of 2D spectra using generalized Frequency Fluctuation Correlation Functions (FFCFs):
 \begin{equation}
-  g(t) = \frac{1}{2}\sigma_0^2 t^2 + \sigma_1^2 \tau_c^2 \left( e^{-t/\tau_c} + \frac{t}{\tau_c} - 1 \right) + \frac{t}{T_2},
-  \qquad \sigma_i = \frac{2\pi c_0 \, \Delta\omega_i}{2\sqrt{2\ln 2}}.
+  C(t) = \Delta_0^2 + \sum_{m=1}^{M} \Delta_m^2 e^{-t/\tau_{c,m}}.
 \end{equation}
-The dialog supports:
+The corresponding line-broadening function $g(t)$ combines pure homogeneous dephasing ($\Delta\omega_{T_2}$, with $1/T_2^* = \pi c_0 \Delta\omega_{T_2}$), static inhomogeneous broadening ($\Delta_0$), and an arbitrary number of Kubo exponential decay terms ($\Delta_m$, correlation time $\tau_{c,m}$):
+\begin{equation}
+  g(t) = \pi c_0 \Delta\omega_{T_2}\, t + \frac{1}{2}\sigma_0^2 t^2 + \sum_{m=1}^{M} \sigma_m^2 \tau_{c,m}^2 \left( e^{-t/\tau_{c,m}} + \frac{t}{\tau_{c,m}} - 1 \right),
+  \qquad \sigma_i = \frac{2\pi c_0 \, \Delta_i}{2\sqrt{2\ln 2}}.
+\end{equation}
+Key capabilities of the engine and dialog include:
 \begin{itemize}
-  \item Multiple anharmonic oscillator bands $(\omega_{01}, \Delta)$ and multiple Kubo decay components $(\Delta\omega_i, \tau_{c,i}, T_2)$.
-  \item Joint fitting of 2D correlation maps across selected $t_2$ delays together with steady-state FTIR spectra (weighted by \code{kubo\_ftir\_weight}).
-  \item Rotating-frame Nyquist undersampling (\code{w\_rot}, \code{undersampling\_factor}) and fine-grid interpolation for fast, accurate response evaluation.
+  \item \textbf{Shared or per-band independent FFCFs:} Multiple FFCF groups can be defined and assigned independently to the excitation ($\omega_1$, \code{ffcf\_id}) and detection ($\omega_3$, \code{ffcf\_id\_w3}) coordinates of each oscillator band.
+  \item \textbf{Diagonal and cross-peak bands with bath correlation:} Supports both diagonal oscillators ($\omega_1 = \omega_3$) and off-diagonal cross-peaks ($\omega_1 \ne \omega_3$) with parameter linking (\code{link\_w1}, \code{link\_w3}, \code{link\_anharm}) and a tunable cross-peak bath correlation factor $\eta_{AB} \in [-1, 1]$.
+  \item \textbf{Variable Projection (VarPro) \& multi-core parallelisation:} Uses Trust-Region Reflective (\code{scipy.optimize.least\_squares}) with analytical Variable Projection to solve the linear GSB and ESA pathway amplitudes ($A_{\text{GSB}}, A_{\text{ESA}}$) at each evaluation, alongside full-parameter TRF and \code{L-BFGS-B} solvers. Time-domain evaluation uses separable 1D outer products, batched 2D FFTs, separable 2D rectilinear interpolation, and multi-core parallel execution across $t_2$ delays (\code{ProcessPool} / \code{ThreadPool}) with parallel Jacobian column evaluation.
+  \item \textbf{Joint 2D + 1st-order FTIR fitting \& diagnostics:} Simultaneously fits 2D correlation maps across selected $t_2$ delays and the analytical 1st-order steady-state FTIR spectrum (weighted by \code{kubo\_ftir\_weight}), with live FFCF $C(t)$ and $g(t)$ diagnostic plots and JSON/TOML model preset import/export.
 \end{itemize}
 
 \subsubsection{Interactive 2D Gaussian Peak Fitting \& Cross-Peak Generator}\label{sec:twoD:gaussian}

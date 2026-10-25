@@ -89,7 +89,7 @@ print(pm.available_loaders())
     \code{MESS\_TRUVIS} & MESS TRUVIS & State-modulated transient UV-Vis directories \\
     \code{HARPIA} & Light Conversion & Harpia ultrafast transient absorption files (\code{.dat}) \\
     \code{Helios\_TA} & Ultrafast Systems & Helios TA files (\code{.csv}) with multi-scan discovery and interpolation \\
-    \code{PyMESS\_PP} & PyMESS HDF5 & Broadband pump--probe HDF5 datasets (\code{.h5}) \\
+    \code{PyMESS\_PP} & PyMESS HDF5 & Broadband pump--probe HDF5 datasets (\code{.h5}), including slow-modulation states and multi-signal fast modulation \\
     \code{PyMESS\_Aniso} & PyMESS HDF5 & Slow-modulation polarization anisotropy HDF5 datasets (\code{.h5}) \\
     \code{PyMESS\_t2scan} & PyMESS HDF5 & 2D-IR population waiting-time ($t_2$) scan HDF5 datasets (\code{.h5}) \\
     \code{Exported\_TXT} & Generic exports & Wavelength-vs-delay tabular text files (\code{.txt}) \\
@@ -119,6 +119,14 @@ subsequent row begins with a delay value followed by the signal at every probe
 coordinate. PDAT files store averaged data already in m\,OD, so no rescaling is
 applied on read. Per-point standard deviations are optionally stored in a sibling
 \code{.pdatn} file with an identical layout.
+
+\paragraph{PyMESS HDF5 slow-modulation and multi-signal layouts.}
+The PyMESS HDF5 readers (\code{PyMESS\_PP}, \code{PyMESS\_Aniso}, and \code{PyMESS\_t2scan}) automatically classify and parse both standard single-state pump--probe datasets and multi-state acquisition schemas:
+\begin{itemize}
+  \item \textbf{Slow modulation (\code{/data/slow\_modulation/state\_XX\_<name>}):} State datasets are discovered while filtering out their \code{*\_individual\_scans} companions from state enumeration. Per-state single scans (\code{state\_XX\_<name>\_individual\_scans}) are loaded into \code{Zss\_R} (shape $N_\tau \times N_\lambda \times N_{\text{states}} \times N_{\text{scans}}$) and used to compute a true empirical per-point standard deviation \code{Zstdv}. For polarization anisotropy datasets (\code{PyMESS\_Aniso}), the isotropic Magic Angle ($\Delta A_{\mathrm{iso}} = (\Delta A_\parallel + 2G\,\Delta A_\perp)/3$) and Anisotropy ($r = (\Delta A_\parallel - G\,\Delta A_\perp)/(\Delta A_\parallel + 2G\,\Delta A_\perp)$) channels are appended automatically alongside the parallel and perpendicular states, including their derived per-scan tensors.
+  \item \textbf{Multi-signal fast modulation (\code{/data/signals/signal\_XX\_*}):} Multi-beam or multi-phase chop/modulation schemes stored under \code{/data/signals} (such as pump-only, push-only, and pump+push difference channels) are exposed as named detector/modulation states in \code{Units["detectors"]}, with companion \code{*\_noise} datasets mapped directly to \code{Zstdv}.
+  \item \textbf{Shaper population-time scans (\code{PyMESS\_t2scan}):} 2D-IR waiting-time ($t_2$) scans acquired at a fixed or zero coherence time ($t_1 = 0$) are supported whether raw interferograms are stored under \code{/data/interferograms\_raw} or pre-demodulated state matrices are stored under \code{/data/slow\_modulation}.
+\end{itemize}
 
 \subsection{Background correction}
 The pre-time-zero background is estimated by averaging the signal over a delay
@@ -542,4 +550,3 @@ Accessed via \textbf{Pre-Processing $\to$ Time Derivative of Spectra\ldots} (\co
   \item \textbf{Time-domain interpolation:} Optionally resamples the signal onto a uniform or denser temporal grid ($N_{\text{interp}}$ points) before differentiation.
   \item \textbf{Pre-smoothing:} Supports Savitzky--Golay polynomial filtering or moving-average smoothing along the delay dimension, with a live interactive preview comparing raw and differentiated kinetic traces at selected probe wavelengths.
 \end{enumerate}
-

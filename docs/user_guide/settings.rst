@@ -164,7 +164,7 @@ Delay-axis scaling and the appearance of kinetic / transient-spectra traces.
      - ``bool``
      - ``True``
    * - ``load_single_scans``
-     - Load single scans
+     - Load single scans (1D & 2D)
      - ``bool``
      - ``False``
    * - ``chirp_boundary_handling``

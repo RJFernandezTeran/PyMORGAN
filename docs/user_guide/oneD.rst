@@ -130,7 +130,7 @@ listed above. Loaders are registered under one or more data-type names and resol
      - Helios TA files (``.csv``) with multi-scan discovery and interpolation
    * - ``PyMESS_PP``
      - PyMESS HDF5
-     - Broadband pump–probe HDF5 datasets (``.h5``)
+     - Broadband pump–probe HDF5 datasets (``.h5``), including slow-modulation states and multi-signal fast modulation
    * - ``PyMESS_Aniso``
      - PyMESS HDF5
      - Slow-modulation polarisation anisotropy HDF5 datasets (``.h5``)
@@ -168,6 +168,32 @@ and each subsequent row begins with a delay value followed by the signal at ever
 coordinate. PDAT files store averaged data already in :math:`\text{mOD}`, so no rescaling is
 applied on read. Per-point standard deviations are optionally stored in a sibling ``.pdatn`` file
 with an identical layout.
+
+PyMESS HDF5 Slow-Modulation & Multi-Signal Schemas
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+The PyMESS HDF5 loaders (``PyMESS_PP``, ``PyMESS_Aniso``, and ``PyMESS_t2scan``) automatically
+classify and load both standard single-state pump–probe datasets and multi-state acquisition
+layouts:
+
+- **Slow modulation (**\ ``/data/slow_modulation/state_XX_<name>``\ **):** State datasets are
+  enumerated while ignoring their ``*_individual_scans`` companion datasets. Per-state single
+  scans (``state_XX_<name>_individual_scans``) are loaded into ``Zss_R`` (shape
+  :math:`N_\tau \times N_\lambda \times N_{\text{states}} \times N_{\text{scans}}`) and used to
+  compute a true empirical per-point standard deviation ``Zstdv``. For polarisation anisotropy
+  datasets (``PyMESS_Aniso``), the isotropic Magic Angle
+  (:math:`\Delta A_{\mathrm{iso}} = (\Delta A_\parallel + 2G\,\Delta A_\perp)/3`) and Anisotropy
+  (:math:`r = (\Delta A_\parallel - G\,\Delta A_\perp)/(\Delta A_\parallel + 2G\,\Delta A_\perp)`)
+  channels are appended automatically alongside the parallel and perpendicular states, including
+  their derived per-scan tensors.
+- **Multi-signal fast modulation (**\ ``/data/signals/signal_XX_*``\ **):** Multi-beam or
+  multi-phase chop/modulation schemes stored under ``/data/signals`` (such as pump-only,
+  push-only, and pump+push difference channels) are exposed as named detector/modulation states in
+  ``Units["detectors"]``, with companion ``*_noise`` datasets mapped directly to ``Zstdv``.
+- **Shaper population-time scans (**\ ``PyMESS_t2scan``\ **):** 2D-IR waiting-time (:math:`t_2`)
+  scans acquired at a fixed or zero coherence time (:math:`t_1 = 0`) are supported whether raw
+  interferograms are stored under ``/data/interferograms_raw`` or pre-demodulated state matrices
+  are stored under ``/data/slow_modulation``.
 
 Background Correction
 ---------------------

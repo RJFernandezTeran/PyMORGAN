@@ -2,7 +2,7 @@
 ; Generates a professional, self-contained Windows Installer (.exe)
 
 #define MyAppName "PyMORGAN Suite"
-#define MyAppVersion "1.261023.2"
+#define MyAppVersion "1.261025.2"
 #define MyAppPublisher "Dr. Ricardo J. Fernández-Terán"
 #define MyAppURL "https://github.com/RJFernandezTeran/PyMORGAN"
 #define MyAppExeName "PyMORGAN_Suite.exe"
