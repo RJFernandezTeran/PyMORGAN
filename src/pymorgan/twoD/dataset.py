@@ -60,6 +60,7 @@ class Dataset2D:
         dt1_fs: float | None = None,
         state_names: list[str] | None = None,
         states_data: dict[str, np.ndarray] | None = None,
+        states_signal_ss: dict[str, np.ndarray] | None = None,
         active_state: str | None = None,
         raw_signal_ss: np.ndarray | None = None,
         raw_interferogram_ss: np.ndarray | None = None,
@@ -141,6 +142,11 @@ class Dataset2D:
             if states_data is not None
             else (dict(self.units["states_data"]) if "states_data" in self.units else None)
         )
+        self.states_signal_ss = (
+            dict(states_signal_ss)
+            if states_signal_ss is not None
+            else (dict(self.units["states_signal_ss"]) if "states_signal_ss" in self.units else None)
+        )
         self.active_state = active_state or self.units.get("active_state")
 
         self.Z_C = None  # populated by background_correct()
@@ -153,6 +159,21 @@ class Dataset2D:
             return False
         cube = np.asarray(self.states_data[state_name], dtype=float)
         self.active_state = state_name
+        if self.states_signal_ss and state_name in self.states_signal_ss:
+            ss_cube = np.asarray(self.states_signal_ss[state_name], dtype=float)
+            self.raw_signal_ss = ss_cube.copy()
+            self.nscans = int(ss_cube.shape[-1])
+            valid_active = [
+                i for i in getattr(self, "active_scan_indices", []) if 0 <= i < self.nscans
+            ]
+            if valid_active and len(valid_active) < self.nscans:
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    cube = np.nan_to_num(
+                        np.nanmean(ss_cube[:, :, :, valid_active], axis=-1), nan=0.0
+                    )
+                self.active_scan_indices = valid_active
+            else:
+                self.active_scan_indices = list(range(self.nscans))
         if self.is_frequency_domain or self.datatype in ("FreqDomain", "processed"):
             self.Z_R = cube.copy()
             if self.raw_signal is not None:
@@ -604,6 +625,11 @@ class Dataset2D:
             states_data=(
                 {k: _dup(v) for k, v in self.states_data.items()}
                 if getattr(self, "states_data", None)
+                else None
+            ),
+            states_signal_ss=(
+                {k: _dup(v) for k, v in self.states_signal_ss.items()}
+                if getattr(self, "states_signal_ss", None)
                 else None
             ),
             active_state=getattr(self, "active_state", None),

@@ -1113,6 +1113,48 @@ def _extract_pymess_2d_stack_from_group(
         mat = np.asarray(target["surface_absorptive"][:], dtype=np.float64)
     if (mat is None or np.all(np.isnan(mat))) and "interferograms_raw" in target:
         mat = np.asarray(target["interferograms_raw"][:], dtype=np.float64)
+    if (
+        (mat is None or np.all(np.isnan(mat)))
+        and "slow_modulation" in target
+        and isinstance(target["slow_modulation"], h5py.Group)
+    ):
+        sm_grp = target["slow_modulation"]
+        sm_st_keys = sorted(
+            [
+                k
+                for k in sm_grp.keys()
+                if k.startswith("state_")
+                and not k.endswith("_individual_scans")
+                and isinstance(sm_grp[k], h5py.Dataset)
+            ]
+        )
+        if sm_st_keys:
+            mat = np.asarray(sm_grp[sm_st_keys[0]][:], dtype=np.float64)
+        else:
+            for fallback_k in (
+                "surface_parallel",
+                "delta_A_parallel",
+                "isotropic",
+                "surface_isotropic",
+            ):
+                if fallback_k in sm_grp and isinstance(sm_grp[fallback_k], h5py.Dataset):
+                    mat = np.asarray(sm_grp[fallback_k][:], dtype=np.float64)
+                    break
+    if (
+        (mat is None or np.all(np.isnan(mat)))
+        and "signals" in target
+        and isinstance(target["signals"], h5py.Group)
+    ):
+        sig_grp = target["signals"]
+        sig_keys = sorted(
+            [
+                k
+                for k in sig_grp.keys()
+                if not k.endswith("_noise") and isinstance(sig_grp[k], h5py.Dataset)
+            ]
+        )
+        if sig_keys:
+            mat = np.asarray(sig_grp[sig_keys[0]][:], dtype=np.float64)
     if (mat is None or np.all(np.isnan(mat))) and "surface_absorptive" in target:
         mat = np.asarray(target["surface_absorptive"][:], dtype=np.float64)
     if mat is None:
@@ -1225,6 +1267,7 @@ def read_PyMESS_2D(path: str, progress_tracker=None):
         # Check for slow modulation / polarization states:
         # 1. Datasets in /data/slow_modulation
         states_data: dict[str, np.ndarray] = {}
+        states_raw_ss: dict[str, np.ndarray] = {}
         if "data/slow_modulation" in f and isinstance(f["data/slow_modulation"], h5py.Group):
             sm_grp = f["data/slow_modulation"]
 
@@ -1251,7 +1294,9 @@ def read_PyMESS_2D(path: str, progress_tracker=None):
                 [
                     k
                     for k in sm_grp.keys()
-                    if k.startswith("state_") and isinstance(sm_grp[k], h5py.Dataset)
+                    if k.startswith("state_")
+                    and not k.endswith("_individual_scans")
+                    and isinstance(sm_grp[k], h5py.Dataset)
                 ]
             )
             for idx, k in enumerate(st_ds_keys):
@@ -1262,6 +1307,9 @@ def read_PyMESS_2D(path: str, progress_tracker=None):
                     else:
                         st_label = re.sub(r"^state_\d+_", "", k) or k
                     states_data[st_label] = c
+                    ind_k = f"{k}_individual_scans"
+                    if ind_k in sm_grp and isinstance(sm_grp[ind_k], h5py.Dataset):
+                        states_raw_ss[st_label] = np.asarray(sm_grp[ind_k][:], dtype=np.float64)
 
             # 1b. Legacy PyMESS schema or pre-computed isotropic/anisotropy datasets
             if is_freq_domain:
@@ -1291,6 +1339,7 @@ def read_PyMESS_2D(path: str, progress_tracker=None):
             for k in sorted(sm_grp.keys()):
                 if (
                     k.startswith(prefix)
+                    and not k.endswith("_individual_scans")
                     and k not in dict(pair_map)
                     and k not in st_ds_keys
                     and isinstance(sm_grp[k], h5py.Dataset)
@@ -1330,27 +1379,61 @@ def read_PyMESS_2D(path: str, progress_tracker=None):
                             states_data[st_label] = st_cube
                         break
 
+        # 3. Multi-signal demodulated channels in /data/signals (when slow modulation is not active)
+        if not states_data and "data/signals" in f and isinstance(f["data/signals"], h5py.Group):
+            sig_grp = f["data/signals"]
+            sig_keys = [
+                k
+                for k in sig_grp.keys()
+                if not k.endswith("_noise")
+                and isinstance(sig_grp[k], h5py.Dataset)
+                and "label" in sig_grp[k].attrs
+            ]
+            if len(sig_keys) >= 2:
+                for sk in sig_keys:
+                    arr_s = np.asarray(sig_grp[sk][:], dtype=np.float64)
+                    if arr_s.ndim == 2:
+                        c = arr_s[:, :, np.newaxis]
+                    elif arr_s.ndim == 3 and arr_s.shape[:2] == raw_cube.shape[:2]:
+                        c = arr_s
+                    elif arr_s.ndim == 3 and arr_s.shape[1:] == raw_cube.shape[:2]:
+                        c = np.transpose(arr_s, (1, 2, 0))
+                    else:
+                        continue
+                    if c.shape[:2] == raw_cube.shape[:2]:
+                        s_lbl = _pymess_attr_str(sig_grp[sk].attrs.get("label", sk))
+                        states_data[s_lbl] = c
+
         n_t1_or_w1, n_pix, n_t2 = raw_cube.shape
         n_t2_orig = n_t2
+
+        def _orient_indiv_4d(indiv_arr: np.ndarray) -> np.ndarray | None:
+            if indiv_arr.ndim == 4:
+                # Commonly (N_scans, N_t2, N_t1_or_w1, N_pix) or (N_t1_or_w1, N_pix, N_t2, N_scans)
+                if indiv_arr.shape[1:] == (n_t2_orig, n_t1_or_w1, n_pix):
+                    return np.transpose(indiv_arr, (2, 3, 1, 0))
+                if indiv_arr.shape[:3] == (n_t1_or_w1, n_pix, n_t2_orig):
+                    return indiv_arr
+                if indiv_arr.shape[2:] == (n_t1_or_w1, n_pix) and indiv_arr.shape[0] == n_t2_orig:
+                    return np.transpose(indiv_arr, (2, 3, 0, 1))
+            elif indiv_arr.ndim == 3 and n_t2_orig == 1:
+                if indiv_arr.shape[1:] == (n_t1_or_w1, n_pix):
+                    return np.transpose(indiv_arr, (1, 2, 0))[:, :, np.newaxis, :]
+                if indiv_arr.shape[:2] == (n_t1_or_w1, n_pix):
+                    return indiv_arr[:, :, np.newaxis, :]
+            return None
 
         # Extract optional per-scan 4D cube (N_t1_or_w1, N_pix, N_t2_orig, N_scans)
         raw_signal_ss: np.ndarray | None = None
         raw_interferogram_ss: np.ndarray | None = None
+        states_signal_ss: dict[str, np.ndarray] = {}
         if "data/individual_scans" in f and isinstance(f["data/individual_scans"], h5py.Dataset):
-            indiv_arr = np.asarray(f["data/individual_scans"][:], dtype=np.float64)
-            if indiv_arr.ndim == 4:
-                # Commonly (N_scans, N_t2, N_t1_or_w1, N_pix) or (N_t1_or_w1, N_pix, N_t2, N_scans)
-                if indiv_arr.shape[1:] == (n_t2_orig, n_t1_or_w1, n_pix):
-                    raw_signal_ss = np.transpose(indiv_arr, (2, 3, 1, 0))
-                elif indiv_arr.shape[:3] == (n_t1_or_w1, n_pix, n_t2_orig):
-                    raw_signal_ss = indiv_arr
-                elif indiv_arr.shape[2:] == (n_t1_or_w1, n_pix) and indiv_arr.shape[0] == n_t2_orig:
-                    raw_signal_ss = np.transpose(indiv_arr, (2, 3, 0, 1))
-            elif indiv_arr.ndim == 3 and n_t2_orig == 1:
-                if indiv_arr.shape[1:] == (n_t1_or_w1, n_pix):
-                    raw_signal_ss = np.transpose(indiv_arr, (1, 2, 0))[:, :, np.newaxis, :]
-                elif indiv_arr.shape[:2] == (n_t1_or_w1, n_pix):
-                    raw_signal_ss = indiv_arr[:, :, np.newaxis, :]
+            raw_signal_ss = _orient_indiv_4d(np.asarray(f["data/individual_scans"][:], dtype=np.float64))
+
+        for st_lbl, raw_4d in states_raw_ss.items():
+            oriented_4d = _orient_indiv_4d(raw_4d)
+            if oriented_4d is not None:
+                states_signal_ss[st_lbl] = oriented_4d
 
         if raw_signal_ss is None:
             for grp_name in ("2D_Spectra", "scans"):
@@ -1450,6 +1533,9 @@ def read_PyMESS_2D(path: str, progress_tracker=None):
                 for st_k in list(states_data.keys()):
                     if states_data[st_k].shape[2] == n_t2:
                         states_data[st_k] = states_data[st_k][:, :, valid_t2_mask]
+                for st_k in list(states_signal_ss.keys()):
+                    if states_signal_ss[st_k].shape[2] == n_t2:
+                        states_signal_ss[st_k] = states_signal_ss[st_k][:, :, valid_t2_mask, :]
                 n_t2 = raw_cube.shape[2]
 
         # Sort by ascending t2
@@ -1465,6 +1551,9 @@ def read_PyMESS_2D(path: str, progress_tracker=None):
                 raw_interferogram_ss = raw_interferogram_ss[:, sort_idx, :]
             for st_k in list(states_data.keys()):
                 states_data[st_k] = states_data[st_k][:, :, sort_idx]
+            for st_k in list(states_signal_ss.keys()):
+                if states_signal_ss[st_k].shape[2] == n_t2:
+                    states_signal_ss[st_k] = states_signal_ss[st_k][:, :, sort_idx, :]
 
         # Trim trailing all-NaN rows along axis 0 if scan was stopped early
         valid_rows = ~np.all(np.isnan(raw_cube[:, :, 0]), axis=1)
@@ -1483,6 +1572,18 @@ def read_PyMESS_2D(path: str, progress_tracker=None):
                     raw_interferogram_ss = raw_interferogram_ss[:cut_rows, :, :]
                 for st_k in list(states_data.keys()):
                     states_data[st_k] = states_data[st_k][:cut_rows, :, :]
+                for st_k in list(states_signal_ss.keys()):
+                    states_signal_ss[st_k] = states_signal_ss[st_k][:cut_rows, :, :, :]
+
+        for st_k in list(states_signal_ss.keys()):
+            st_ss = states_signal_ss[st_k]
+            v_mask = ~np.all(np.isnan(st_ss), axis=(0, 1, 2))
+            if np.any(v_mask):
+                st_ss = st_ss[:, :, :, v_mask]
+            if st_ss.shape[-1] <= 1:
+                del states_signal_ss[st_k]
+            else:
+                states_signal_ss[st_k] = st_ss
 
         if raw_signal_ss is not None:
             valid_scan_mask = ~np.all(np.isnan(raw_signal_ss), axis=(0, 1, 2))
@@ -1516,15 +1617,38 @@ def read_PyMESS_2D(path: str, progress_tracker=None):
                     except (ValueError, TypeError):
                         pass
 
-            c_par = states_data[par_key]
-            c_perp = states_data[perp_key]
-            c_ma = (c_par + 2.0 * g_factor * c_perp) / 3.0
-            states_data["Magic Angle"] = c_ma
-            if is_freq_domain:
-                denom = c_par + 2.0 * g_factor * c_perp
-                with np.errstate(divide="ignore", invalid="ignore"):
-                    c_aniso = np.where(np.abs(denom) > 1e-6, (c_par - g_factor * c_perp) / denom, np.nan)
-                states_data["Anisotropy"] = c_aniso
+            if ("par" in par_key.lower() and "perp" in perp_key.lower()) or len(st_keys_list) == 2:
+                c_par = states_data[par_key]
+                c_perp = states_data[perp_key]
+                c_ma = (c_par + 2.0 * g_factor * c_perp) / 3.0
+                if "Magic Angle" not in states_data:
+                    states_data["Magic Angle"] = c_ma
+                if is_freq_domain and "Anisotropy" not in states_data:
+                    denom = c_par + 2.0 * g_factor * c_perp
+                    with np.errstate(divide="ignore", invalid="ignore"):
+                        c_aniso = np.where(np.abs(denom) > 1e-6, (c_par - g_factor * c_perp) / denom, np.nan)
+                    states_data["Anisotropy"] = c_aniso
+
+                if par_key in states_signal_ss and perp_key in states_signal_ss:
+                    ss_par = states_signal_ss[par_key]
+                    ss_perp = states_signal_ss[perp_key]
+                    n_sc_min = min(ss_par.shape[-1], ss_perp.shape[-1])
+                    if n_sc_min > 1 and ss_par.shape[:3] == ss_perp.shape[:3]:
+                        ss_ma = (ss_par[..., :n_sc_min] + 2.0 * g_factor * ss_perp[..., :n_sc_min]) / 3.0
+                        states_signal_ss["Magic Angle"] = ss_ma
+                        if is_freq_domain:
+                            denom_ss = ss_par[..., :n_sc_min] + 2.0 * g_factor * ss_perp[..., :n_sc_min]
+                            with np.errstate(divide="ignore", invalid="ignore"):
+                                ss_aniso = np.where(
+                                    np.abs(denom_ss) > 1e-6,
+                                    (ss_par[..., :n_sc_min] - g_factor * ss_perp[..., :n_sc_min]) / denom_ss,
+                                    np.nan,
+                                )
+                            states_signal_ss["Anisotropy"] = ss_aniso
+
+        if raw_signal_ss is None and states_signal_ss:
+            first_st = list(states_data.keys())[0] if states_data else list(states_signal_ss.keys())[0]
+            raw_signal_ss = states_signal_ss.get(first_st)
 
         w0_cm1 = 0.0
         dt1_fs = 0.0
@@ -1649,6 +1773,8 @@ def read_PyMESS_2D(path: str, progress_tracker=None):
             units["raw_signal_ss"] = raw_signal_ss
             units["raw_interferogram_ss"] = raw_interferogram_ss
             units["nscans"] = int(raw_signal_ss.shape[-1])
+        if states_signal_ss:
+            units["states_signal_ss"] = states_signal_ss
         if states_data:
             units["state_names"] = list(states_data.keys())
             units["states_data"] = states_data

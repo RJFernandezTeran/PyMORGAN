@@ -361,5 +361,33 @@ def test_new_schema_slow_mod_state_00_and_intensity_mode(tmp_path: Path):
     np.testing.assert_allclose(ds_int.Zavg_R[:, :, 0], 2.5)
     np.testing.assert_allclose(ds_int.Units["counts"], 2.5)
 
+    # 3. Multi-signal fast modulation (/data/signals/signal_01_*, signal_02_*)
+    p_sig = tmp_path / "new_schema_multisig.h5"
+    s1 = np.full((n_delays, n_pix), 5.0)
+    s2 = np.full((n_delays, n_pix), -2.0)
+    with h5py.File(p_sig, "w") as f:
+        grp = f.create_group("data")
+        grp.create_dataset("delta_A", data=s1)
+        grp.create_dataset("delays_fs", data=delays_fs)
+        grp.create_dataset("wavelengths", data=wl)
+        sig_grp = f.create_group("data/signals")
+        ds1 = sig_grp.create_dataset("signal_01_Pump_Only", data=s1)
+        ds1.attrs["label"] = "S1: Pump Only"
+        ds2 = sig_grp.create_dataset("signal_02_Push_Only", data=s2)
+        ds2.attrs["label"] = "S2: Push Only"
+        meta = f.create_group("metadata")
+        meta.attrs["measurement_type"] = "pump_probe"
+
+    desc_sig = describe_dataset("PyMESS_PP", p_sig)
+    assert desc_sig is not None
+    assert desc_sig["n_slowmod"] == 2
+    assert desc_sig["state_names"] == ["S1: Pump Only", "S2: Push Only"]
+    ds_sig = load_1D(p_sig, data_type="PyMESS_PP")
+    assert ds_sig.Zavg_R.shape == (n_delays, n_pix, 2)
+    assert ds_sig.Units["detectors"] == ["S1: Pump Only", "S2: Push Only"]
+    np.testing.assert_allclose(ds_sig.Zavg_R[:, :, 0], 5.0)
+    np.testing.assert_allclose(ds_sig.Zavg_R[:, :, 1], -2.0)
+
+
 
 

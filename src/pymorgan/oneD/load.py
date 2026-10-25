@@ -1949,6 +1949,12 @@ def classify_pymess_h5(filepath: str | Path) -> str:
                     ds_ind = f["data/individual_scans"]
                     if isinstance(ds_ind, h5py.Dataset) and ds_ind.size > 0 and not np.all(np.isnan(np.asarray(ds_ind))):
                         has_valid_data = True
+                if not has_valid_data and "data/signals" in f and isinstance(f["data/signals"], h5py.Group):
+                    for k in f["data/signals"].keys():
+                        ds_sig = f["data/signals"][k]
+                        if isinstance(ds_sig, h5py.Dataset) and ds_sig.size > 0 and not np.all(np.isnan(np.asarray(ds_sig))):
+                            has_valid_data = True
+                            break
                 if not has_valid_data and "scans" in f:
                     for k in f["scans"].keys():
                         grp = f["scans"][k]
@@ -2161,12 +2167,14 @@ def _pymess_pp_describe(path: Path) -> dict:
                     [
                         k
                         for k in sm_grp.keys()
-                        if k.startswith("state_") and isinstance(sm_grp[k], h5py.Dataset)
+                        if k.startswith("state_")
+                        and not k.endswith("_individual_scans")
+                        and isinstance(sm_grp[k], h5py.Dataset)
                     ]
                 )
                 if len(st_ds_keys) >= 2:
                     k_slow = max(k_slow, len(st_ds_keys))
-                    if not state_names:
+                    if not state_names or len(state_names) != len(st_ds_keys):
                         state_names = [re.sub(r"^state_\d+_", "", k) or k for k in st_ds_keys]
                 elif (
                     "delta_A_parallel" in sm_grp
@@ -2179,7 +2187,12 @@ def _pymess_pp_describe(path: Path) -> dict:
             for grp_name in ("scans", "data"):
                 if grp_name in f and isinstance(f[grp_name], h5py.Group):
                     st_keys = sorted(
-                        [k for k in f[grp_name].keys() if k.startswith("state_")]
+                        [
+                            k
+                            for k in f[grp_name].keys()
+                            if k.startswith("state_")
+                            and not k.endswith("_individual_scans")
+                        ]
                     )
                     if len(st_keys) >= 2:
                         k_slow = max(k_slow, len(st_keys))
@@ -2188,6 +2201,24 @@ def _pymess_pp_describe(path: Path) -> dict:
                                 _pymess_attr_str(f[grp_name][k].attrs.get("state_name", k))
                                 for k in st_keys
                             ]
+
+            if k_slow <= 1 and "data/signals" in f and isinstance(f["data/signals"], h5py.Group):
+                sig_grp = f["data/signals"]
+                sig_keys = sorted(
+                    [
+                        k
+                        for k in sig_grp.keys()
+                        if k.startswith("signal_")
+                        and not k.endswith("_noise")
+                        and isinstance(sig_grp[k], h5py.Dataset)
+                    ]
+                )
+                if len(sig_keys) >= 2:
+                    k_slow = len(sig_keys)
+                    state_names = [
+                        _pymess_attr_str(sig_grp[k].attrs.get("label", k))
+                        for k in sig_keys
+                    ]
 
             g_val = 1.0
             for g_key in ("g_factor", "G_factor", "gfactor"):
@@ -2270,18 +2301,36 @@ def _read_pymess_shaper_t2_scan(
 
     # 1. Check for /data/slow_modulation state_00_*, state_01_* datasets (new PyMESS schema)
     sm_ds_list: list[tuple[str, np.ndarray]] = []
+    sm_indiv_list: list[list[np.ndarray]] = []
     if "data/slow_modulation" in f and isinstance(f["data/slow_modulation"], h5py.Group):
         sm_grp = f["data/slow_modulation"]
         st_ds_keys = sorted(
             [
                 k
                 for k in sm_grp.keys()
-                if k.startswith("state_") and isinstance(sm_grp[k], h5py.Dataset)
+                if k.startswith("state_")
+                and not k.endswith("_individual_scans")
+                and isinstance(sm_grp[k], h5py.Dataset)
             ]
         )
         if len(st_ds_keys) >= 2:
             for k in st_ds_keys:
-                sm_ds_list.append((k, _squeeze_t2_mat(sm_grp[k][:])))
+                s_mat = _squeeze_t2_mat(sm_grp[k][:])
+                sm_ds_list.append((k, s_mat))
+                s_scans_k: list[np.ndarray] = []
+                ind_k = f"{k}_individual_scans"
+                if (
+                    load_single_scans
+                    and ind_k in sm_grp
+                    and isinstance(sm_grp[ind_k], h5py.Dataset)
+                ):
+                    ind_arr = np.asarray(sm_grp[ind_k][:], dtype=np.float64)
+                    if ind_arr.ndim in (3, 4) and ind_arr.shape[0] >= 1:
+                        for s_i in range(ind_arr.shape[0]):
+                            sc_mat = _squeeze_t2_mat(ind_arr[s_i])
+                            if sc_mat.shape == s_mat.shape and not np.all(np.isnan(sc_mat)):
+                                s_scans_k.append(sc_mat)
+                sm_indiv_list.append(s_scans_k)
 
     # 2. Check for explicit state_0, state_1... subgroups in /scans or /data (legacy layout)
     state_groups: list[tuple[str, h5py.Group]] = []
@@ -2311,9 +2360,25 @@ def _read_pymess_shaper_t2_scan(
                 cut_idx = int(last_valid[-1]) + 1
                 Zavg_R = Zavg_R[:cut_idx, :, :]
                 delays = delays[:cut_idx]
-        Nscans = 1
-        Zss_R = Zavg_R[:, :, :, np.newaxis]
-        Zstdv = np.zeros_like(Zavg_R)
+        n_repeats = min((len(sc) for sc in sm_indiv_list), default=0)
+        if load_single_scans and n_repeats >= 1:
+            Nscans = n_repeats
+            Zss_R = np.zeros(
+                (Zavg_R.shape[0], Zavg_R.shape[1], k_slow, n_repeats), dtype=np.float64
+            )
+            for s_idx in range(k_slow):
+                for r_idx in range(n_repeats):
+                    Zss_R[:, :, s_idx, r_idx] = sm_indiv_list[s_idx][r_idx][: len(delays), :]
+            with np.errstate(all="ignore"):
+                Zstdv = (
+                    np.nan_to_num(np.nanstd(Zss_R, axis=3, ddof=1), nan=0.0)
+                    if n_repeats > 1
+                    else np.zeros_like(Zavg_R)
+                )
+        else:
+            Nscans = 1
+            Zss_R = Zavg_R[:, :, :, np.newaxis]
+            Zstdv = np.zeros_like(Zavg_R)
     elif state_groups and len(state_groups) >= 2:
         is_slow_mod = True
         k_slow = len(state_groups)
@@ -2564,7 +2629,7 @@ def read_PyMESS_PP(
         if subtype == "shaper_t2_scan" or (
             "data/t1_delays_fs" in f
             and "data/delays_fs" not in f
-            and "data/interferograms_raw" in f
+            and ("data/interferograms_raw" in f or "data/slow_modulation" in f)
             and subtype not in ("2d_time_domain", "2d_freq_domain")
         ):
             return _read_pymess_shaper_t2_scan(
@@ -2648,12 +2713,39 @@ def read_PyMESS_PP(
                 [
                     k
                     for k in sm_grp.keys()
-                    if k.startswith("state_") and isinstance(sm_grp[k], h5py.Dataset)
+                    if k.startswith("state_")
+                    and not k.endswith("_individual_scans")
+                    and isinstance(sm_grp[k], h5py.Dataset)
                 ]
             )
             if len(st_ds_keys) >= 2:
                 for k in st_ds_keys:
                     sm_state_datasets.append((k, np.asarray(sm_grp[k][:], dtype=np.float64)))
+
+        # Check /data/signals for multi-signal fast modulation datasets (when slow modulation is not active)
+        sig_state_datasets: list[tuple[str, np.ndarray, np.ndarray | None]] = []
+        if not is_slow_mod and not sm_state_datasets and "data/signals" in f and isinstance(f["data/signals"], h5py.Group):
+            sig_grp = f["data/signals"]
+            sig_keys = sorted(
+                [
+                    k
+                    for k in sig_grp.keys()
+                    if k.startswith("signal_")
+                    and not k.endswith("_noise")
+                    and isinstance(sig_grp[k], h5py.Dataset)
+                ]
+            )
+            if len(sig_keys) >= 2:
+                for sk in sig_keys:
+                    s_lbl = _pymess_attr_str(sig_grp[sk].attrs.get("label", sk))
+                    s_arr = np.asarray(sig_grp[sk][:], dtype=np.float64)
+                    n_key = f"{sk}_noise"
+                    n_arr = (
+                        np.asarray(sig_grp[n_key][:], dtype=np.float64)
+                        if n_key in sig_grp and isinstance(sig_grp[n_key], h5py.Dataset)
+                        else None
+                    )
+                    sig_state_datasets.append((s_lbl, s_arr, n_arr))
 
         if is_slow_mod and k_slow > 1 and indiv_scans is not None and indiv_scans.shape[0] >= k_slow:
             n_total_scans = indiv_scans.shape[0]
@@ -2685,7 +2777,12 @@ def read_PyMESS_PP(
                         Zavg_R[:, :, s_idx] = np.nanmean(sweeps, axis=0) if n_repeats > 1 else sweeps[0]
                 Zss_R[:, :, s_idx, :] = np.transpose(sweeps, (1, 2, 0))
 
-            Zstdv = np.zeros_like(Zavg_R)
+            with np.errstate(all="ignore"):
+                Zstdv = (
+                    np.nan_to_num(np.nanstd(Zss_R, axis=3, ddof=1), nan=0.0)
+                    if n_repeats > 1
+                    else np.zeros_like(Zavg_R)
+                )
             if not load_single_scans:
                 Nscans = 1
                 Zss_R = Zavg_R[:, :, :, np.newaxis]
@@ -2704,6 +2801,27 @@ def read_PyMESS_PP(
                     delays = delays[:cut_idx]
             Zavg_R = np.stack(s_mats, axis=2)
             Zstdv = np.zeros_like(Zavg_R)
+            Nscans = 1
+            Zss_R = Zavg_R[:, :, :, np.newaxis]
+        elif len(sig_state_datasets) >= 2:
+            is_slow_mod = True
+            k_slow = len(sig_state_datasets)
+            state_names = [lbl for lbl, _, _ in sig_state_datasets]
+            s_mats = [mat for _, mat, _ in sig_state_datasets]
+            n_mats = [
+                nmat if nmat is not None else np.zeros_like(mat)
+                for _, mat, nmat in sig_state_datasets
+            ]
+            valid_rows = ~np.all(np.isnan(s_mats[0]), axis=1)
+            if not np.all(valid_rows):
+                last_valid = np.where(valid_rows)[0]
+                if len(last_valid) > 0:
+                    cut_idx = int(last_valid[-1]) + 1
+                    s_mats = [m[:cut_idx, :] for m in s_mats]
+                    n_mats = [nm[:cut_idx, :] for nm in n_mats]
+                    delays = delays[:cut_idx]
+            Zavg_R = np.stack(s_mats, axis=2)
+            Zstdv = np.stack(n_mats, axis=2)
             Nscans = 1
             Zss_R = Zavg_R[:, :, :, np.newaxis]
         elif (

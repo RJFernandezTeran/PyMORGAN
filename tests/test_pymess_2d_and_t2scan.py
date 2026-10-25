@@ -538,3 +538,125 @@ def test_new_schema_fd_2d_3d_no_surface_absorptive(tmp_path: Path):
     ds.process(bkg_sub=False)
     np.testing.assert_allclose(ds.Z[:, :, 0], surf_base * 0.4)
 
+
+def test_latest_pymess_slowmod_2d_and_t2_without_root_interferograms_raw(tmp_path: Path):
+    """Verify latest PyMESS schema where slow-modulated 2D & shaper-t2 omit /data/interferograms_raw
+    and write state_XX_<name> + state_XX_<name>_individual_scans under /data/slow_modulation."""
+    # 1. Slow-modulated Shaper t2 scan (no /data/interferograms_raw, with _individual_scans)
+    p_t2 = tmp_path / "latest_slowmod_t2_scan.h5"
+    n_delays, n_pix, n_scans = 10, 20, 3
+    t2_fs = np.linspace(-200.0, 1500.0, n_delays)
+    omega3 = np.linspace(1920.0, 2080.0, n_pix)
+    par_2d = np.full((n_delays, n_pix), 9.0)
+    perp_2d = np.full((n_delays, n_pix), 3.0)
+    par_indiv = np.stack([par_2d * 0.9, par_2d * 1.0, par_2d * 1.1], axis=0)[:, np.newaxis, :, :]
+    perp_indiv = np.stack([perp_2d * 0.8, perp_2d * 1.0, perp_2d * 1.2], axis=0)[:, np.newaxis, :, :]
+
+    with h5py.File(p_t2, "w") as f:
+        meta = f.create_group("metadata")
+        meta.attrs["measurement_type"] = "2d_spectra"
+        meta.attrs["domain_mode"] = "time_domain"
+        meta.attrs["slow_modulation_enabled"] = True
+        meta.attrs["slow_modulation_num_states"] = 2
+        meta.attrs["slow_modulation_state_names"] = "Parallel,Perpendicular"
+        shaper = meta.create_group("shaper")
+        shaper.attrs["mode"] = "active"
+        shaper.attrs["shaper_mode"] = "time"
+        shaper.attrs["pulse_form"] = "Single Pulse (Compression / Chirp)"
+
+        grp = f.create_group("data")
+        grp.create_dataset("t1_delays_fs", data=t2_fs)
+        grp.create_dataset("t2_delays_fs", data=np.array([0.0]))
+        grp.create_dataset("omega3_axis", data=omega3)
+        grp.create_dataset("pump_interferogram", data=np.ones((1, n_delays)))
+
+        sm = f.create_group("data/slow_modulation")
+        sm.create_dataset("state_00_Parallel", data=par_2d[np.newaxis, :, :])
+        sm.create_dataset("state_00_Parallel_individual_scans", data=par_indiv)
+        sm.create_dataset("state_01_Perpendicular", data=perp_2d[np.newaxis, :, :])
+        sm.create_dataset("state_01_Perpendicular_individual_scans", data=perp_indiv)
+        sm.create_dataset("isotropic", data=((par_2d + 2.0 * perp_2d) / 3.0)[np.newaxis, :, :])
+        sm.create_dataset("anisotropy", data=((par_2d - perp_2d) / (par_2d + 2.0 * perp_2d))[np.newaxis, :, :])
+
+    assert classify_pymess_h5(p_t2) == "shaper_t2_scan"
+    desc_t2 = describe_dataset("PyMESS_PP", p_t2)
+    assert desc_t2 is not None
+    assert desc_t2["n_slowmod"] == 2
+    assert desc_t2["state_names"] == ["Parallel", "Perpendicular"]
+
+    ds_t2 = pm.load_1D(p_t2, data_type="PyMESS_PP")
+    assert ds_t2.Zavg_R.shape == (n_delays, n_pix, 2)
+    assert ds_t2.Zss_R.shape == (n_delays, n_pix, 2, n_scans)
+    assert ds_t2.nscans == n_scans
+    assert np.all(ds_t2.Zstdv > 0)
+    np.testing.assert_allclose(ds_t2.Zavg_R[:, :, 0], 9.0)
+    np.testing.assert_allclose(ds_t2.Zavg_R[:, :, 1], 3.0)
+
+    # 2. Slow-modulated Time-Domain 2D (no /data/interferograms_raw, with _individual_scans)
+    p_2d = tmp_path / "latest_slowmod_td_2d.h5"
+    n_t2, n_t1, n_pix_2d = 2, 16, 12
+    dt1_fs = 30.0
+    t1_fs = np.arange(n_t1, dtype=float) * dt1_fs
+    t2_arr_fs = np.array([200.0, 1000.0])
+    omega3_2d = np.linspace(1950.0, 2050.0, n_pix_2d)
+    w0_cm1 = 1800.0
+    freq_cm1 = 2020.0
+    c_cm_fs = 2.99792458e-5
+    osc = np.cos(2.0 * np.pi * (freq_cm1 - w0_cm1) * c_cm_fs * t1_fs) * np.exp(-t1_fs / 500.0)
+    probe_prof = np.exp(-((omega3_2d - 2020.0) / 15.0) ** 2)
+    td_base = np.outer(osc, probe_prof) * -10.0  # (n_t1, n_pix_2d)
+    cube_base = np.stack([td_base, td_base * 0.5], axis=0)  # (n_t2, n_t1, n_pix_2d)
+
+    par_cube = cube_base * 1.2
+    perp_cube = cube_base * 0.3
+    par_ss_4d = np.stack([par_cube * 0.8, par_cube * 1.0, par_cube * 1.2], axis=0)
+    perp_ss_4d = np.stack([perp_cube * 0.5, perp_cube * 1.0, perp_cube * 1.5], axis=0)
+
+    with h5py.File(p_2d, "w") as f:
+        meta = f.create_group("metadata")
+        meta.attrs["measurement_type"] = "2d_spectra"
+        meta.attrs["domain_mode"] = "time_domain"
+        meta.attrs["slow_modulation_enabled"] = True
+        meta.attrs["slow_modulation_num_states"] = 2
+        meta.attrs["slow_modulation_state_names"] = "Parallel,Perpendicular"
+        shaper = meta.create_group("shaper")
+        shaper.attrs["mode"] = "active"
+        shaper.attrs["shaper_mode"] = "time"
+        shaper.attrs["pulse_form"] = "Double Pulse (2D Scan)"
+        shaper.attrs["rotating_frame_cm1"] = w0_cm1
+        shaper.attrs["step_fs"] = dt1_fs
+
+        grp = f.create_group("data")
+        grp.create_dataset("t1_delays_fs", data=t1_fs)
+        grp.create_dataset("t2_delays_fs", data=t2_arr_fs)
+        grp.create_dataset("omega3_axis", data=omega3_2d)
+        grp.create_dataset("pump_interferogram", data=np.ones((n_t2, n_t1)))
+
+        sm = f.create_group("data/slow_modulation")
+        sm.create_dataset("state_00_Parallel", data=par_cube)
+        sm.create_dataset("state_00_Parallel_individual_scans", data=par_ss_4d)
+        sm.create_dataset("state_01_Perpendicular", data=perp_cube)
+        sm.create_dataset("state_01_Perpendicular_individual_scans", data=perp_ss_4d)
+        sm.create_dataset("isotropic", data=(par_cube + 2.0 * perp_cube) / 3.0)
+        sm.create_dataset("anisotropy", data=(par_cube - perp_cube) / (par_cube + 2.0 * perp_cube))
+
+    assert classify_pymess_h5(p_2d) == "2d_time_domain"
+    ds2d = pm.load_2D(p_2d, data_type="PyMESS_2D")
+    assert ds2d.state_names == ["Parallel", "Perpendicular", "Magic Angle"]
+    assert ds2d.has_single_scans is True
+    assert ds2d.nscans == 3
+    assert ds2d.raw_signal_ss.shape == (n_t1, n_pix_2d, n_t2, 3)
+
+    # Switch state to Perpendicular and verify raw_signal_ss updates to Perpendicular single scans
+    assert ds2d.set_active_state("Perpendicular") is True
+    np.testing.assert_allclose(ds2d.raw_signal_ss[:, :, 0, 0], td_base * 0.3 * 0.5)
+    # Recompute average using only scan 0 and scan 1
+    ds2d.recalc_average([0, 1])
+    np.testing.assert_allclose(ds2d.raw_signal[:, :, 0], td_base * 0.3 * 0.75)
+
+    # Switch to Magic Angle and verify active_scan_indices [0, 1] is preserved
+    assert ds2d.set_active_state("Magic Angle") is True
+    expected_ma_scan01 = ((td_base * 1.2 * 0.9) + 2.0 * (td_base * 0.3 * 0.75)) / 3.0
+    np.testing.assert_allclose(ds2d.raw_signal[:, :, 0], expected_ma_scan01)
+
+
