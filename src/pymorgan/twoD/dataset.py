@@ -61,6 +61,10 @@ class Dataset2D:
         state_names: list[str] | None = None,
         states_data: dict[str, np.ndarray] | None = None,
         active_state: str | None = None,
+        raw_signal_ss: np.ndarray | None = None,
+        raw_interferogram_ss: np.ndarray | None = None,
+        nscans: int | None = None,
+        active_scan_indices: list[int] | None = None,
     ):
         self.Z_R = np.asarray(Z)
         self.pump = np.asarray(pump)
@@ -77,6 +81,28 @@ class Dataset2D:
         self.raw_signal = raw_signal
         self.raw_interferogram = raw_interferogram
         self.raw_t1delays = raw_t1delays
+
+        sig_ss = raw_signal_ss if raw_signal_ss is not None else self.units.get("raw_signal_ss")
+        int_ss = (
+            raw_interferogram_ss
+            if raw_interferogram_ss is not None
+            else self.units.get("raw_interferogram_ss")
+        )
+        self.raw_signal_ss = np.asarray(sig_ss, dtype=float) if sig_ss is not None else None
+        self.raw_interferogram_ss = (
+            np.asarray(int_ss, dtype=float) if int_ss is not None else None
+        )
+        if self.raw_signal_ss is not None and self.raw_signal_ss.ndim == 4:
+            self.nscans = int(self.raw_signal_ss.shape[-1])
+        elif nscans is not None:
+            self.nscans = int(nscans)
+        else:
+            self.nscans = int(self.units.get("nscans", 1) or 1)
+
+        if active_scan_indices is not None:
+            self.active_scan_indices = [int(i) for i in active_scan_indices]
+        else:
+            self.active_scan_indices = list(range(self.nscans))
 
         # Determine datatype: 'shaper', 'interferometer', 'FreqDomain', or 'processed'
         if datatype is not None:
@@ -295,6 +321,33 @@ class Dataset2D:
         """Whether a background correction has been applied."""
         return self._is_corrected
 
+    @property
+    def has_single_scans(self) -> bool:
+        """Whether per-scan 2D data is available for previewing and recombining."""
+        return (
+            self.raw_signal_ss is not None
+            and self.raw_signal_ss.ndim == 4
+            and self.raw_signal_ss.shape[-1] > 1
+        )
+
+    def _format_active_scans_str(self) -> str:
+        """Human-readable summary of total and active 1-based scan numbers."""
+        n = int(getattr(self, "nscans", 1) or 1)
+        active = getattr(self, "active_scan_indices", None)
+        if not active or len(active) == n:
+            return f"{n} (1\u2013{n})" if n > 1 else "1"
+        one_based = sorted(int(i) + 1 for i in active)
+        parts: list[str] = []
+        start = prev = one_based[0]
+        for v in one_based[1:]:
+            if v == prev + 1:
+                prev = v
+            else:
+                parts.append(f"{start}" if start == prev else f"{start}\u2013{prev}")
+                start = prev = v
+        parts.append(f"{start}" if start == prev else f"{start}\u2013{prev}")
+        return f"{len(one_based)} of {n} (scans {', '.join(parts)})"
+
     def map_index(self, t2) -> int:
         """Index of the t2 map nearest ``t2``."""
         return int(np.argmin(np.abs(self.delays - t2)))
@@ -403,7 +456,10 @@ class Dataset2D:
         else:
             line_type = f"<b>Data type:</b> {self.datatype}"
 
-        lines = [line_pump, line_probe, line_t2, line_cal, line_type]
+        lines = [line_pump, line_probe, line_t2]
+        if self.has_single_scans:
+            lines.append(f"<b>Scans:</b> {self._format_active_scans_str()}")
+        lines.extend([line_cal, line_type])
         info_extra = self.units.get("sample_info")
         if info_extra:
             formatted_info = info_extra.replace("\n", "<br>")
@@ -472,7 +528,10 @@ class Dataset2D:
         else:
             line_type = f"Data type: {self.datatype}"
 
-        lines = [line_pump, line_probe, line_t2, line_cal, line_type]
+        lines = [line_pump, line_probe, line_t2]
+        if self.has_single_scans:
+            lines.append(f"Scans: {self._format_active_scans_str()}")
+        lines.extend([line_cal, line_type])
         info_extra = self.units.get("sample_info")
         if info_extra:
             lines.append(f"Sample Info:\n{info_extra}")
@@ -548,6 +607,14 @@ class Dataset2D:
                 else None
             ),
             active_state=getattr(self, "active_state", None),
+            raw_signal_ss=_dup(getattr(self, "raw_signal_ss", None)),
+            raw_interferogram_ss=_dup(getattr(self, "raw_interferogram_ss", None)),
+            nscans=getattr(self, "nscans", 1),
+            active_scan_indices=(
+                list(self.active_scan_indices)
+                if getattr(self, "active_scan_indices", None) is not None
+                else None
+            ),
         )
         new_ds.Z_C = _dup(self.Z_C)
         sub_spec = getattr(self, "subtracted_spectrum", None)
@@ -717,6 +784,161 @@ class Dataset2D:
         self._is_corrected = do_correct and ref is not None
         return self
 
+    def recalc_average(self, scan_indices) -> Dataset2D:
+        """Recompute the averaged 2D dataset across the selected 0-based ``scan_indices``.
+
+        Combines ``raw_signal_ss`` (and ``raw_interferogram_ss`` when available) by
+        arithmetic mean across the selected scans, updates ``raw_signal`` (and ``Z_R``
+        for frequency-domain datasets), records ``active_scan_indices``, and clears
+        ``Z_C``. Call :meth:`process` afterwards for time-domain datasets to update
+        the Fourier-transformed ``Z_R`` cube.
+        """
+        if not self.has_single_scans:
+            raise ValueError(
+                f"Dataset of type {self.data_type!r} has no per-scan data to recombine."
+            )
+        indices = [int(k) for k in scan_indices]
+        if not indices:
+            raise ValueError("No scans selected.")
+        if any(k < 0 or k >= self.nscans for k in indices):
+            raise ValueError(f"Scan indices must be between 0 and {self.nscans - 1}.")
+
+        with np.errstate(divide="ignore", invalid="ignore"):
+            sig_avg = np.nanmean(self.raw_signal_ss[:, :, :, indices], axis=-1)
+            sig_avg = np.nan_to_num(sig_avg, nan=0.0)
+            self.raw_signal = sig_avg
+
+            if (
+                self.raw_interferogram_ss is not None
+                and self.raw_interferogram_ss.ndim == 3
+                and self.raw_interferogram_ss.shape[-1] == self.nscans
+            ):
+                int_avg = np.nanmean(self.raw_interferogram_ss[:, :, indices], axis=-1)
+                int_avg = np.nan_to_num(int_avg, nan=0.0)
+                self.raw_interferogram = int_avg
+
+        if self.is_frequency_domain or self.datatype in ("FreqDomain", "processed"):
+            self.Z_R = self.raw_signal.copy()
+
+        self.active_scan_indices = sorted(set(indices))
+        self.Z_C = None
+        self._is_corrected = False
+        return self
+
+    def compute_scan_maps_at_t2(
+        self,
+        t2: float | None = None,
+        *,
+        t2_idx: int | None = None,
+        bin_size: int = 1,
+        **process_kwargs,
+    ) -> list[tuple[str, list[int], np.ndarray]]:
+        """Compute 2D frequency-domain maps ``(label, scan_indices_0based, Z_map)`` at a single ``t2``.
+
+        For time-domain datasets (``shaper`` / ``interferometer``), only the requested ``t2``
+        slice (plus the scatter-subtraction reference slice if ``bkg_sub=True``) is
+        Fourier-transformed and phased per scan/bin.
+        """
+        if not self.has_single_scans:
+            raise ValueError("Dataset has no individual scans to preview.")
+
+        if t2_idx is None:
+            idx = self.map_index(t2 if t2 is not None else float(self.delays[0]))
+        else:
+            idx = int(np.clip(t2_idx, 0, len(self.delays) - 1))
+
+        bsize = max(1, int(bin_size))
+        n_total = self.nscans
+
+        class _NullTracker:
+            def set_total(self, total):
+                pass
+
+            def update(self, step, label=""):
+                pass
+
+            def update_split(self, step, total, stage):
+                pass
+
+            def close(self):
+                pass
+
+        bkg_sub = bool(process_kwargs.get("bkg_sub", False))
+        bkg_idx = int(process_kwargs.get("bkgIdx", 0) or 0)
+        bkg_idx = int(np.clip(bkg_idx, 0, len(self.delays) - 1))
+
+        results: list[tuple[str, list[int], np.ndarray]] = []
+        for start in range(0, n_total, bsize):
+            indices = list(range(start, min(n_total, start + bsize)))
+            if len(indices) == 1:
+                label = f"Scan {indices[0] + 1}"
+            else:
+                label = f"Scans {indices[0] + 1}\u2013{indices[-1] + 1}"
+
+            if (
+                self.is_frequency_domain
+                or self.datatype in ("FreqDomain", "processed")
+                or self.raw_t1delays is None
+                or self.raw_interferogram is None
+            ):
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    z_map = np.nanmean(self.raw_signal_ss[:, :, idx, indices], axis=-1)
+                    if bkg_sub and bkg_idx != idx:
+                        z_bkg = np.nanmean(self.raw_signal_ss[:, :, bkg_idx, indices], axis=-1)
+                        z_map = z_map - z_bkg
+                results.append((label, indices, np.nan_to_num(z_map, nan=0.0)))
+            else:
+                if bkg_sub and bkg_idx != idx:
+                    slice_indices = [idx, bkg_idx]
+                    local_bkg_idx = 1
+                else:
+                    slice_indices = [idx]
+                    local_bkg_idx = 0
+
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    sub_sig = np.nanmean(
+                        self.raw_signal_ss[:, :, slice_indices, :][:, :, :, indices], axis=-1
+                    )
+                    sub_sig = np.nan_to_num(sub_sig, nan=0.0)
+                    if (
+                        self.raw_interferogram_ss is not None
+                        and self.raw_interferogram_ss.ndim == 3
+                        and self.raw_interferogram_ss.shape[-1] == n_total
+                    ):
+                        sub_int = np.nanmean(
+                            self.raw_interferogram_ss[:, slice_indices, :][:, :, indices], axis=-1
+                        )
+                        sub_int = np.nan_to_num(sub_int, nan=0.0)
+                    else:
+                        sub_int = np.asarray(self.raw_interferogram[:, slice_indices], dtype=float).copy()
+
+                mini_ds = Dataset2D(
+                    sub_sig.copy(),
+                    np.asarray(self.raw_t1delays, dtype=float).copy(),
+                    np.asarray(self.probe, dtype=float).copy(),
+                    np.asarray(self.delays[slice_indices], dtype=float).copy(),
+                    dict(self.units),
+                    freq_units=self.freq_units,
+                    source=self.source,
+                    data_type=self.data_type,
+                    datatype=self.datatype,
+                    raw_signal=sub_sig,
+                    raw_interferogram=sub_int,
+                    raw_t1delays=np.asarray(self.raw_t1delays, dtype=float).copy(),
+                    w0_cm1=self.w0_cm1,
+                    dt1_fs=self.dt1_fs,
+                )
+                kw = dict(process_kwargs)
+                kw["bkg_sub"] = bkg_sub and (bkg_idx != idx)
+                kw["bkgIdx"] = local_bkg_idx
+                kw["autocalibrate_probe"] = False
+                kw["progress_tracker"] = _NullTracker()
+                mini_ds.process(**kw)
+                z_map = np.asarray(mini_ds.Z[:, :, 0], dtype=float)
+                results.append((label, indices, z_map))
+
+        return results
+
     def subtract_spectrum(
         self,
         ref_dataset: Dataset2D,
@@ -851,6 +1073,12 @@ class Dataset2D:
         from . import plot
 
         return plot.plot_surface(self, t2, ax, **kwargs)
+
+    def plot_scan_maps(self, t2, **kwargs):
+        """Plot an array of 2-D contour maps across individual (or binned) scans at ``t2``."""
+        from . import plot
+
+        return plot.plot_scan_map_array(self, t2, **kwargs)
 
     # ----------------------------------------------------------------- #
     #                             Analyse                              #

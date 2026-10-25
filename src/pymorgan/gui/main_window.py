@@ -288,6 +288,8 @@ class MainWindow(
             "twoD_kinetics_btn": "Plot 2D kinetics at selected pump/probe peak coordinates",
             "twoD_surf_btn": "Open 3D surface plot window of 2D spectrum",
             "twoD_slices_btn": "Plot 1D pump/probe slices at cursor position",
+            "twoD_PlotScanContours_btn": "Plot an array of 2D contour maps across individual (or binned) scans at the selected t2 delay",
+            "twoD_RecalcAvg_btn": "Recalculate 2D dataset average across selected scans",
             "twoD_apply_reprocess_btn": "Reprocess phasing and FT data",
             "twoD_plot_sd_kinetics_btn": "Plot spectral diffusion centre line slope (CLS) kinetics",
             "twoD_timedomain_fit_btn": "Fit 2D time-domain signals",
@@ -655,6 +657,26 @@ class MainWindow(
                 "#0369a1",
             ),
             "PP_RecalcAvg_btn": style(
+                "#d1fae5",
+                "#065f46",
+                "#a7f3d0",
+                "#a7f3d0",
+                "#064e3b",
+                "#34d399",
+                "#10b981",
+                "#059669",
+            ),
+            "twoD_PlotScanContours_btn": style(
+                "#e0f2fe",
+                "#075985",
+                "#bae6fd",
+                "#bae6fd",
+                "#0c4a6e",
+                "#38bdf8",
+                "#0284c7",
+                "#0369a1",
+            ),
+            "twoD_RecalcAvg_btn": style(
                 "#d1fae5",
                 "#065f46",
                 "#a7f3d0",
@@ -1397,6 +1419,8 @@ class MainWindow(
         self._connect("twoD_kinetics_btn", self._on_twoD_kinetics_clicked)
         self._connect("twoD_surf_btn", lambda: self._plot_twoD_cut("surface"))
         self._connect("twoD_slices_btn", self._on_twoD_slices_clicked)
+        self._connect("twoD_PlotScanContours_btn", self._twoD_plot_scan_contours)
+        self._connect("twoD_RecalcAvg_btn", self._twoD_recalc_average)
         self._connect("twoD_spectral_diffusion_btn", self._on_twoD_spectral_diffusion_clicked)
         self._connect("twoD_timedomain_fit_btn", self._on_twoD_timedomain_fit_clicked)
         self._connect("twoD_make_gif_btn", self._on_twoD_make_gif_clicked)
@@ -1650,6 +1674,8 @@ class MainWindow(
 
         if bool(getattr(pm.get_settings(), "load_single_scans", False)) != old_load_single:
             self.reload_data()
+            if getattr(self, "twoD_dataset", None) is not None:
+                self.twoD_reload_data()
 
     def _export_figure(self):
         """Save the embedded preview figure to an image/PDF."""
@@ -1964,6 +1990,8 @@ class MainWindow(
             widget = getattr(self, name, None)
             if widget is not None:
                 widget.setVisible(visible)
+        if not visible and hasattr(self, "twoD_singleScan_box") and self.twoD_singleScan_box is not None:
+            self.twoD_singleScan_box.setVisible(False)
 
     def _init_plot_controls(self):
         """Bind the plot-controls panel (``PC_box``, declared in the .ui)."""

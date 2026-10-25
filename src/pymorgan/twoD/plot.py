@@ -381,12 +381,17 @@ def plot_map(
             ctrLvl_L = np.append(np.flipud(np.flipud(ln)[::Nskip]), lp[::Nskip])
 
     quick = bool(s.quick_plots if quick is None else quick)
+    Z_contour_plot = (
+        np.clip(Z_contour, Zmin, Zmax)
+        if (vmin is not None and vmax is not None)
+        else Z_contour
+    )
     if quick:
         # Fast path: a single image, no contour-line overlay (Settings.quick_plots).
         Ctr = ax.pcolormesh(
             X,
             Y,
-            Z_contour,
+            Z_contour_plot,
             vmin=Zmin,
             vmax=Zmax,
             cmap=cm_obj,
@@ -395,13 +400,13 @@ def plot_map(
         )
     elif filled:
         Ctr = ax.contourf(
-            X, Y, Z_contour, vmin=Zmin, vmax=Zmax, levels=ctrLvl_F, cmap=cm_obj, extend="neither"
+            X, Y, Z_contour_plot, vmin=Zmin, vmax=Zmax, levels=ctrLvl_F, cmap=cm_obj, extend="neither"
         )
         if ShowLines:
             ax.contour(
                 X,
                 Y,
-                Z_contour,
+                Z_contour_plot,
                 vmin=Zmin,
                 vmax=Zmax,
                 levels=ctrLvl_L,
@@ -413,7 +418,7 @@ def plot_map(
         Ctr = ax.contour(
             X,
             Y,
-            Z_contour,
+            Z_contour_plot,
             vmin=Zmin,
             vmax=Zmax,
             levels=ctrLvl_L,
@@ -779,3 +784,226 @@ def plot_surface(
         cbar.set_label(r"$\Delta$A", fontweight="bold")
 
     return ax
+
+
+def plot_scan_map_array(
+    data,
+    t2: float,
+    *,
+    fig=None,
+    bin_size: int = 1,
+    include_average: bool = True,
+    excluded_scans: set[int] | None = None,
+    scan_maps: list[tuple[str, list[int], np.ndarray]] | None = None,
+    process_kwargs: dict | None = None,
+    pump_lim=None,
+    probe_lim=None,
+    cut_plot: bool = True,
+    vmin: float | None = None,
+    vmax: float | None = None,
+    cmap_ID=None,
+    ShowLines: bool = True,
+    Nskip: int = 2,
+    Nlevels: int | None = None,
+    white_levels: float | None = None,
+    diagonal: bool = True,
+    aspect="equal",
+    quick: bool | None = None,
+    freq_unit: str | None = None,
+    settings=None,
+):
+    """Plot an array of 2D contour maps across individual (or binned) scans at population time ``t2``.
+
+    Returns ``(fig, axes_list, panel_metadata)`` where ``panel_metadata`` is a list of dicts
+    ``{"ax": ax, "label": label, "indices": indices, "is_average": bool, "vmax": float}``.
+    """
+    import math
+
+    idx = data.map_index(t2)
+    t2_actual = float(data.delays[idx])
+    excluded = set(int(i) for i in (excluded_scans or set()))
+
+    if scan_maps is None:
+        p_kw = dict(process_kwargs or {})
+        scan_maps = data.compute_scan_maps_at_t2(t2_actual, t2_idx=idx, bin_size=bin_size, **p_kw)
+
+    panels: list[dict] = []
+    for label, indices, z_map in scan_maps:
+        panels.append(
+            {
+                "label": label,
+                "indices": list(indices),
+                "z_map": np.asarray(z_map, dtype=float),
+                "is_average": False,
+            }
+        )
+
+    if include_average:
+        active_indices = [i for i in range(data.nscans) if i not in excluded]
+        if not active_indices:
+            active_indices = list( getattr(data, "active_scan_indices", None) or range(data.nscans) )
+
+        # If active_indices matches dataset's current active_scan_indices, use data.Z[:, :, idx];
+        # otherwise compute the average of the included individual scan maps
+        cur_active = sorted(getattr(data, "active_scan_indices", list(range(data.nscans))))
+        if sorted(active_indices) == cur_active and data.Z.shape[:2] == (len(data.pump), len(data.probe)):
+            avg_map = np.asarray(data.Z[:, :, idx], dtype=float).copy()
+        else:
+            weighted_sum = None
+            total_w = 0
+            for _lbl, p_indices, p_zmap in scan_maps:
+                inc_in_p = [i for i in p_indices if i in active_indices]
+                if inc_in_p:
+                    w = len(inc_in_p)
+                    zm = np.asarray(p_zmap, dtype=float)
+                    weighted_sum = zm * w if weighted_sum is None else (weighted_sum + zm * w)
+                    total_w += w
+            if weighted_sum is not None and total_w > 0:
+                avg_map = weighted_sum / float(total_w)
+            else:
+                avg_map = np.asarray(data.Z[:, :, idx], dtype=float).copy()
+
+        one_based = sorted(i + 1 for i in active_indices)
+        parts: list[str] = []
+        if one_based:
+            st = pr = one_based[0]
+            for v in one_based[1:]:
+                if v == pr + 1:
+                    pr = v
+                else:
+                    parts.append(f"{st}" if st == pr else f"{st}\u2013{pr}")
+                    st = pr = v
+            parts.append(f"{st}" if st == pr else f"{st}\u2013{pr}")
+        range_str = " ".join(parts) if parts else f"1\u2013{data.nscans}"
+        panels.append(
+            {
+                "label": f"Average ({range_str})",
+                "indices": active_indices,
+                "z_map": avg_map,
+                "is_average": True,
+            }
+        )
+
+    n_panels = len(panels)
+    if n_panels <= 2:
+        n_cols = max(1, n_panels)
+    elif n_panels <= 4:
+        n_cols = 2
+    elif n_panels <= 9:
+        n_cols = 3
+    else:
+        n_cols = 4
+    n_rows = int(math.ceil(n_panels / n_cols))
+
+    if fig is None:
+        fig_w = max(6.8, 3.8 * n_cols + 0.8)
+        fig_h = max(4.2, 3.6 * n_rows + 0.6)
+        fig, axes_grid = plt.subplots(n_rows, n_cols, figsize=(fig_w, fig_h), squeeze=False)
+    else:
+        fig.clear()
+        axes_grid = fig.subplots(n_rows, n_cols, squeeze=False)
+
+    pump_arr = np.asarray(data.pump, dtype=float)
+    probe_arr = np.asarray(data.probe, dtype=float)
+    if probe_arr.ndim > 1:
+        probe_arr = probe_arr[:, 0]
+
+    if pump_lim is not None and probe_lim is not None and cut_plot:
+        p_lo, p_hi = min(pump_lim), max(pump_lim)
+        pr_lo, pr_hi = min(probe_lim), max(probe_lim)
+        pu_idx = np.nonzero((pump_arr >= p_lo) & (pump_arr <= p_hi))[0]
+        pr_idx = np.nonzero((probe_arr >= pr_lo) & (probe_arr <= pr_hi))[0]
+    else:
+        pu_idx = np.arange(len(pump_arr))
+        pr_idx = np.arange(len(probe_arr))
+
+    panel_vmaxs: list[float] = []
+    for p_info in panels:
+        zm = p_info["z_map"]
+        if len(pu_idx) > 0 and len(pr_idx) > 0 and zm.shape == (len(pump_arr), len(probe_arr)):
+            zm_crop = zm[np.ix_(pu_idx, pr_idx)]
+        else:
+            zm_crop = zm
+        vm = float(np.nanmax(np.abs(zm_crop))) if zm_crop.size else 1.0
+        if not np.isfinite(vm) or vm <= 0:
+            vm = 1.0
+        p_info["vmax"] = vm
+        if not p_info["is_average"]:
+            panel_vmaxs.append(vm)
+
+    if vmin is not None and vmax is not None:
+        shared_vmin, shared_vmax = float(vmin), float(vmax)
+    else:
+        ref_vmax = float(np.median(panel_vmaxs)) if panel_vmaxs else 1.0
+        if not np.isfinite(ref_vmax) or ref_vmax <= 0:
+            ref_vmax = 1.0
+        shared_vmin, shared_vmax = -ref_vmax, ref_vmax
+
+    axes_used = []
+    for idx_p, p_info in enumerate(panels):
+        r, c = divmod(idx_p, n_cols)
+        ax = axes_grid[r][c]
+        axes_used.append(ax)
+
+        # Build a lightweight shallow view of data with this panel's Z map at idx
+        panel_ds = data.copy(deep=False)
+        z_cube = np.zeros(( p_info["z_map"].shape[0], p_info["z_map"].shape[1], 1 ), dtype=float)
+        z_cube[:, :, 0] = p_info["z_map"]
+        panel_ds.Z_R = z_cube
+        panel_ds.Z_C = None
+        panel_ds.delays = np.array([t2_actual], dtype=float)
+
+        is_bottom_row = (idx_p + n_cols) >= n_panels
+        is_left_col = (c == 0)
+        is_last_panel = (idx_p == n_panels - 1)
+
+        plot_map(
+            panel_ds,
+            t2_actual,
+            ax=ax,
+            settings=settings,
+            cmap_ID=cmap_ID,
+            ShowLines=ShowLines,
+            Nskip=Nskip,
+            Nlevels=Nlevels,
+            white_levels=white_levels,
+            diagonal=diagonal,
+            t2_label=False,
+            aspect=aspect,
+            show_xlabel=is_bottom_row,
+            show_ylabel=is_left_col,
+            show_colorbar=is_last_panel,
+            show_colorbar_label=is_last_panel,
+            vmin=shared_vmin,
+            vmax=shared_vmax,
+            cut_plot=cut_plot,
+            pump_lim=pump_lim,
+            probe_lim=probe_lim,
+            quick=quick,
+            freq_unit=freq_unit,
+        )
+
+        all_excl = (not p_info["is_average"]) and all(i in excluded for i in p_info["indices"])
+        if p_info["is_average"]:
+            ax.set_title(p_info["label"], fontsize=10.5, fontweight="bold", color="#1d4ed8")
+            for spine in ax.spines.values():
+                spine.set_edgecolor("#2563eb")
+                spine.set_linewidth(1.6)
+        elif all_excl:
+            ax.set_title(f"{p_info['label']} [Excluded]", fontsize=10.5, fontweight="bold", color="#dc2626")
+            ax.patch.set_alpha(0.55)
+            for spine in ax.spines.values():
+                spine.set_edgecolor("#dc2626")
+                spine.set_linewidth(1.8)
+        else:
+            ax.set_title(p_info["label"], fontsize=10.5, fontweight="bold", color="#0f172a")
+
+        p_info["ax"] = ax
+
+    # Hide unused grid cells
+    for idx_empty in range(n_panels, n_rows * n_cols):
+        r, c = divmod(idx_empty, n_cols)
+        axes_grid[r][c].set_visible(False)
+
+    return fig, axes_used, panels
+

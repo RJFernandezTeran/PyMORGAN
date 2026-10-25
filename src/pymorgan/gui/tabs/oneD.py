@@ -65,11 +65,19 @@ from ..mw_common import (
 class RecalcAverageDialog(QDialog):
     """Dialog to choose scans and averaging mode (noise-weighted vs direct)."""
 
-    def __init__(self, parent=None, n_scans: int = 1, default_weighted: bool = True):
+    def __init__(
+        self,
+        parent=None,
+        n_scans: int = 1,
+        default_weighted: bool = True,
+        *,
+        initial_text: str | None = None,
+        show_weighted: bool = True,
+    ):
         super().__init__(parent)
         self.setWindowTitle("Recalc. Average")
         self.setModal(True)
-        self.resize(360, 150)
+        self.resize(360, 150 if show_weighted else 120)
 
         layout = QVBoxLayout(self)
         layout.setSpacing(10)
@@ -77,7 +85,8 @@ class RecalcAverageDialog(QDialog):
         info_lbl = QLabel(f"Scans to combine (1-{n_scans}):", self)
         layout.addWidget(info_lbl)
 
-        self.scans_edit = QLineEdit(f"1-{n_scans}", self)
+        default_str = initial_text if initial_text is not None else f"1-{n_scans}"
+        self.scans_edit = QLineEdit(default_str, self)
         self.scans_edit.setPlaceholderText(f"e.g. 1-{n_scans}, 1-3 5 {n_scans}")
         self.scans_edit.selectAll()
         layout.addWidget(self.scans_edit)
@@ -87,6 +96,7 @@ class RecalcAverageDialog(QDialog):
         self.noise_weighted_chk.setToolTip(
             "Weight scans by inverse noise variance (uncheck for direct unweighted average)"
         )
+        self.noise_weighted_chk.setVisible(show_weighted)
         layout.addWidget(self.noise_weighted_chk)
 
         button_box = QDialogButtonBox(

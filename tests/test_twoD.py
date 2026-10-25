@@ -557,3 +557,328 @@ def test_slice_dataset1d_inheritance():
     assert len(df) == len(slice_1d.delays) * len(slice_1d.probe)
 
 
+
+
+# --------------------------------------------------------------------------- #
+#              Extended Kubo Physics, VarPro, Multi-Core & GUI Tests          #
+# --------------------------------------------------------------------------- #
+def test_kubo_static_inhomogeneity_and_ffcf_ct():
+    from pymorgan.twoD.kubo_fit import evaluate_ffcf_ct, evaluate_ffcf_gt, simulate_2d_spectrum
+
+    t = np.linspace(0.0, 10.0, 50)
+    decays_static = [{"dw_T2": 1.5, "dw_0": 8.0, "terms": [(10.0, 1.0)]}]
+    c_t = evaluate_ffcf_ct(t, decays_static, ffcf_id=0)
+    # At t = 0: C(0) = dw_0^2 + dw_1^2 = 64 + 100 = 164
+    assert np.isclose(c_t[0], 164.0)
+    # At t -> inf (10 ps >> 1 ps): C(t) approaches dw_0^2 = 64
+    assert np.isclose(c_t[-1], 64.0, atol=0.05)
+
+    g_t = evaluate_ffcf_gt(t, decays_static, ffcf_id=0)
+    assert g_t[0] == 0.0
+    assert np.all(np.diff(g_t) > 0)
+
+    pump = np.linspace(1985.0, 2015.0, 21)
+    probe = np.linspace(1970.0, 2015.0, 25)
+    bands = [{"w1": 2000.0, "w3": 2000.0, "anharm": 15.0, "amp_gsb": 1.0, "amp_esa": 0.8}]
+
+    # Compare t2 = 50 ps with and without static inhomogeneity dw_0
+    Z_with_static = simulate_2d_spectrum(
+        bands,
+        [{"dw_T2": 2.0, "dw_0": 10.0, "terms": [(8.0, 1.0)]}],
+        pump,
+        probe,
+        t2_delay=50.0,
+        tmax=4.0,
+        nt=48,
+        normalize_unit_basis=True,
+    )
+    Z_no_static = simulate_2d_spectrum(
+        bands,
+        [{"dw_T2": 2.0, "dw_0": 0.0, "terms": [(8.0, 1.0)]}],
+        pump,
+        probe,
+        t2_delay=50.0,
+        tmax=4.0,
+        nt=48,
+        normalize_unit_basis=True,
+    )
+    assert not np.allclose(Z_with_static, Z_no_static)
+
+
+def test_kubo_off_diagonal_and_linked_cross_peaks():
+    from pymorgan.twoD.kubo_fit import run_kubo_fit, simulate_2d_spectrum
+
+    pump = np.linspace(1985.0, 2035.0, 16)
+    probe = np.linspace(1975.0, 2035.0, 18)
+
+    true_bands = [
+        {"w1": 2000.0, "w3": 2000.0, "anharm": 14.0, "amp_gsb": 1.0, "amp_esa": 0.8, "link_w3": "diagonal"},
+        {"w1": 2020.0, "w3": 2020.0, "anharm": 14.0, "amp_gsb": 0.9, "amp_esa": 0.7, "link_w3": "diagonal"},
+        {"w1": 2000.0, "w3": 2020.0, "anharm": 14.0, "amp_gsb": 0.35, "amp_esa": 0.30, "link_w1": 0, "link_w3": 1, "link_anharm": 1, "corr_eta": 0.5},
+    ]
+    true_decays = [{"dw_T2": 2.0, "dw_0": 0.0, "terms": [(10.0, 2.0)]}]
+
+    Z_target = simulate_2d_spectrum(
+        true_bands, true_decays, pump, probe, t2_delay=0.5, tmax=3.5, nt=32, normalize_unit_basis=True
+    )
+    data_cube = Z_target[:, :, None]
+
+    # Parameter vector with has_dw0=True: 3 bands * 4 + (dT2, dw0, d1, tau1) = 16 params
+    p0 = [
+        1999.0, 13.5, 0.7, 0.5,   # Band 1
+        2021.0, 14.5, 0.6, 0.5,   # Band 2
+        2000.0, 14.0, 0.2, 0.2,   # Cross-peak 1->2 (linked w1=0, w3=1, anharm=1)
+        2.0, 0.0, 10.0, 2.0,      # FFCF (fixed for fast position/amp link test)
+    ]
+    bounds = [
+        (1995.0, 2005.0), (10.0, 20.0), (0.0, 5.0), (0.0, 5.0),
+        (2015.0, 2025.0), (10.0, 20.0), (0.0, 5.0), (0.0, 5.0),
+        (2000.0, 2000.0), (14.0, 14.0), (0.0, 5.0), (0.0, 5.0),
+        (2.0, 2.0), (0.0, 0.0), (10.0, 10.0), (2.0, 2.0),
+    ]
+    band_links = [
+        {"link_w1": None, "link_w3": "diagonal", "link_anharm": None},
+        {"link_w1": None, "link_w3": "diagonal", "link_anharm": None},
+        {"link_w1": 0, "link_w3": 1, "link_anharm": 1, "corr_eta": 0.5},
+    ]
+
+    res_list = run_kubo_fit(
+        data_cube,
+        pump,
+        probe,
+        [0.5],
+        p0,
+        bounds,
+        tmax=3.5,
+        nt=32,
+        num_bands=3,
+        num_decays=1,
+        has_dw0=True,
+        solver="trf_varpro",
+        band_links=band_links,
+        parallel_mode="threadpool",
+        max_workers=2,
+    )
+    res = res_list[0]
+    assert res["success"]
+    assert res["r_squared"] > 0.99
+    b_fit = res["bands_fitted"]
+    assert abs(b_fit[0]["w1"] - 2000.0) < 0.5
+    assert abs(b_fit[1]["w1"] - 2020.0) < 0.5
+    # Verify cross-peak linking
+    assert np.isclose(b_fit[2]["w1"], b_fit[0]["w1"])
+    assert np.isclose(b_fit[2]["w3"], b_fit[1]["w1"])
+    assert np.isclose(b_fit[2]["anharm"], b_fit[1]["anharm"])
+
+
+def test_kubo_trf_varpro_and_robben_sign():
+    from pymorgan.twoD.kubo_fit import run_kubo_fit, simulate_2d_spectrum
+
+    pump = np.linspace(1985.0, 2015.0, 14)
+    probe = np.linspace(1970.0, 2015.0, 16)
+
+    true_bands = [{"w1": 2000.0, "w3": 2000.0, "anharm": 15.0, "amp_gsb": 1.0, "amp_esa": 0.85}]
+    true_decays = [{"dw_T2": 1.5, "dw_0": 0.0, "terms": [(11.0, 2.0)]}]
+
+    Z_target = simulate_2d_spectrum(
+        true_bands, true_decays, pump, probe, t2_delay=0.5, tmax=3.5, nt=32, normalize_unit_basis=True
+    )
+    data_cube = (2.5 * Z_target)[:, :, None]  # Test arbitrary experimental amplitude scaling
+
+    p0 = [1999.0, 14.0, 0.5, 0.5, 1.5, 0.0, 9.5, 1.6]
+    bounds = [
+        (1994.0, 2006.0),
+        (10.0, 22.0),
+        (0.0, 10.0),
+        (0.0, 10.0),
+        (1.5, 1.5),  # fix dT2
+        (0.0, 0.0),  # fix dw_0
+        (4.0, 20.0),
+        (0.5, 6.0),
+    ]
+
+    res_list = run_kubo_fit(
+        data_cube,
+        pump,
+        probe,
+        [0.5],
+        p0,
+        bounds,
+        tmax=3.5,
+        nt=32,
+        num_bands=1,
+        num_decays=1,
+        has_dw0=True,
+        solver="trf_varpro",
+        parallel_mode="threadpool",
+        max_workers=2,
+    )
+    res = res_list[0]
+    assert res["success"]
+    assert res["r_squared"] > 0.995
+    assert abs(res["params"][0] - 2000.0) < 0.5
+    assert abs(res["params"][1] - 15.0) < 0.5
+    assert abs(res["params"][2] - 1.0) < 0.1
+    assert abs(res["params"][3] - 0.85) < 0.1
+    assert abs(res["params"][6] - 11.0) < 1.0
+    assert len(res["sign"]) == len(p0)
+    assert len(res["errors"]) == len(p0)
+    assert len(res["ci95"]) == len(p0)
+    assert np.allclose(res["Z_sim"], data_cube[:, :, 0], atol=0.1)
+
+
+def test_kubo_global_multidelay_and_multicore():
+    from pymorgan.twoD.kubo_fit import (
+        run_kubo_global_fit,
+        simulate_2d_spectrum,
+        simulate_kubo_cube_parallel,
+    )
+
+    pump = np.linspace(1988.0, 2012.0, 12)
+    probe = np.linspace(1972.0, 2012.0, 14)
+    delays = np.array([0.2, 1.0, 3.0])
+
+    decays = [{"dw_T2": 1.8, "dw_0": 2.0, "terms": [(10.0, 1.5)]}]
+    cube = np.zeros((len(pump), len(probe), len(delays)), dtype=float)
+    amp_Factors = [1.0, 0.75, 0.5]
+    for i, f_amp in enumerate(amp_Factors):
+        bands_i = [{"w1": 2000.0, "w3": 2000.0, "anharm": 15.0, "amp_gsb": 1.0 * f_amp, "amp_esa": 0.8 * f_amp}]
+        cube[:, :, i] = simulate_2d_spectrum(
+            bands_i, decays, pump, probe, t2_delay=float(delays[i]), tmax=3.0, nt=32, normalize_unit_basis=True
+        )
+
+    p0 = [1999.2, 14.3, 0.8, 0.6, 1.8, 2.0, 9.0, 1.5]
+    bounds = [
+        (1995.0, 2005.0),
+        (11.0, 20.0),
+        (0.0, 5.0),
+        (0.0, 5.0),
+        (1.8, 1.8),
+        (2.0, 2.0),
+        (5.0, 16.0),
+        (1.5, 1.5),
+    ]
+
+    results = run_kubo_global_fit(
+        cube,
+        pump,
+        probe,
+        delays,
+        p0,
+        bounds,
+        tmax=3.0,
+        nt=32,
+        num_bands=1,
+        num_decays=1,
+        has_dw0=True,
+        parallel_mode="threadpool",
+        max_workers=2,
+    )
+    assert len(results) == 3
+    for r in results:
+        assert r["global_fit"] is True
+        assert abs(r["params"][0] - 2000.0) < 0.6
+        assert abs(r["params"][1] - 15.0) < 0.6
+        assert r["r_squared"] > 0.99
+
+    kubo_details = {float(r["delay"]): {**r, "tmax": 3.0, "nt": 32, "w_rot": 1900.0, "u": 1.0, "fid_data": None} for r in results}
+    sim_cube = simulate_kubo_cube_parallel(
+        delays, kubo_details, pump, probe, pump, probe, cube, [0, 1, 2], parallel_mode="threadpool", max_workers=2
+    )
+    assert sim_cube.shape == cube.shape
+    assert np.max(np.abs(sim_cube - cube)) < 0.08
+
+
+def test_kubo_joint_ftir_fit():
+    from pymorgan.twoD.kubo_fit import run_kubo_fit, simulate_1d_ftir_spectrum, simulate_2d_spectrum
+
+    pump = np.linspace(1985.0, 2015.0, 14)
+    probe = np.linspace(1970.0, 2015.0, 16)
+    bands = [{"w1": 2000.0, "w3": 2000.0, "anharm": 15.0, "amp_gsb": 1.0, "amp_esa": 0.8}]
+    decays = [{"dw_T2": 2.0, "dw_0": 0.0, "terms": [(10.0, 1.5)]}]
+
+    w_ftir = np.linspace(1960.0, 2040.0, 120)
+    y_ftir = simulate_1d_ftir_spectrum(bands, decays, w_ftir, tmax=4.0, nt=64, normalize=True)
+    assert y_ftir.shape == w_ftir.shape
+    assert np.isclose(np.max(y_ftir), 1.0)
+
+    Z_2d = simulate_2d_spectrum(bands, decays, pump, probe, t2_delay=0.5, tmax=3.5, nt=32, normalize_unit_basis=True)
+    fid_data = {"mode": "joint_fit", "spectrum": (w_ftir, y_ftir)}
+
+    p0 = [1999.0, 14.5, 0.8, 0.7, 2.0, 0.0, 9.0, 1.5]
+    bounds = [
+        (1995.0, 2005.0),
+        (11.0, 20.0),
+        (0.0, 5.0),
+        (0.0, 5.0),
+        (2.0, 2.0),
+        (0.0, 0.0),
+        (5.0, 15.0),
+        (1.5, 1.5),
+    ]
+    res = run_kubo_fit(
+        Z_2d[:, :, None],
+        pump,
+        probe,
+        [0.5],
+        p0,
+        bounds,
+        tmax=3.5,
+        nt=32,
+        fid_data=fid_data,
+        num_bands=1,
+        num_decays=1,
+        has_dw0=True,
+        ftir_weight=0.5,
+    )[0]
+    assert res["success"]
+    assert abs(res["params"][0] - 2000.0) < 0.6
+
+
+def test_kubo_dialog_gui_workflow():
+    from PyQt6.QtWidgets import QApplication
+    from pymorgan.gui.kubo_dialog import KuboDialog
+
+    app = QApplication.instance() or QApplication([])
+    ds = _tilted_map()
+    dlg = KuboDialog(None, ds)
+
+    # Verify default 1x native ROI grid resolution
+    assert dlg.grid_factor == 1
+    assert len(dlg.pump_axis) == len(ds.pump)
+    assert len(dlg.probe_axis) == len(ds.probe)
+
+    # Test grid resolution switching (2x) and back to 1x
+    dlg._apply_grid_resolution(2)
+    assert len(dlg.pump_axis) == 2 * len(ds.pump)
+    dlg._apply_grid_resolution(1)
+    assert len(dlg.pump_axis) == len(ds.pump)
+
+    # Test adding/deleting bands and decays
+    assert dlg.num_bands == 1
+    assert dlg.num_decays == 1
+    dlg.add_band(w01=2020.0, dw=15.0, a_gsb=1.0, a_esa=0.8)
+    assert dlg.num_bands == 2
+    dlg.delete_band()
+    assert dlg.num_bands == 1
+
+    dlg.add_decay()
+    assert dlg.num_decays == 2
+    dlg.delete_decay()
+    assert dlg.num_decays == 1
+
+    # Switch 4th panel diagnostic views
+    for view_idx in range(4):
+        dlg.diag_view_cb.setCurrentIndex(view_idx)
+        dlg._update_fourth_panel_only()
+
+    # Run active fit with fast nt=24 and verify dataset & diagnostics table population
+    dlg.ft_nt_spin.setValue(24)
+    dlg.run_active_fit()
+    assert hasattr(ds, "_sd_results") and "Kubo_Fit" in ds._sd_results
+    assert hasattr(ds, "_sd_kubo_details") and 1.0 in ds._sd_kubo_details
+    assert getattr(ds, "_kubo_fit_dataset", None) is not None
+    assert dlg.diag_table.rowCount() >= 8
+
+    dlg.close()
+    assert app is not None

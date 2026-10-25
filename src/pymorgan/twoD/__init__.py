@@ -35,7 +35,7 @@ from .load import (
     save_P2DAT,
     write_P2DAT,
 )
-from .plot import Map2DAxes, plot_map
+from .plot import Map2DAxes, plot_map, plot_scan_map_array
 from .process import background_correct
 
 __all__ = [
@@ -51,6 +51,7 @@ __all__ = [
     "save_P2DAT",
     "background_correct",
     "plot_map",
+    "plot_scan_map_array",
     "Map2DAxes",
     "slice_at",
     "diagonal",

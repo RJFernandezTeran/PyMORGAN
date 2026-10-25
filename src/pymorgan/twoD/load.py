@@ -393,6 +393,7 @@ def read_MESS_2DIR(path: str, progress_tracker=None) -> tuple[Any, Any, Any, Any
     Nstates_to_load = Ndatastates * nslowmod * n_interleave * Nspectra
     prefix = load_dir / folder.name
 
+    orig_Ndatastates = Ndatastates
     if datatype == "Raw":
         total_steps = Nstates_to_load * len(t2delays)
         progress_tracker.set_total(total_steps)
@@ -654,7 +655,149 @@ def read_MESS_2DIR(path: str, progress_tracker=None) -> tuple[Any, Any, Any, Any
     if close_tracker:
         progress_tracker.close()
 
+    raw_signal_ss = None
+    raw_interferogram_ss = None
+    if not preview_mode and n_scans > 1 and tempdir.exists() and tempdir.is_dir():
+        try:
+            temp_dir_files = [
+                f.name for f in tempdir.iterdir() if f.is_file() and "dummies" not in f.name.lower()
+            ]
+            temp_has_du = any("_du" in f.lower() for f in temp_dir_files)
+            temp_has_signal = any("signal" in f.lower() for f in temp_dir_files)
+            temp_prefix = tempdir / folder.name
+            n_t1 = len(pump)
+            n_pr = len(probe)
+            n_t2 = len(t2delays)
+
+            sig_ss = np.full((n_t1, n_pr, n_t2, n_scans), np.nan, dtype=float)
+            int_ss = np.full((n_t1, n_t2, n_scans), np.nan, dtype=float)
+
+            for s_idx in range(n_scans):
+                if temp_has_signal:
+                    n_st_temp = nslowmod * n_interleave * Nspectra * Ndummies
+                    s_sigs = [[None] * n_st_temp for _ in range(n_t2)]
+                    s_ints = [[None] * n_st_temp for _ in range(n_t2)]
+                    col_counter = 0
+                    for q in range(Ndummies):
+                        for p_i in range(n_interleave):
+                            for sp_i in range(Nspectra):
+                                for sm_i in range(nslowmod):
+                                    for m in range(n_t2):
+                                        if temp_has_du:
+                                            end_s = f"_sp{sp_i}_sm{sm_i}_de{m}_in{p_i}_du{q}_{s_idx}.csv"
+                                        else:
+                                            end_s = f"_sp{sp_i}_sm{sm_i}_de{m}_in{p_i}_{s_idx}.csv"
+                                        interf = orig_Ndatastates * load_csv(
+                                            Path(f"{temp_prefix}_interferogram{end_s}")
+                                        )
+                                        sig = orig_Ndatastates * load_csv(
+                                            Path(f"{temp_prefix}_signal{end_s}")
+                                        )
+                                        interf = interf[:, 0] if interf.ndim > 1 else interf.ravel()
+                                        not_nan = np.nonzero(~np.isnan(interf))[0]
+                                        st_i, en_i = not_nan[0], not_nan[-1]
+                                        sig = sig[st_i : en_i + 1, :] if sig.ndim > 1 else sig[st_i : en_i + 1]
+                                        interf = interf[st_i : en_i + 1]
+                                        startcut = max(0, len(interf) - n_t1)
+                                        div_factor = 4.0 if chopper == "Wobbler" else 1.0
+                                        s_sigs[m][col_counter] = (sig[startcut : startcut + n_t1] / div_factor)
+                                        s_ints[m][col_counter] = (interf[startcut : startcut + n_t1] / div_factor)
+                                    col_counter += 1
+                    if slowmod_type == "4PM":
+                        for m in range(n_t2):
+                            s_sigs[m][0] = sum(s_sigs[m][i] for i in range(n_4pm)) / float(n_4pm)
+                            s_ints[m][0] = sum(s_ints[m][i] for i in range(n_4pm)) / float(n_4pm)
+                else:
+                    n_st_temp = orig_Ndatastates * nslowmod * n_interleave * Nspectra
+                    s_sigs = [[None] * n_st_temp for _ in range(n_t2)]
+                    s_ints = [[None] * n_st_temp for _ in range(n_t2)]
+                    col_counter = 0
+                    for p_i in range(n_interleave):
+                        for sp_i in range(Nspectra):
+                            for sm_i in range(nslowmod):
+                                for ds_k in range(orig_Ndatastates):
+                                    for m in range(n_t2):
+                                        if temp_has_du:
+                                            end_s = f"_ds{ds_k}_sp{sp_i}_sm{sm_i}_de{m}_in{p_i}_du0_{s_idx}.csv"
+                                        else:
+                                            end_s = f"_ds{ds_k}_sp{sp_i}_sm{sm_i}_de{m}_in{p_i}_{s_idx}.csv"
+                                        cnt = load_csv_1d(Path(f"{temp_prefix}_count{end_s}"))
+                                        pr = load_csv(Path(f"{temp_prefix}_probe{end_s}"))
+                                        ref = load_csv(Path(f"{temp_prefix}_reference{end_s}"))
+                                        interf = load_csv(Path(f"{temp_prefix}_interferogram{end_s}"))
+                                        interf = interf[:, 0] if interf.ndim > 1 else interf.ravel()
+                                        nz = np.nonzero(cnt)[0]
+                                        st_i, en_i = nz[0], nz[-1]
+                                        cnt = cnt[st_i : en_i + 1]
+                                        pr = pr[st_i : en_i + 1, :] if pr.ndim > 1 else pr[st_i : en_i + 1]
+                                        ref = ref[st_i : en_i + 1, :] if ref.ndim > 1 else ref[st_i : en_i + 1]
+                                        interf = interf[st_i : en_i + 1] / cnt
+                                        pr = pr / (cnt[:, np.newaxis] if pr.ndim > 1 else cnt)
+                                        ref = ref / (cnt[:, np.newaxis] if ref.ndim > 1 else cnt)
+                                        pr = pr / np.mean(pr, axis=0)
+                                        ref = ref / np.mean(ref, axis=0)
+                                        sig = -1000.0 * np.log10(pr / ref)
+                                        startcut = max(0, len(interf) - n_t1)
+                                        s_sigs[m][col_counter] = sig[startcut : startcut + n_t1]
+                                        s_ints[m][col_counter] = interf[startcut : startcut + n_t1]
+                                    col_counter += 1
+                    if n_interleave > 1:
+                        n_red = orig_Ndatastates * nslowmod * Nspectra
+                        for k_i in range(n_red):
+                            for m in range(n_t2):
+                                for p_i in range(1, n_interleave):
+                                    s_sigs[m][k_i] = s_sigs[m][k_i] + s_sigs[m][k_i + p_i * n_red]
+                                    s_ints[m][k_i] = s_ints[m][k_i] + s_ints[m][k_i + p_i * n_red]
+                                s_sigs[m][k_i] /= n_interleave
+                                s_ints[m][k_i] /= n_interleave
+                        s_sigs = [row[:n_red] for row in s_sigs]
+                        s_ints = [row[:n_red] for row in s_ints]
+                    if slowmod_type == "SlowMod OFF":
+                        if chopper == "Chopper ON":
+                            for m in range(n_t2):
+                                s_sigs[m][0] = s_sigs[m][0] - s_sigs[m][1]
+                                s_ints[m][0] = (s_ints[m][0] - s_ints[m][1]) / 2.0
+                        elif chopper == "Wobbler":
+                            sig_div = 2.0 if datatype == "Signal" else 1.0
+                            int_div = 4.0 if datatype == "Signal" else 1.0
+                            for m in range(n_t2):
+                                s_sigs[m][0] = (
+                                    s_sigs[m][0] - s_sigs[m][1] + s_sigs[m][2] - s_sigs[m][3]
+                                ) / sig_div
+                                s_ints[m][0] = (
+                                    s_ints[m][0] - s_ints[m][1] + s_ints[m][2] - s_ints[m][3]
+                                ) / int_div
+                    elif slowmod_type == "4PM":
+                        if chopper == "Chopper ON":
+                            for m in range(n_t2):
+                                s_sigs[m][0] = (
+                                    sum(s_sigs[m][2 * k_i + 1] - s_sigs[m][2 * k_i] for k_i in range(nslowmod))
+                                    / 4.0
+                                )
+                                s_ints[m][0] = (
+                                    sum(s_ints[m][2 * k_i + 1] - s_ints[m][2 * k_i] for k_i in range(nslowmod))
+                                    / 4.0
+                                )
+                        elif chopper == "Chopper OFF":
+                            for m in range(n_t2):
+                                s_sigs[m][0] = sum(s_sigs[m][k_i] for k_i in range(nslowmod)) / 4.0
+                                s_ints[m][0] = sum(s_ints[m][k_i] for k_i in range(nslowmod)) / 4.0
+
+                for m_sorted, m_orig in enumerate(delay_index):
+                    sig_ss[:, :, m_sorted, s_idx] = s_sigs[m_orig][0]
+                    int_ss[:, m_sorted, s_idx] = s_ints[m_orig][0]
+
+            if not np.all(np.isnan(sig_ss)):
+                raw_signal_ss = sig_ss
+                raw_interferogram_ss = int_ss
+        except Exception:
+            logger.debug("Could not load per-scan MESS_2DIR data from %s", tempdir, exc_info=True)
+
     units = _units_2d("ps", "cm-1")
+    if raw_signal_ss is not None:
+        units["raw_signal_ss"] = raw_signal_ss
+        units["raw_interferogram_ss"] = raw_interferogram_ss
+        units["nscans"] = int(raw_signal_ss.shape[-1])
     try:
         from ..oneD.load import _find_mess_sample_info_file, parse_mess_sample_info
 
@@ -1188,6 +1331,88 @@ def read_PyMESS_2D(path: str, progress_tracker=None):
                         break
 
         n_t1_or_w1, n_pix, n_t2 = raw_cube.shape
+        n_t2_orig = n_t2
+
+        # Extract optional per-scan 4D cube (N_t1_or_w1, N_pix, N_t2_orig, N_scans)
+        raw_signal_ss: np.ndarray | None = None
+        raw_interferogram_ss: np.ndarray | None = None
+        if "data/individual_scans" in f and isinstance(f["data/individual_scans"], h5py.Dataset):
+            indiv_arr = np.asarray(f["data/individual_scans"][:], dtype=np.float64)
+            if indiv_arr.ndim == 4:
+                # Commonly (N_scans, N_t2, N_t1_or_w1, N_pix) or (N_t1_or_w1, N_pix, N_t2, N_scans)
+                if indiv_arr.shape[1:] == (n_t2_orig, n_t1_or_w1, n_pix):
+                    raw_signal_ss = np.transpose(indiv_arr, (2, 3, 1, 0))
+                elif indiv_arr.shape[:3] == (n_t1_or_w1, n_pix, n_t2_orig):
+                    raw_signal_ss = indiv_arr
+                elif indiv_arr.shape[2:] == (n_t1_or_w1, n_pix) and indiv_arr.shape[0] == n_t2_orig:
+                    raw_signal_ss = np.transpose(indiv_arr, (2, 3, 0, 1))
+            elif indiv_arr.ndim == 3 and n_t2_orig == 1:
+                if indiv_arr.shape[1:] == (n_t1_or_w1, n_pix):
+                    raw_signal_ss = np.transpose(indiv_arr, (1, 2, 0))[:, :, np.newaxis, :]
+                elif indiv_arr.shape[:2] == (n_t1_or_w1, n_pix):
+                    raw_signal_ss = indiv_arr[:, :, np.newaxis, :]
+
+        if raw_signal_ss is None:
+            for grp_name in ("2D_Spectra", "scans"):
+                if grp_name in f and isinstance(f[grp_name], h5py.Group):
+                    sgrp_parent = f[grp_name]
+                    s_keys = sorted(
+                        [k for k in sgrp_parent.keys() if k.startswith("scan_") and isinstance(sgrp_parent[k], h5py.Group)]
+                    )
+                    if len(s_keys) > 1:
+                        by_scan_t2: dict[tuple[int, int], tuple[np.ndarray, np.ndarray | None]] = {}
+                        scan_id_set: set[int] = set()
+                        t2_id_set: set[int] = set()
+                        for sk in s_keys:
+                            sg = sgrp_parent[sk]
+                            if "scan_idx" not in sg.attrs:
+                                continue
+                            try:
+                                s_id = int(sg.attrs["scan_idx"])
+                                t_id = int(sg.attrs.get("t2_idx", 0))
+                            except (ValueError, TypeError):
+                                continue
+                            mat_s = None
+                            if is_freq_domain and "surface_absorptive" in sg:
+                                mat_s = np.asarray(sg["surface_absorptive"][:], dtype=np.float64)
+                            elif "interferograms_raw" in sg:
+                                mat_s = np.asarray(sg["interferograms_raw"][:], dtype=np.float64)
+                            elif "surface_absorptive" in sg:
+                                mat_s = np.asarray(sg["surface_absorptive"][:], dtype=np.float64)
+                            if mat_s is None or mat_s.shape != (n_t1_or_w1, n_pix):
+                                continue
+                            p_int_s = None
+                            if "pump_interferogram" in sg:
+                                p_int_s = np.asarray(sg["pump_interferogram"][:], dtype=np.float64).ravel()
+                            elif "integrated_channel" in sg:
+                                p_int_s = np.asarray(sg["integrated_channel"][:], dtype=np.float64).ravel()
+                            by_scan_t2[(s_id, t_id)] = (mat_s, p_int_s)
+                            scan_id_set.add(s_id)
+                            t2_id_set.add(t_id)
+                        sorted_s_ids = sorted(scan_id_set)
+                        sorted_t_ids = sorted(t2_id_set)
+                        if len(sorted_s_ids) > 1 and len(sorted_t_ids) == n_t2_orig:
+                            sig_4d = np.full(
+                                (n_t1_or_w1, n_pix, n_t2_orig, len(sorted_s_ids)), np.nan, dtype=np.float64
+                            )
+                            int_3d = np.full(
+                                (n_t1_or_w1, n_t2_orig, len(sorted_s_ids)), np.nan, dtype=np.float64
+                            )
+                            has_int_s = False
+                            for s_pos, s_id in enumerate(sorted_s_ids):
+                                for t_pos, t_id in enumerate(sorted_t_ids):
+                                    entry = by_scan_t2.get((s_id, t_id))
+                                    if entry is not None:
+                                        sig_4d[:, :, t_pos, s_pos] = entry[0]
+                                        if entry[1] is not None and len(entry[1]) == n_t1_or_w1 and not np.all(np.isnan(entry[1])):
+                                            int_3d[:, t_pos, s_pos] = entry[1]
+                                            has_int_s = True
+                                        else:
+                                            int_3d[:, t_pos, s_pos] = np.nanmean(entry[0], axis=1)
+                            raw_signal_ss = sig_4d
+                            if has_int_s:
+                                raw_interferogram_ss = int_3d
+                            break
 
         # Resolve probe axis (omega3)
         probe, cal_kind = _resolve_pymess_omega3_axis(f, p, n_pix)
@@ -1218,6 +1443,10 @@ def read_PyMESS_2D(path: str, progress_tracker=None):
                 t2delays_ps = t2delays_ps[valid_t2_mask]
                 if interf_2d is not None and interf_2d.shape[1] == n_t2:
                     interf_2d = interf_2d[:, valid_t2_mask]
+                if raw_signal_ss is not None and raw_signal_ss.shape[2] == n_t2:
+                    raw_signal_ss = raw_signal_ss[:, :, valid_t2_mask, :]
+                if raw_interferogram_ss is not None and raw_interferogram_ss.shape[1] == n_t2:
+                    raw_interferogram_ss = raw_interferogram_ss[:, valid_t2_mask, :]
                 for st_k in list(states_data.keys()):
                     if states_data[st_k].shape[2] == n_t2:
                         states_data[st_k] = states_data[st_k][:, :, valid_t2_mask]
@@ -1230,6 +1459,10 @@ def read_PyMESS_2D(path: str, progress_tracker=None):
             raw_cube = raw_cube[:, :, sort_idx]
             if interf_2d is not None and interf_2d.shape[1] == n_t2:
                 interf_2d = interf_2d[:, sort_idx]
+            if raw_signal_ss is not None and raw_signal_ss.shape[2] == n_t2:
+                raw_signal_ss = raw_signal_ss[:, :, sort_idx, :]
+            if raw_interferogram_ss is not None and raw_interferogram_ss.shape[1] == n_t2:
+                raw_interferogram_ss = raw_interferogram_ss[:, sort_idx, :]
             for st_k in list(states_data.keys()):
                 states_data[st_k] = states_data[st_k][:, :, sort_idx]
 
@@ -1244,8 +1477,22 @@ def read_PyMESS_2D(path: str, progress_tracker=None):
                 raw_cube = raw_cube[:cut_rows, :, :]
                 if interf_2d is not None:
                     interf_2d = interf_2d[:cut_rows, :]
+                if raw_signal_ss is not None:
+                    raw_signal_ss = raw_signal_ss[:cut_rows, :, :, :]
+                if raw_interferogram_ss is not None:
+                    raw_interferogram_ss = raw_interferogram_ss[:cut_rows, :, :]
                 for st_k in list(states_data.keys()):
                     states_data[st_k] = states_data[st_k][:cut_rows, :, :]
+
+        if raw_signal_ss is not None:
+            valid_scan_mask = ~np.all(np.isnan(raw_signal_ss), axis=(0, 1, 2))
+            if np.any(valid_scan_mask):
+                raw_signal_ss = raw_signal_ss[:, :, :, valid_scan_mask]
+                if raw_interferogram_ss is not None and raw_interferogram_ss.shape[-1] == len(valid_scan_mask):
+                    raw_interferogram_ss = raw_interferogram_ss[:, :, valid_scan_mask]
+            if raw_signal_ss.shape[-1] <= 1:
+                raw_signal_ss = None
+                raw_interferogram_ss = None
 
         # If 2 polarization states exist, compute Magic Angle and Anisotropy cubes
         if len(states_data) >= 2:
@@ -1398,6 +1645,10 @@ def read_PyMESS_2D(path: str, progress_tracker=None):
         units["dt1_fs"] = dt1_fs
         units["pymess_metadata"] = meta_dict
         units["pymess_subtype"] = subtype
+        if raw_signal_ss is not None:
+            units["raw_signal_ss"] = raw_signal_ss
+            units["raw_interferogram_ss"] = raw_interferogram_ss
+            units["nscans"] = int(raw_signal_ss.shape[-1])
         if states_data:
             units["state_names"] = list(states_data.keys())
             units["states_data"] = states_data

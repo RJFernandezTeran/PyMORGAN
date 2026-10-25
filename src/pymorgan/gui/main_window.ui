@@ -2262,6 +2262,64 @@ The magnitude sets the smoothing window width.</string>
                </widget>
               </item>
               <item>
+               <widget class="QGroupBox" name="twoD_singleScan_box">
+                <property name="title">
+                 <string>Explore Individual Scans</string>
+                </property>
+                <layout class="QHBoxLayout" name="twoD_singleScan_layout">
+                 <property name="spacing">
+                  <number>4</number>
+                 </property>
+                 <property name="leftMargin">
+                  <number>4</number>
+                 </property>
+                 <property name="topMargin">
+                  <number>3</number>
+                 </property>
+                 <property name="rightMargin">
+                  <number>4</number>
+                 </property>
+                 <property name="bottomMargin">
+                  <number>3</number>
+                 </property>
+                 <item>
+                  <widget class="QPushButton" name="twoD_PlotScanContours_btn">
+                   <property name="toolTip">
+                    <string>Plot an array of 2D contour maps across individual (or binned) scans at the selected t2 delay</string>
+                   </property>
+                   <property name="text">
+                    <string>Plot Scans</string>
+                   </property>
+                  </widget>
+                 </item>
+                 <item>
+                  <widget class="QLabel" name="twoD_BinScans_lbl">
+                   <property name="text">
+                    <string>Bin:</string>
+                   </property>
+                  </widget>
+                 </item>
+                 <item>
+                  <widget class="QSpinBox" name="twoD_BinScans">
+                   <property name="minimum">
+                    <number>1</number>
+                   </property>
+                  </widget>
+                 </item>
+                 <item>
+                  <widget class="QPushButton" name="twoD_RecalcAvg_btn">
+                   <property name="toolTip">
+                    <string>Choose which scans to include in the averaged 2D dataset</string>
+                   </property>
+                   <property name="text">
+                    <string>Recalc. Avg.</string>
+                   </property>
+                  </widget>
+                 </item>
+                </layout>
+               </widget>
+              </item>
+              <item>
                <layout class="QHBoxLayout" name="twoD_interactive_layout">
                 <item>
                  <widget class="QCheckBox" name="twoD_interactive_chk">

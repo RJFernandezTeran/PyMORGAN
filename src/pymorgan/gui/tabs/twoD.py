@@ -201,11 +201,29 @@ class TwoDTabMixin:
             self._twoD_update_other_plot()
 
         self._set_twoD_dataset_widgets_visible(True)
+        self._update_twoD_single_scan_controls()
 
-    def _run_twoD_dataset_process(self, progress_tracker=None):
-        """Run self.twoD_dataset.process(...) using the current GUI control values."""
-        if self.twoD_dataset is None:
-            return
+    def _update_twoD_single_scan_controls(self):
+        """Show/hide and configure the 2D single-scan exploration controls."""
+        self._twoD_excluded_scans = set()
+        has_single = bool(
+            self.twoD_dataset is not None
+            and getattr(self.twoD_dataset, "has_single_scans", False)
+            and getattr(self.twoD_dataset, "nscans", 1) > 1
+        )
+        box_single = getattr(self, "twoD_singleScan_box", None)
+        if box_single is not None:
+            box_single.setVisible(has_single)
+        bin_spin = getattr(self, "twoD_BinScans", None)
+        if bin_spin is not None and has_single:
+            n_scans = int(getattr(self.twoD_dataset, "nscans", 1))
+            bin_spin.blockSignals(True)
+            bin_spin.setRange(1, max(1, n_scans // 2))
+            bin_spin.setValue(1)
+            bin_spin.blockSignals(False)
+
+    def _twoD_collect_process_kwargs(self) -> dict:
+        """Collect current GUI Phasing/FT/preprocess parameters as a dict."""
         apod_cbx = getattr(self, "twoD_apodisation_cbx", None)
         apodise_method = apod_cbx.currentText() if apod_cbx is not None else "0"
 
@@ -231,6 +249,24 @@ class TwoDTabMixin:
         if bkgIdx < 0:
             bkgIdx = 0
 
+        return {
+            "apodise_method": apodise_method,
+            "zeropad_enable": zeropad_enable,
+            "zeropad_factor": zeropad_factor,
+            "zeropad_next2k": zeropad_next2k,
+            "phase_method": phase_method,
+            "phase_points": phase_points,
+            "pumpcorrection": pumpcorrection,
+            "bkg_sub": False,
+            "bkgIdx": bkgIdx,
+        }
+
+    def _run_twoD_dataset_process(self, progress_tracker=None):
+        """Run self.twoD_dataset.process(...) using the current GUI control values."""
+        if self.twoD_dataset is None:
+            return
+        proc_kwargs = self._twoD_collect_process_kwargs()
+
         self._twoD_raw_probe = (
             self.twoD_dataset.probe.copy()
             if hasattr(self.twoD_dataset, "probe") and self.twoD_dataset.probe is not None
@@ -247,15 +283,7 @@ class TwoDTabMixin:
         )
 
         self.twoD_dataset.process(
-            apodise_method=apodise_method,
-            zeropad_enable=zeropad_enable,
-            zeropad_factor=zeropad_factor,
-            zeropad_next2k=zeropad_next2k,
-            phase_method=phase_method,
-            phase_points=phase_points,
-            pumpcorrection=pumpcorrection,
-            bkg_sub=False,
-            bkgIdx=bkgIdx,
+            **proc_kwargs,
             autocalibrate_probe=autocalibrate_probe,
             cal_probe_vector=cal_probe_vec,
             progress_tracker=progress_tracker,
@@ -549,6 +577,271 @@ class TwoDTabMixin:
                 plt.show(block=False)
         except Exception as exc:
             QMessageBox.warning(self, "Plot failed", str(exc))
+
+    def _twoD_binscans_value(self) -> int:
+        """Scan-bin size from the ``twoD_BinScans`` spin box (>= 1)."""
+        w = getattr(self, "twoD_BinScans", None)
+        try:
+            return max(int(w.value()), 1) if w is not None else 1
+        except (ValueError, TypeError):
+            return 1
+
+    @staticmethod
+    def _format_twoD_scan_indices(indices, n_scans: int) -> str:
+        """Format a collection of 0-based scan indices into a 1-based range string (e.g. ``'1-3 5'``)."""
+        one_based = sorted(int(i) + 1 for i in indices if 0 <= int(i) < n_scans)
+        if not one_based:
+            return f"1-{n_scans}"
+        parts: list[str] = []
+        start = prev = one_based[0]
+        for v in one_based[1:]:
+            if v == prev + 1:
+                prev = v
+            else:
+                parts.append(f"{start}" if start == prev else f"{start}-{prev}")
+                start = prev = v
+        parts.append(f"{start}" if start == prev else f"{start}-{prev}")
+        return " ".join(parts)
+
+    @busy_guard("Plotting individual 2D scan maps...")
+    def _twoD_plot_scan_contours(self):
+        """Open a grid of 2D contour maps across individual (or binned) scans at the active t2 delay."""
+        if self.twoD_dataset is None:
+            return
+        if not getattr(self.twoD_dataset, "has_single_scans", False):
+            QMessageBox.information(
+                self,
+                "Per-scan 2D plot",
+                "This 2D dataset has no per-scan data loaded. Enable 'Load single "
+                "scans' in Settings and reload the dataset.",
+            )
+            return
+
+        import matplotlib.pyplot as plt
+
+        pm.apply_style()
+
+        lst_delays = getattr(self, "twoD_t2delay_lst", None)
+        active_idx = lst_delays.currentIndex().row() if lst_delays is not None else 0
+        if active_idx < 0 or active_idx >= len(self.twoD_dataset.delays):
+            active_idx = max(0, len(self.twoD_dataset.delays) - 1)
+        active_delay = float(self.twoD_dataset.delays[active_idx])
+
+        bin_size = self._twoD_binscans_value()
+        proc_kwargs = self._twoD_collect_process_kwargs()
+
+        try:
+            scan_maps = self.twoD_dataset.compute_scan_maps_at_t2(
+                active_delay, t2_idx=active_idx, bin_size=bin_size, **proc_kwargs
+            )
+
+            # Apply scatter reference delay subtraction per scan if checked
+            sub_chk = getattr(self, "twoD_sub_scat_chk", None)
+            sub_delay = getattr(self, "twoD_sub_scat_delay", None)
+            do_correct = sub_chk.isChecked() if sub_chk is not None else False
+            if do_correct and sub_delay is not None:
+                ref_idx = max(0, min(int(sub_delay.value()) - 1, len(self.twoD_dataset.delays) - 1))
+                ref_delay = float(self.twoD_dataset.delays[ref_idx])
+                ref_maps = self.twoD_dataset.compute_scan_maps_at_t2(
+                    ref_delay, t2_idx=ref_idx, bin_size=bin_size, **proc_kwargs
+                )
+                if len(ref_maps) == len(scan_maps):
+                    scan_maps = [
+                        (lbl, idxs, zm - r_zm)
+                        for (lbl, idxs, zm), (_, _, r_zm) in zip(scan_maps, ref_maps, strict=True)
+                    ]
+
+            pc = getattr(self, "twoD_plot_controls", None)
+            kwargs = pc.contour_kwargs() if pc is not None else {}
+            pump_lim = pc.pump_lim() if pc is not None else kwargs.get("pump_lim")
+            probe_lim = pc.probe_lim() if pc is not None else kwargs.get("probe_lim")
+            sq_chk = getattr(self, "twoD_PC_square", None)
+            aspect = "equal" if (sq_chk is None or sq_chk.isChecked()) else "auto"
+
+            if not hasattr(self, "_twoD_excluded_scans") or self._twoD_excluded_scans is None:
+                self._twoD_excluded_scans = set()
+
+            ds_name = (
+                Path(self.twoD_dataset.source).name
+                if getattr(self.twoD_dataset, "source", None)
+                else "2D Dataset"
+            )
+            delay_unit = self.twoD_dataset.units.get("unitsT_ltx", "ps")
+
+            state = {"panels": []}
+
+            def _render(target_fig=None):
+                fig_out, _axes_out, panels_out = pm.twoD.plot_scan_map_array(
+                    self.twoD_dataset,
+                    active_delay,
+                    fig=target_fig,
+                    bin_size=bin_size,
+                    include_average=True,
+                    excluded_scans=self._twoD_excluded_scans,
+                    scan_maps=scan_maps,
+                    pump_lim=pump_lim,
+                    probe_lim=probe_lim,
+                    cut_plot=True,
+                    cmap_ID=kwargs.get("cmap_ID"),
+                    ShowLines=kwargs.get("ShowLines", True),
+                    Nskip=kwargs.get("Nskip", 2),
+                    Nlevels=kwargs.get("Nlevels"),
+                    white_levels=kwargs.get("white_levels"),
+                    aspect=aspect,
+                )
+                state["panels"] = panels_out
+                fig_out.suptitle(
+                    f"{ds_name}  \u2014  Individual Scans at $t_2$ = {active_delay:.3g} {delay_unit} "
+                    f"(click a scan panel to toggle inclusion/exclusion)",
+                    fontsize=11,
+                    fontweight="bold",
+                )
+                fig_out.tight_layout(rect=[0, 0, 1, 0.95])
+                return fig_out
+
+            fig = _render(None)
+            try:
+                fig.canvas.manager.set_window_title(
+                    f"Individual Scans \u2014 {ds_name} (t2 = {active_delay:.3g} {delay_unit})"
+                )
+            except Exception:
+                pass
+
+            def _on_click(event):
+                if event.inaxes is None or event.button != 1:
+                    return
+                # Ignore clicks when zoom/pan tool is active on toolbar
+                toolbar = getattr(fig.canvas, "toolbar", None)
+                if toolbar is not None and getattr(toolbar, "mode", ""):
+                    return
+                for p_info in state["panels"]:
+                    if p_info.get("ax") is event.inaxes and not p_info.get("is_average", False):
+                        p_indices = p_info.get("indices", [])
+                        if not p_indices:
+                            return
+                        all_excl = all(i in self._twoD_excluded_scans for i in p_indices)
+                        if all_excl:
+                            for i in p_indices:
+                                self._twoD_excluded_scans.discard(i)
+                        else:
+                            remaining = [
+                                i
+                                for i in range(self.twoD_dataset.nscans)
+                                if i not in self._twoD_excluded_scans and i not in p_indices
+                            ]
+                            if not remaining:
+                                self.statusBar().showMessage(
+                                    "At least one scan must remain included in the average.", 3000
+                                )
+                                return
+                            for i in p_indices:
+                                self._twoD_excluded_scans.add(i)
+                        _render(fig)
+                        fig.canvas.draw_idle()
+                        inc_indices = [
+                            i
+                            for i in range(self.twoD_dataset.nscans)
+                            if i not in self._twoD_excluded_scans
+                        ]
+                        sel_str = self._format_twoD_scan_indices(
+                            inc_indices, self.twoD_dataset.nscans
+                        )
+                        self.statusBar().showMessage(
+                            f"Selected 2D scans: {sel_str} (click 'Recalc. Avg.' to apply to dataset)",
+                            4000,
+                        )
+                        break
+
+            fig._scan_click_cid = fig.canvas.mpl_connect("button_press_event", _on_click)
+            plt.show(block=False)
+        except Exception as exc:
+            QMessageBox.warning(self, "Plot failed", str(exc))
+
+    @busy_guard("Recalculating 2D scan average...")
+    def _twoD_recalc_average(self):
+        """Recompute the 2D dataset average over a chosen subset of scans."""
+        if self.twoD_dataset is None:
+            return
+        if not getattr(self.twoD_dataset, "has_single_scans", False):
+            QMessageBox.information(
+                self,
+                "Recalc. average",
+                "This 2D dataset has no per-scan data to recombine.",
+            )
+            return
+
+        import inspect
+
+        from pymorgan.oneD.load import parse_scan_selection
+
+        from .oneD import RecalcAverageDialog
+
+        n = int(self.twoD_dataset.nscans)
+        excluded = getattr(self, "_twoD_excluded_scans", None) or set()
+        if excluded:
+            inc_indices = [i for i in range(n) if i not in excluded]
+        else:
+            inc_indices = list(getattr(self.twoD_dataset, "active_scan_indices", None) or range(n))
+        initial_str = self._format_twoD_scan_indices(inc_indices, n)
+
+        if not inspect.isbuiltin(QInputDialog.getText):
+            text, ok = QInputDialog.getText(
+                self,
+                "Recalc. average",
+                f"Scans to combine (1-{n}), e.g. '1-{n}', '1-3 5 {n}':",
+                text=initial_str,
+            )
+            if not ok or not text.strip():
+                return
+        else:
+            dlg = RecalcAverageDialog(
+                self,
+                n_scans=n,
+                initial_text=initial_str,
+                show_weighted=False,
+            )
+            if dlg.exec() != QDialog.DialogCode.Accepted:
+                return
+            text = dlg.scan_text()
+            if not text:
+                return
+
+        try:
+            idx = parse_scan_selection(text, n)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Recalc. average", str(exc))
+            return
+        if not idx:
+            QMessageBox.warning(self, "Recalc. average", "No scans selected.")
+            return
+
+        try:
+            self.twoD_dataset.recalc_average(idx)
+            self._twoD_excluded_scans = {i for i in range(n) if i not in idx}
+            if (
+                self.twoD_dataset.datatype in ("shaper", "interferometer", "FreqDomain")
+                or getattr(self.twoD_dataset, "is_frequency_domain", False)
+            ):
+                self._run_twoD_dataset_process()
+        except Exception as exc:
+            QMessageBox.warning(self, "Recalc. average", str(exc))
+            return
+
+        if self.twoD_plot_controls is not None:
+            lst_delays = getattr(self, "twoD_t2delay_lst", None)
+            active_idx = lst_delays.currentIndex().row() if lst_delays is not None else 0
+            if active_idx < 0 or active_idx >= len(self.twoD_dataset.delays):
+                active_idx = max(0, len(self.twoD_dataset.delays) - 1)
+            self.twoD_plot_controls.set_dataset(self.twoD_dataset, active_idx)
+
+        self._twoD_preview_contour()
+        self._update_twoD_sample_info()
+        if hasattr(self, "_twoD_update_other_plot"):
+            self._twoD_update_other_plot()
+
+        self.statusBar().showMessage(
+            f"Recalculated 2D average over {len(idx)} scan(s): {text}"
+        )
 
     def _twoD_interactive(self) -> bool:
         chk = getattr(self, "twoD_interactive_chk", None)
