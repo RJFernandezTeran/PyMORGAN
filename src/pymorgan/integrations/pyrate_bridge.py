@@ -93,7 +93,7 @@ def get_pyrate_version() -> str | None:
     if not is_pyrate_installed():
         return None
     try:
-        import pyrate_ta
+        pyrate_ta = importlib.import_module("pyrate_ta")
 
         ver = getattr(pyrate_ta, "__version__", None)
         if ver:

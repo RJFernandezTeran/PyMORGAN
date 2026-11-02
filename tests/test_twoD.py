@@ -837,6 +837,7 @@ def test_kubo_joint_ftir_fit():
 
 def test_kubo_dialog_gui_workflow():
     from PyQt6.QtWidgets import QApplication
+
     from pymorgan.gui.kubo_dialog import KuboDialog
 
     app = QApplication.instance() or QApplication([])

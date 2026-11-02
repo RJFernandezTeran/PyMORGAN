@@ -1638,7 +1638,7 @@ def run_kubo_global_fit(
     """
     t_start = time.perf_counter()
     mode, workers = resolve_parallel_config(parallel_mode, max_workers)
-    use_vp = ("varpro" in str(solver).lower()) if use_varpro is None else bool(use_varpro)
+    ("varpro" in str(solver).lower()) if use_varpro is None else bool(use_varpro)
 
     pump_arr = np.asarray(pump_axis, dtype=float)
     probe_arr = np.asarray(probe_axis, dtype=float)

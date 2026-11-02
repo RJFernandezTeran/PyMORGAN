@@ -11,7 +11,6 @@ import numpy as np
 import pytest
 
 import pymorgan as pm
-from pymorgan.twoD.dataset import Dataset2D
 from pymorgan.twoD.plot import plot_scan_map_array
 
 matplotlib.use("Agg")

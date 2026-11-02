@@ -28,7 +28,6 @@ from matplotlib.figure import Figure
 from PyQt6.QtCore import QCoreApplication, Qt
 from PyQt6.QtGui import QColor, QGuiApplication
 from PyQt6.QtWidgets import (
-    QApplication,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -36,7 +35,6 @@ from PyQt6.QtWidgets import (
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
-    QFrame,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -64,7 +62,6 @@ from ..twoD.kubo_fit import (
     run_kubo_fit,
     run_kubo_global_fit,
     simulate_1d_ftir_spectrum,
-    simulate_2d_basis_maps,
     simulate_2d_spectrum,
     simulate_kubo_cube_parallel,
 )
@@ -1450,7 +1447,7 @@ class KuboDialog(QDialog):
         """Synchronize the full flat parameter list into `self.param_table` for compatibility."""
         p0, bounds, names = self._build_flat_params_bounds_names()
         self.param_table.setRowCount(len(p0))
-        for r, (nm, val, (lb, ub)) in enumerate(zip(names, p0, bounds)):
+        for r, (nm, val, (lb, ub)) in enumerate(zip(names, p0, bounds, strict=False)):
             self.param_table.setItem(r, 0, QTableWidgetItem(nm))
             self.param_table.setItem(r, 1, QTableWidgetItem(f"{val:.4f}"))
             self.param_table.setItem(r, 2, QTableWidgetItem(f"{lb:.4f}"))
@@ -2064,7 +2061,9 @@ class KuboDialog(QDialog):
             pass
 
         from mpl_toolkits.axes_grid1 import make_axes_locatable
+
         from pymorgan import helpers as hlp
+
         from ..settings import get_settings
 
         s = get_settings()
@@ -2781,7 +2780,7 @@ class KuboDialog(QDialog):
                     errors = details["errors"]
                     signs = details.get("sign", np.zeros_like(params))
                     names = details["param_names"]
-                    for n, val, err, sg in zip(names, params, errors, signs):
+                    for n, val, err, sg in zip(names, params, errors, signs, strict=False):
                         f.write(f"{n:<28} | {val:<12.5f} | {err:<12.5f} | {sg:<12.2f}\n")
                     f.write("\n")
 
@@ -2819,7 +2818,7 @@ class KuboDialog(QDialog):
 
                 for t2, details in sorted(self.dataset._sd_kubo_details.items()):
                     row_str = f"    {t2:.2f}"
-                    for val, err in zip(details["params"], details["errors"]):
+                    for val, err in zip(details["params"], details["errors"], strict=False):
                         row_str += f" & {val:.4f} & {err:.4f}"
                     row_str += " \\\\\n"
                     f.write(row_str)

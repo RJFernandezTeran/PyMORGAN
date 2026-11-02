@@ -68,3 +68,11 @@ def corrected(dataset):
 @pytest.fixture
 def abs_csv(tmp_path):
     return synthetic.make_spectrum_csv(tmp_path / "abs.csv")
+
+
+@pytest.fixture
+def qapp():
+    """Provide a shared offscreen QApplication instance without requiring pytest-qt."""
+    from PyQt6.QtWidgets import QApplication
+
+    return QApplication.instance() or QApplication([])
