@@ -26,10 +26,12 @@ from .load import (
     get_map_loader,
     is_map_dataset_dir,
     is_map_dataset_file,
+    is_map_dataset_file_status,
     is_map_directory_format,
     map_dataset_glob,
     read_P2DAT,
     read_PyMESS_2D,
+    read_QuickControl_2D,
     register_map_dataset_file_filter,
     register_map_loader,
     save_P2DAT,
@@ -47,6 +49,7 @@ __all__ = [
     "available_map_loaders",
     "read_P2DAT",
     "read_PyMESS_2D",
+    "read_QuickControl_2D",
     "write_P2DAT",
     "save_P2DAT",
     "background_correct",
@@ -64,6 +67,7 @@ __all__ = [
     "map_dataset_glob",
     "is_map_dataset_dir",
     "is_map_dataset_file",
+    "is_map_dataset_file_status",
     "is_map_directory_format",
 ]
 

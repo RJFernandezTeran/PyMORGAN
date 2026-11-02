@@ -50,7 +50,12 @@ class ModernAboutDialog(QDialog):
         manual_pdf_path: str | None = None,
         docs_html_path: str | None = None,
         docs_url: str | None = None,
-        ai_credit: str | None = "Developed with AI assistance from <b>Google Antigravity</b>.",
+        ai_credit: str | None = (
+            "Developed with AI assistance from <b>Google Antigravity</b>. "
+            "All algorithms, calculations, and outputs have been manually reviewed to ensure "
+            "scientific accuracy, and the entire repository is continuously tested and verified."
+        ),
+        trademark_notice: str | None = None,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("ModernAboutDialog")
@@ -73,9 +78,10 @@ class ModernAboutDialog(QDialog):
         self._docs_html_path = docs_html_path
         self._docs_url = docs_url
         self._ai_credit = ai_credit
+        self._trademark_notice = trademark_notice
 
         self.setWindowTitle(title)
-        self.setFixedSize(580, 540)
+        self.setFixedSize(700, 575 if trademark_notice else 540)
         self.setModal(True)
 
         if self._icon_path and os.path.exists(self._icon_path):
@@ -126,7 +132,7 @@ class ModernAboutDialog(QDialog):
                     color: #e2e8f0;
                     border: 1px solid #475569;
                     border-radius: 5px;
-                    padding: 7px 16px;
+                    padding: 7px 12px;
                     font-weight: bold;
                     font-size: 12px;
                 }
@@ -182,7 +188,7 @@ class ModernAboutDialog(QDialog):
                     color: #1e293b;
                     border: 1px solid #cbd5e1;
                     border-radius: 5px;
-                    padding: 7px 16px;
+                    padding: 7px 12px;
                     font-weight: bold;
                     font-size: 12px;
                 }
@@ -300,6 +306,13 @@ class ModernAboutDialog(QDialog):
             </p>
             """
 
+        if self._trademark_notice:
+            body_html += f"""
+            <p style="color: {credit_color}; font-size: 9.5px; margin-top: 6px; margin-bottom: 0px;">
+                {self._trademark_notice}
+            </p>
+            """
+
         lbl_details = QLabel(body_html)
         lbl_details.setObjectName("lblDetails")
         lbl_details.setOpenExternalLinks(True)
@@ -312,7 +325,7 @@ class ModernAboutDialog(QDialog):
         # 3. Action Buttons                                                   #
         # ------------------------------------------------------------------ #
         btn_layout = QHBoxLayout()
-        btn_layout.setSpacing(10)
+        btn_layout.setSpacing(8)
 
         if self._manual_pdf_path:
             btn_manual = QPushButton("Open User Manual (PDF)")

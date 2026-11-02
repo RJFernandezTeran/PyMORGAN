@@ -143,6 +143,9 @@ As in 1D, formats are resolved through a registry (:mod:`pymorgan.twoD.load`). C
    * - ``PyMESS_2D``
      - PyMESS HDF5
      - Unified PyMESS 2D HDF5 datasets (``.h5``, alias ``PyMESS_2DIR``)
+   * - ``QuickControl_2D``
+     - PhaseTech Spectroscopy
+     - QuickControl 2D ASCII datasets (``.info`` + ``.scan`` + ``.wts``), supporting time-domain shaper and frequency-domain maps
 
 - **The P2DAT format:** The first row is ``0, 0, t2^(1), t2^(2), ...`` (the population waiting
   times); each subsequent row is ``pump, probe, S(t2^(1)), ...``. The flat pump/probe ordering is

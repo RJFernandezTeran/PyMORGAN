@@ -128,6 +128,9 @@ listed above. Loaders are registered under one or more data-type names and resol
    * - ``Helios_TA``
      - Ultrafast Systems
      - Helios TA files (``.csv``) with multi-scan discovery and interpolation
+   * - ``QuickControl_PP``
+     - PhaseTech Spectroscopy
+     - QuickControl 1D pump–probe ASCII files (``.info`` + ``.scan`` + ``.spec``) with automatic Magic Angle channel ordering
    * - ``PyMESS_PP``
      - PyMESS HDF5
      - Broadband pump–probe HDF5 datasets (``.h5``), including slow-modulation states and multi-signal fast modulation

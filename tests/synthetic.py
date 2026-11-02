@@ -679,5 +679,316 @@ def make_synthetic_pymess_pp(
     }
 
 
+def _czerny_turner_wavelengths_nm(
+    n_pix: int,
+    cwl_nm: float,
+    grooves_per_mm: float = 75.0,
+    focal_mm: float = 150.0,
+    dev_angle_deg: float = 49.32,
+    pitch_um: float = 40.0,
+    binning: int = 1,
+) -> np.ndarray:
+    """Independent Czerny-Turner wavelength calculation for synthetic fixtures."""
+    d_nm = 1.0e6 / grooves_per_mm
+    gamma = np.deg2rad(0.5 * dev_angle_deg)
+    theta = np.arcsin(cwl_nm / (2.0 * d_nm * np.cos(gamma)))
+    alpha = theta - gamma
+    beta0 = theta + gamma
+    pix = np.arange(n_pix, dtype=float)
+    p_c = 0.5 * float(n_pix - 1)
+    dx_mm = (pitch_um / 1000.0) * float(binning)
+    return d_nm * (np.sin(alpha) + np.sin(beta0 + np.arctan((pix - p_c) * dx_mm / focal_mm)))
+
+
+def _write_qc_scan_file(
+    scan_path: Path,
+    axis0: np.ndarray,
+    signal_od: np.ndarray,
+    trailing_row_od: np.ndarray | None = None,
+) -> None:
+    """Write a synthetic QuickControl ``.scan`` ASCII matrix with trailing zero-axis row."""
+    n_pix = signal_od.shape[1]
+    if trailing_row_od is None:
+        trailing_row_od = np.zeros(n_pix, dtype=float)
+    lines: list[str] = []
+    for i in range(signal_od.shape[0]):
+        vals = "\t".join(f"{v:.8e}" for v in signal_od[i])
+        lines.append(f"{axis0[i]:.6f}\t{vals}")
+    tail_vals = "\t".join(f"{v:.8e}" for v in trailing_row_od)
+    lines.append(f"{0.0:.6f}\t{tail_vals}")
+    scan_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def make_synthetic_quickcontrol_1d(
+    folder: str | Path,
+    prefix: str = "synthetic_run#01",
+    *,
+    n_delays: int = 15,
+    n_pixels: int = 24,
+    n_scans: int = 3,
+    polarised: bool = True,
+    cwl_nm: float = 4800.0,
+    advanced_cal: bool = True,
+    write_scans: bool = True,
+    seed: int = 7,
+) -> dict:
+    """Write a synthetic PhaseTech QuickControl 1D dataset and return ground truth."""
+    folder = Path(folder)
+    folder.mkdir(parents=True, exist_ok=True)
+    rng = np.random.default_rng(seed)
+
+    delays_fs = np.linspace(-500.0, 5000.0, n_delays)
+    wl_nm = _czerny_turner_wavelengths_nm(n_pixels, cwl_nm=cwl_nm)
+    probe_expected = (1.0e7 / wl_nm) if cwl_nm > 1200.0 else wl_nm
+
+    t_ps = delays_fs / 1000.0
+    decay = np.where(t_ps >= 0.0, np.exp(-np.maximum(t_ps, 0.0) / 2.5), 0.0)
+    p_mid = float(np.mean(probe_expected))
+    p_span = max(1.0, 0.15 * float(np.ptp(probe_expected)))
+    prof = -np.exp(-(((probe_expected - p_mid) / p_span) ** 2))
+    base_mOD = 6.0 * np.outer(decay, prof)  # mOD
+
+    info_lines = [
+        "Experiment Type\t1D",
+        "Comment\tSynthetic 1D pump-probe test run",
+        "Date and Time\t2026-01-15 10:00:00",
+        "Pump Type\tMid-IR Pulse Shaper",
+        (
+            "Detection Mode\tParallel, Perpendicular, & Reference"
+            if polarised
+            else "Detection Mode\tProbe & Reference"
+        ),
+        "Delays\t" + ",".join(f"{d:.3f}" for d in delays_fs),
+        "Delay Units\tfs",
+        f"1D Average\t{n_scans}",
+        f"MONO1 Wavelength\t{cwl_nm:.6f}",
+        'MONO1 Grating\t1, "1: 75 g/mm"',
+        f"Detector Pixels\t{n_pixels}x{n_pixels}",
+        "Detector Binning\t1",
+        "Flip Detector Columns?\tFALSE",
+        "QC Version\t4.0.0",
+    ]
+    if advanced_cal:
+        info_lines.extend(
+            [
+                "MONO Calibration Type\tADVANCED",
+                "MONO Focal Length\t150.000000",
+                "MONO Deviation Angle\t49.320000",
+                "MONO Pixel Pitch\t40.000000",
+                "MONO Grating Grooves\t75.000000",
+            ]
+        )
+    else:
+        info_lines.append("MONO Calibration Type\tSIMPLE")
+
+    info_path = folder / f"{prefix}.info"
+    info_path.write_text("\n".join(info_lines) + "\n", encoding="utf-8")
+
+    spec_vals = 1000.0 + 200.0 * np.exp(-(((probe_expected - p_mid) / (2.0 * p_span)) ** 2))
+    (folder / f"{prefix}.spec").write_text(
+        "\n".join(f"{v:.4f}" for v in spec_vals) + "\n", encoding="utf-8"
+    )
+
+    par_scans_mOD = []
+    per_scans_mOD = []
+    if write_scans and n_scans > 0:
+        for s in range(1, n_scans + 1):
+            jitter = rng.normal(0.0, 0.08, size=(n_delays, n_pixels))
+            if polarised:
+                par_mOD = 1.8 * base_mOD + jitter
+                per_mOD = 0.6 * base_mOD - 0.5 * jitter
+                par_scans_mOD.append(par_mOD)
+                per_scans_mOD.append(per_mOD)
+                _write_qc_scan_file(
+                    folder / f"{prefix}_PAR#{s:03d}.scan", delays_fs, par_mOD / 1000.0
+                )
+                _write_qc_scan_file(
+                    folder / f"{prefix}_PER#{s:03d}.scan", delays_fs, per_mOD / 1000.0
+                )
+            else:
+                sig_mOD = base_mOD + jitter
+                par_scans_mOD.append(sig_mOD)
+                _write_qc_scan_file(
+                    folder / f"{prefix}#{s:03d}.scan", delays_fs, sig_mOD / 1000.0
+                )
+
+    avg_par = np.mean(par_scans_mOD, axis=0) if par_scans_mOD else None
+    avg_per = np.mean(per_scans_mOD, axis=0) if per_scans_mOD else None
+    avg_ma = ((avg_par + 2.0 * avg_per) / 3.0) if (avg_par is not None and avg_per is not None) else None
+
+    p_order = np.argsort(probe_expected)
+    probe_out = probe_expected[p_order]
+    spec_out = spec_vals[p_order]
+    if avg_par is not None:
+        avg_par = avg_par[:, p_order]
+    if avg_per is not None:
+        avg_per = avg_per[:, p_order]
+    if avg_ma is not None:
+        avg_ma = avg_ma[:, p_order]
+
+    return {
+        "info_path": info_path,
+        "prefix": prefix,
+        "delays_ps": delays_fs / 1000.0,
+        "probe": probe_out,
+        "avg_par_mOD": avg_par,
+        "avg_per_mOD": avg_per,
+        "avg_ma_mOD": avg_ma,
+        "spec": spec_out,
+    }
+
+
+def make_synthetic_quickcontrol_2d(
+    folder: str | Path,
+    prefix: str = "synthetic_map#02",
+    *,
+    domain: str = "Time",
+    n_t1: int = 41,
+    dt1_fs: float = 25.0,
+    n_pixels: int = 20,
+    t2_fs: tuple[float, ...] = (200.0, 1000.0, 3000.0),
+    n_written_t2: int | None = None,
+    n_scans: int = 2,
+    polarised: bool = True,
+    w0_scanned_cm1: float = 1980.0,
+    w0_fixed_cm1: float = 0.0,
+    peak_cm1: float = 2080.0,
+    cwl_nm: float = 4800.0,
+    write_wts: bool = True,
+    seed: int = 11,
+) -> dict:
+    """Write a synthetic PhaseTech QuickControl 2D dataset and return ground truth."""
+    folder = Path(folder)
+    folder.mkdir(parents=True, exist_ok=True)
+    rng = np.random.default_rng(seed)
+
+    wl_nm = _czerny_turner_wavelengths_nm(n_pixels, cwl_nm=cwl_nm)
+    probe_cm1 = 1.0e7 / wl_nm
+    t2_arr_fs = np.asarray(t2_fs, dtype=float)
+    n_t2_total = len(t2_arr_fs)
+    n_t2_disk = n_t2_total if n_written_t2 is None else min(n_t2_total, int(n_written_t2))
+
+    is_freq = domain.strip().lower().startswith("freq")
+    w0_eff = w0_scanned_cm1 - w0_fixed_cm1
+
+    if is_freq:
+        axis0 = np.linspace(2010.0, 2150.0, n_t1)
+        pump_prof = np.exp(-(((axis0 - peak_cm1) / 12.0) ** 2))
+    else:
+        axis0 = np.arange(n_t1, dtype=float) * dt1_fs
+        c_cm_fs = 2.99792458e-5
+        pump_prof = np.cos(2.0 * np.pi * (peak_cm1 - w0_eff) * c_cm_fs * axis0) * np.exp(
+            -axis0 / 450.0
+        )
+
+    probe_prof = -np.exp(-(((probe_cm1 - peak_cm1) / 14.0) ** 2)) + 0.65 * np.exp(
+        -(((probe_cm1 - (peak_cm1 - 22.0)) / 14.0) ** 2)
+    )
+    base_2d_mOD = 8.0 * np.outer(pump_prof, probe_prof)
+
+    info_lines = [
+        "Experiment Type\t2D",
+        f"Domain\t{'Frequency' if is_freq else 'Time'}",
+        "Comment\tSynthetic 2D test run",
+        "Date and Time\t2026-01-15 11:30:00",
+        "Pump Type\tMid-IR Pulse Shaper",
+        (
+            "Detection Mode\tParallel, Perpendicular, & Reference"
+            if polarised
+            else "Detection Mode\tProbe & Reference"
+        ),
+        f"Step Size (fs)\t{dt1_fs:.6f}",
+        f"Final Delay (fs)\t{(n_t1 - 1) * dt1_fs:.6f}",
+        f"Rotating Frame (Scanned)\t{w0_scanned_cm1:.6f}",
+        f"Rotating Frame (Fixed)\t{w0_fixed_cm1:.6f}",
+        "Frames\t4",
+        "Waiting Time Delays\t" + ",".join(f"{v:.3f}" for v in t2_arr_fs),
+        "Waiting Time Delay Units\tfs",
+        f"2D Average\t{n_scans}",
+        f"MONO1 Wavelength\t{cwl_nm:.6f}",
+        'MONO1 Grating\t1, "1: 75 g/mm"',
+        "MONO Calibration Type\tADVANCED",
+        "MONO Focal Length\t150.000000",
+        "MONO Deviation Angle\t49.320000",
+        "MONO Pixel Pitch\t40.000000",
+        "MONO Grating Grooves\t75.000000",
+        f"Detector Pixels\t{n_pixels}x{n_pixels}",
+        "Detector Binning\t1",
+        "Flip Detector Columns?\tFALSE",
+        "QC Version\t4.0.0",
+    ]
+
+    info_path = folder / f"{prefix}.info"
+    info_path.write_text("\n".join(info_lines) + "\n", encoding="utf-8")
+
+    if write_wts:
+        (folder / f"{prefix}.wts").write_text(
+            "\n".join(f"{v:.3f}" for v in t2_arr_fs) + "\n", encoding="utf-8"
+        )
+
+    par_cube = np.zeros((n_t1, n_pixels, n_t2_disk), dtype=float)
+    per_cube = np.zeros((n_t1, n_pixels, n_t2_disk), dtype=float)
+
+    for m in range(n_t2_disk):
+        decay_m = float(np.exp(-t2_arr_fs[m] / 4000.0))
+        par_list = []
+        per_list = []
+        for s in range(1, n_scans + 1):
+            jit = rng.normal(0.0, 0.04, size=(n_t1, n_pixels))
+            stat_tail = 0.002 * probe_prof * decay_m
+            if polarised:
+                p_mOD = 1.8 * decay_m * base_2d_mOD + jit
+                s_mOD = 0.6 * decay_m * base_2d_mOD - 0.5 * jit
+                par_list.append(p_mOD)
+                per_list.append(s_mOD)
+                _write_qc_scan_file(
+                    folder / f"{prefix}_T{m + 1:02d}_PAR#{s:03d}.scan",
+                    axis0,
+                    p_mOD / 1000.0,
+                    trailing_row_od=stat_tail,
+                )
+                _write_qc_scan_file(
+                    folder / f"{prefix}_T{m + 1:02d}_PER#{s:03d}.scan",
+                    axis0,
+                    s_mOD / 1000.0,
+                    trailing_row_od=stat_tail * 0.5,
+                )
+            else:
+                u_mOD = decay_m * base_2d_mOD + jit
+                par_list.append(u_mOD)
+                _write_qc_scan_file(
+                    folder / f"{prefix}_T{m + 1:02d}#{s:03d}.scan",
+                    axis0,
+                    u_mOD / 1000.0,
+                    trailing_row_od=stat_tail,
+                )
+        par_cube[:, :, m] = np.mean(par_list, axis=0)
+        if polarised:
+            per_cube[:, :, m] = np.mean(per_list, axis=0)
+
+    ma_cube = (par_cube + 2.0 * per_cube) / 3.0 if polarised else par_cube
+    p_order = np.argsort(probe_cm1)
+    probe_out = probe_cm1[p_order]
+    par_cube = par_cube[:, p_order, :]
+    if polarised:
+        per_cube = per_cube[:, p_order, :]
+    ma_cube = ma_cube[:, p_order, :]
+
+    return {
+        "info_path": info_path,
+        "prefix": prefix,
+        "t2_ps": t2_arr_fs[:n_t2_disk] / 1000.0,
+        "probe_cm1": probe_out,
+        "axis0": axis0,
+        "peak_cm1": peak_cm1,
+        "w0_cm1": w0_eff,
+        "dt1_fs": dt1_fs,
+        "par_cube_mOD": par_cube,
+        "per_cube_mOD": per_cube if polarised else None,
+        "ma_cube_mOD": ma_cube,
+    }
+
+
+
 
 

@@ -143,7 +143,7 @@ class TwoDTabMixin:
             if progress is not None:
                 progress.close()
 
-        name = Path(path).name
+        name = Path(path).stem if dt == "QuickControl_2D" else Path(path).name
         dt_type = (
             f"{self.twoD_dataset.datatype} - IN PROGRESS"
             if self.twoD_dataset.in_progress

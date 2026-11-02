@@ -1958,7 +1958,18 @@ class MainWindow(
             manual_pdf_path=str(manual_path) if manual_path.exists() else None,
             docs_html_path=str(sphinx_path) if sphinx_path.exists() else None,
             docs_url="https://rjfernandezteran.github.io/PyMORGAN/",
-            ai_credit="Developed with AI assistance from <b>Google Antigravity</b>.",
+            ai_credit=(
+                "Developed with AI assistance from <b>Google Antigravity</b>. "
+                "All algorithms, calculations, and outputs have been manually reviewed to ensure "
+                "scientific accuracy, and the entire repository is continuously tested and verified."
+            ),
+            trademark_notice=(
+                "Third-party product names (including QuickControl / PhaseTech Spectroscopy, "
+                "HARPIA / Light Conversion, Helios / Ultrafast Systems, and OPUS / Bruker) "
+                "are trademarks or registered trademarks of their respective owners. PyMORGAN "
+                "is an independent open-source project and is not affiliated with or endorsed "
+                "by these vendors."
+            ),
         )
         dlg.exec()
 

@@ -275,7 +275,7 @@ def plot_map(
         pump_indices = np.nonzero((pump >= p_min_v) & (pump <= p_max_v))[0]
         probe_indices = np.nonzero((probe >= pr_min_v) & (probe <= pr_max_v))[0]
 
-        if len(pump_indices) > 0 and len(probe_indices) > 0:
+        if len(pump_indices) >= 2 and len(probe_indices) >= 2:
             pump = pump[pump_indices]
             probe = probe[probe_indices]
             Zmap = Zmap[np.ix_(pump_indices, probe_indices)]

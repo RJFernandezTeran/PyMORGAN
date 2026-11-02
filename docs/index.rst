@@ -39,8 +39,8 @@ dimensionality:
       :link: user_guide/oneD
       :link-type: doc
 
-      Load 12+ instrument formats (including PyMESS ``.h5`` slow-modulation & multi-signal schemas,
-      HARPIA, Helios, TRIR), correct background, solvent, shockwaves & Cauchy chirp dispersion,
+      Load 13+ instrument formats (including PyMESS ``.h5`` slow-modulation & multi-signal schemas,
+      HARPIA, Helios, QuickControl, TRIR), correct background, solvent, shockwaves & Cauchy chirp dispersion,
       stitch wavelength/time windows, compute time derivatives, perform SVD, and calculate
       polarisation anisotropy.
 
@@ -140,3 +140,23 @@ Contents
    api/calibration
    api/steady_state
    api/settings_and_helpers
+
+
+Acknowledgements & Verification
+-------------------------------
+
+Development of PyMORGAN is assisted by **Google Antigravity**. All algorithms, numerical
+calculations, and analysis outputs have been manually reviewed and validated to ensure scientific
+accuracy, and the entire repository is continuously tested and verified against an automated unit
+and regression test suite.
+
+
+Trademarks & Third-Party Notice
+-------------------------------
+
+All third-party product, instrument, and software names mentioned in PyMORGAN and its documentation
+are trademarks or registered trademarks of their respective owners — including **QuickControl**
+(PhaseTech Spectroscopy, Inc.), **HARPIA** (Light Conversion), **Helios** (Ultrafast Systems, LLC),
+and **OPUS** (Bruker Corporation) — and are used solely for identification and scientific
+data-interoperability purposes. **PyMORGAN** is an independent academic open-source project and is
+not affiliated with, endorsed by, or sponsored by any of these vendors.

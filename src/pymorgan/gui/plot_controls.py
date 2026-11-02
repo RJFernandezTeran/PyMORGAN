@@ -537,7 +537,24 @@ class PlotControlsPanel(QObject):
             if self.restrict_z_chk.isChecked():
                 self._refresh_zref()
 
+        self._refresh_detector_caption()
         self.renderRequested.emit()
+
+    def _refresh_detector_caption(self):
+        """Update detector label and tooltip with named channel metadata if present."""
+        if self.detector_lbl is None or self.detector_spin is None:
+            return
+        ds = self._dataset
+        det_names = ds.units.get("detectors") if (ds is not None and isinstance(getattr(ds, "units", None), dict)) else None
+        if det_names and len(det_names) > 0:
+            idx = max(0, min(self.detector, len(det_names) - 1))
+            active_nm = str(det_names[idx])
+            mapping = ", ".join(f"{i + 1}: {nm}" for i, nm in enumerate(det_names))
+            self.detector_lbl.setText(f"{active_nm}:")
+            self.detector_spin.setToolTip(f"Active state: {active_nm} ({mapping})")
+        else:
+            self.detector_lbl.setText("Detector:")
+            self.detector_spin.setToolTip("Select active detector (1-based)")
 
     def set_dataset(self, dataset):
         """Bind layout controls to a new :class:`pymorgan.oneD.Dataset1D`."""
@@ -563,6 +580,7 @@ class PlotControlsPanel(QObject):
                 self.detector_spin.blockSignals(True)
                 self.detector_spin.setValue(1)
                 self.detector_spin.blockSignals(False)
+            self._refresh_detector_caption()
 
         Z = np.asarray(dataset._detector_slice(self.detector), dtype=float)
         finite = Z[np.isfinite(Z)]

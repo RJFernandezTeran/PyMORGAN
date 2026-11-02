@@ -65,12 +65,17 @@ class AnisotropyDialog(QDialog):
         hdr.setStyleSheet("font-size: 10pt; margin-bottom: 2px;")
         layout.addWidget(hdr)
 
-        # PyMESS dataset badge if detected
+        # PyMESS / QuickControl dataset badge if detected
         is_pymess = (dataset.data_type == "PyMESS_PP") or ("pymess_metadata" in (dataset.units or {}))
+        is_qc = (dataset.data_type == "QuickControl_PP") or ("quickcontrol_info" in (dataset.units or {}))
         if is_pymess:
             pm_badge = QLabel("<b>PyMESS Dataset:</b> Multi-state slow-modulation polarization channels detected.")
             pm_badge.setStyleSheet("color: #3b82f6; font-size: 8.5pt; margin-bottom: 4px;")
             layout.addWidget(pm_badge)
+        elif is_qc:
+            qc_badge = QLabel("<b>PhaseTech QuickControl Dataset:</b> Polarised channels detected.")
+            qc_badge.setStyleSheet("color: #3b82f6; font-size: 8.5pt; margin-bottom: 4px;")
+            layout.addWidget(qc_badge)
 
         # Settings
         settings_layout = QHBoxLayout()

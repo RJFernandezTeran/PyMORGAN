@@ -721,6 +721,8 @@ class Dataset1D:
             return "Dataset probe axis (CSV header)"
         if self.data_type == "PyMESS_PP":
             return "Embedded PyMESS probe axis"
+        if self.data_type == "QuickControl_PP":
+            return "QuickControl monochromator calibration"
         return "Dataset probe calibration"
 
     def print_sample_info(self) -> None:

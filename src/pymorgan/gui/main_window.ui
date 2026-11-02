@@ -351,6 +351,11 @@ QTabWidget#MainTabs &gt; QTabBar::tab:!selected {
                  <string extracomment="UoS_IRpp">U. of Sheffield IR Pump-Probe</string>
                 </property>
                </item>
+               <item>
+                <property name="text">
+                 <string extracomment="QuickControl_PP">PhaseTech QC 1D (.info)</string>
+                </property>
+               </item>
               </widget>
              </item>
              <item row="0" column="1">
@@ -2032,6 +2037,11 @@ The magnitude sets the smoothing window width.</string>
                <item>
                 <property name="text">
                  <string extracomment="RAL_Proc">RAL 2D-IR (Processed)</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string extracomment="QuickControl_2D">PhaseTech QC 2D (.info)</string>
                 </property>
                </item>
               </widget>

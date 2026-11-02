@@ -63,7 +63,7 @@ Table~\ref{tab:fields2d}.
 \subsection{Loading and the loader registry}
 As in 1-D, formats are resolved through a registry
 (\code{pymorgan.twoD.load}). The registered readers are \code{P2DAT} (processed
-maps), \code{MESS\_2DIR}, \code{PyMESS\_2D} (alias \code{PyMESS\_2DIR}), \code{UoS\_2DIR}, \code{RAL\_RAW} (raw
+maps), \code{MESS\_2DIR}, \code{PyMESS\_2D} (alias \code{PyMESS\_2DIR}), \code{QuickControl\_2D}, \code{UoS\_2DIR}, \code{RAL\_RAW} (raw
 interferograms, phased and transformed on load) and \code{RAL\_Proc};
 \code{pm.available\_map\_loaders()} lists what the running installation
 recognises.
@@ -91,6 +91,7 @@ reader must return \code{(Z, pump, probe, delays, units, freq\_units)}.
     \code{RAL\_RAW} & STFC / Central Laser Facility & Raw Ultra 2D-IR interferograms \\
     \code{RAL\_Proc} & STFC / Central Laser Facility & Processed Ultra 2D-IR cubes \\
     \code{PyMESS\_2D} & PyMESS HDF5 & Unified PyMESS 2D HDF5 datasets (\code{.h5}, alias \code{PyMESS\_2DIR}) \\
+    \code{QuickControl\_2D} & PhaseTech Spectroscopy & QuickControl 2D ASCII datasets (\code{.info} + \code{.scan} + \code{.wts}) \\
     \bottomrule
   \end{tabular}
   \caption{Supported two-dimensional data formats in PyMORGAN.}

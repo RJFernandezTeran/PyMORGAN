@@ -119,7 +119,7 @@ class OneDTabMixin:
 
     def open_file(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, "Open data file", "", "Data (*.pdat *.csv *.dat);;All files (*)"
+            self, "Open data file", "", "Data (*.pdat *.csv *.dat *.h5 *.info);;All files (*)"
         )
         if path:
             self.load_path(path)
@@ -183,12 +183,16 @@ class OneDTabMixin:
             self._update_sample_info()
             return
         self._configure_state_controls(meta)
-        name = Path(path).name
+        name = Path(path).stem if dt == "QuickControl_PP" else Path(path).name
         dt_display = DATA_TYPE_DISPLAY_NAMES.get(dt, dt)
         cal_str = self.dataset.calibration_status()
         msg = f"Loaded {name} ({dt_display}) - Probe calibration: {cal_str}"
         self.statusBar().showMessage(msg)
         if getattr(self, "plot_controls", None) is not None:
+            if reset_selection and getattr(self.plot_controls, "detector_spin", None) is not None:
+                self.plot_controls.detector_spin.blockSignals(True)
+                self.plot_controls.detector_spin.setValue(1)
+                self.plot_controls.detector_spin.blockSignals(False)
             self.plot_controls.set_dataset(self.dataset)
         self._setup_background_controls()
         self._preview_contour()

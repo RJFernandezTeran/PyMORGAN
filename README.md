@@ -81,8 +81,8 @@ a dependency of this package.
   ($A_{\text{GSB}}, A_{\text{ESA}}$), and joint 2D + 1st-order FTIR fitting.
 - **Pluggable loader registry** — register new instrument formats with a
   decorator.
-  - **1-D Time-Resolved**: `UniGE_fsTA` (with automatic non-transient `.dat` file filtering and `CalibratedProbe.csv` / `pix2lam.mat` detection), `UniGE_nsTA`, `HARPIA_TA`, `Helios_TA`, `MESS_TRIR`, `MESS_TRUVIS`, `PyMESS_PP`, `PyMESS_Aniso`, `PyMESS_t2scan` (PyMESS HDF5 datasets including slow-modulation states with per-state single scans and multi-signal fast modulation), `PDAT`, `UoS_IRpp`, `Exported_TXT`.
-  - **2-D Spectroscopy**: `P2DAT`, `MESS_2DIR`, `PyMESS_2D` (`PyMESS_2DIR`), `UoS_2DIR`, `RAL_RAW`, `RAL_Proc`.
+  - **1-D Time-Resolved**: `UniGE_fsTA` (with automatic non-transient `.dat` file filtering and `CalibratedProbe.csv` / `pix2lam.mat` detection), `UniGE_nsTA`, `HARPIA_TA`, `Helios_TA`, `QuickControl_PP`, `MESS_TRIR`, `MESS_TRUVIS`, `PyMESS_PP`, `PyMESS_Aniso`, `PyMESS_t2scan` (PyMESS HDF5 datasets including slow-modulation states with per-state single scans and multi-signal fast modulation), `PDAT`, `UoS_IRpp`, `Exported_TXT`.
+  - **2-D Spectroscopy**: `P2DAT`, `MESS_2DIR`, `PyMESS_2D` (`PyMESS_2DIR`), `QuickControl_2D`, `UoS_2DIR`, `RAL_RAW`, `RAL_Proc`.
   - **Calibration Datasets**: UniGE fsTA / nsTA, UniGE TRIR Absorbance / ΔA, UniGE TRUVIS-II, HARPIA UV/Vis, UoS TRIR, UZH Lab 2, RAL LIFEtime, PyMESS `.h5`.
   - **Steady-State**: FTIR / OPUS (`ftir`, `opus`), UV-Vis (`uvvis`), fluorimeter (`fluorimeter`), and generic delimited files (`csv`, `txt`, `xy`).
 - **Steady-state spectra** — `Spectrum` / `SpectrumSeries` for absorption,
@@ -144,6 +144,7 @@ PyMORGAN includes built-in loaders for a wide range of ultrafast time-resolved s
 | | `UniGE_nsTA` | UniGE nanosecond Transient Absorption |
 | | `HARPIA_TA` | Light Conversion HARPIA transient absorption spectrometer datasets |
 | | `Helios_TA` | Ultrafast Systems Helios TA spectrometer datasets |
+| | `QuickControl_PP` | PhaseTech Spectroscopy QuickControl 1D pump–probe ASCII datasets (`.info` + `.scan` + `.spec`), with automatic isotropic Magic Angle channel ordering |
 | | `MESS_TRIR` | MESS Transient IR spectrometer datasets (TRIR) |
 | | `MESS_TRUVIS` | MESS Transient UV-Vis / TRUVIS-II spectrometer datasets |
 | | `PyMESS_PP` | PyMESS Pump-Probe transient absorption HDF5 datasets (`.h5`), supporting slow-modulation states (`/data/slow_modulation/state_XX_*` + `*_individual_scans`) and multi-signal fast modulation (`/data/signals/signal_XX_*`) |
@@ -155,6 +156,7 @@ PyMORGAN includes built-in loaders for a wide range of ultrafast time-resolved s
 | **2D Spectroscopy** | `P2DAT` | Standard PyMORGAN 2D binary/text dataset format |
 | | `MESS_2DIR` | MESS 2D-IR spectrometer population-time maps (with single-scan loading) |
 | | `PyMESS_2D` | Unified PyMESS 2D HDF5 datasets (`.h5`, alias `PyMESS_2DIR`), supporting time-domain shaper/interferometer and frequency-domain maps, slow-modulation state cubes, and per-state single scans |
+| | `QuickControl_2D` | PhaseTech Spectroscopy QuickControl 2D spectroscopy ASCII datasets (`.info` + `.scan` + `.wts`), supporting time-domain shaper and frequency-domain maps with Magic Angle state selection |
 | | `UoS_2DIR` | University of Sheffield 2D-IR population-time maps |
 | | `RAL_RAW` | Rutherford Appleton Laboratory LIFEtime raw 2D-IR maps |
 | | `RAL_Proc` | Rutherford Appleton Laboratory LIFEtime processed 2D-IR maps |
@@ -400,8 +402,21 @@ engines, and the boundary between the two packages.
 
 ## Acknowledgements
 
-- Development assisted by **Google Antigravity**, with all code, algorithms, and implementations manually verified and tested.
-- PyMORGAN builds upon and modernizes the original MATLAB implementation from the now-deprecated [DataAnalysis](https://github.com/RJFernandezTeran/DataAnalysis) repository, written by Dr. Ricardo J. Fernández-Terán during his PhD and validated iteratively throughout the years.
+- Development assisted by **Google Antigravity**. All algorithms, numerical calculations, and analysis outputs have been manually reviewed and validated to ensure scientific accuracy, and the entire repository is continuously tested and verified against an automated unit and regression test suite.
+- PyMORGAN builds upon and modernises the original MATLAB implementation from the now-deprecated [DataAnalysis](https://github.com/RJFernandezTeran/DataAnalysis) repository, written by Dr. Ricardo J. Fernández-Terán during his PhD and validated iteratively throughout the years.
+
+
+## Trademarks & Third-Party Notice
+
+All third-party product names, instrument names, software names, trademarks, and registered trademarks mentioned in this repository and its documentation are the property of their respective owners and are used solely for identification and scientific data-interoperability purposes:
+
+- **QuickControl** is a trademark or registered trademark of **PhaseTech Spectroscopy, Inc.**
+- **HARPIA** is a registered trademark of **Light Conversion** (UAB Šviesos konversija).
+- **Helios** is a trademark or registered trademark of **Ultrafast Systems, LLC**.
+- **OPUS** is a registered trademark of **Bruker Corporation**.
+- **LIFEtime** and **ULTRA** refer to user facilities operated by the **STFC Central Laser Facility** (Rutherford Appleton Laboratory).
+
+**PyMORGAN** is an independent academic open-source project and is **not** affiliated with, endorsed by, or sponsored by any of the above companies or organisations. All built-in format loaders read user-generated experimental data files solely to enable scientific analysis and interoperability.
 
 
 ## License

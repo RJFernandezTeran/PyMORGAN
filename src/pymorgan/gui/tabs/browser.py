@@ -27,7 +27,7 @@ import pymorgan as pm
 from pymorgan.oneD.load import (
     dataset_glob,
     is_dataset_dir_status,
-    is_dataset_file,
+    is_dataset_file_status,
 )
 
 from ..mw_common import (
@@ -206,15 +206,17 @@ class DatasetBrowserMixin:
             except OSError:
                 files = []
             for f in files:
-                valid = (
-                    pm.twoD.is_map_dataset_file(dt, f)
+                is_cand, is_val = (
+                    pm.twoD.is_map_dataset_file_status(dt, f)
                     if twoD
-                    else is_dataset_file(dt, f)
+                    else is_dataset_file_status(dt, f)
                 )
-                if not valid:
+                if not is_cand:
                     continue
-                entries.append((f.name, f, False, True))
-                n_datasets += 1
+                label = f.stem if dt in ("QuickControl_PP", "QuickControl_2D") else f.name
+                entries.append((label, f, False, is_val))
+                if is_val:
+                    n_datasets += 1
 
         if stamp is not None:
             if len(cache) > 32:

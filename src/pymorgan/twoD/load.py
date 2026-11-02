@@ -853,15 +853,29 @@ def map_dataset_glob(name: str) -> str | None:
     return _MAP_DATATYPE_GLOBS.get(name)
 
 
-def is_map_dataset_file(name: str, filepath: str | PathLike) -> bool:
-    """Whether ``filepath`` is a valid file dataset for map format ``name``."""
+def is_map_dataset_file_status(name: str, filepath: str | PathLike) -> tuple[bool, bool]:
+    """Whether ``filepath`` is a candidate/valid file dataset for map format ``name``.
+
+    Returns ``(is_candidate, is_valid)``.
+    """
     fn = _MAP_DATASET_FILE_FILTERS.get(name)
     if fn is None:
-        return True
+        return True, True
     try:
-        return bool(fn(Path(filepath)))
+        res = fn(Path(filepath))
+        if isinstance(res, tuple):
+            return bool(res[0]), bool(res[1])
+        if res:
+            return True, True
+        return False, False
     except OSError:
-        return False
+        return False, False
+
+
+def is_map_dataset_file(name: str, filepath: str | PathLike) -> bool:
+    """Whether ``filepath`` is a valid file dataset for map format ``name``."""
+    _, valid = is_map_dataset_file_status(name, filepath)
+    return valid
 
 
 def is_map_directory_format(name: str) -> bool:
@@ -1814,5 +1828,421 @@ def read_PyMESS_2D(path: str, progress_tracker=None):
         raw_interferogram,
         raw_t1delays,
     )
+
+
+# --------------------------------------------------------------------------- #
+#                     PhaseTech QuickControl 2D reader                        #
+# --------------------------------------------------------------------------- #
+register_map_dataset_glob("QuickControl_2D", "*.info")
+
+
+@register_map_dataset_file_filter("QuickControl_2D")
+def _quickcontrol_2d_is_file(path: Path | str) -> tuple[bool, bool]:
+    """Return ``(is_candidate, is_valid)`` for a QuickControl 2D ``.info`` dataset."""
+    from ..oneD.load import classify_quickcontrol_info
+
+    kind, has_scans = classify_quickcontrol_info(path)
+    if kind != "2d":
+        return False, False
+    return True, has_scans
+
+
+def _extract_quickcontrol_2d_t2_ps(
+    info_path: Path,
+    info: dict[str, str],
+    t_indices: list[int],
+) -> tuple[np.ndarray, bool]:
+    """Resolve 2D population times in picoseconds and detect partial acquisitions.
+
+    Priority:
+    1. ``<prefix>.wts`` encoder waiting-time column (in ``Waiting Time Delay Units``).
+    2. ``Waiting Time Delays`` comma-separated schedule in ``.info``.
+    3. ``Waiting Time (fs)`` single float in ``.info``.
+    4. Zero-based index fallback.
+    """
+    wt_unit = info.get("Waiting Time Delay Units", "fs").strip().lower()
+    if wt_unit == "fs":
+        scale_to_ps = 1.0 / 1000.0
+    elif wt_unit == "ns":
+        scale_to_ps = 1000.0
+    else:
+        scale_to_ps = 1.0
+
+    full_t2_ps: np.ndarray | None = None
+    wts_path = info_path.parent / f"{info_path.stem}.wts"
+    if wts_path.is_file():
+        try:
+            arr = np.loadtxt(wts_path, dtype=np.float64).ravel()
+            if arr.size > 0 and np.all(np.isfinite(arr)):
+                full_t2_ps = arr * scale_to_ps
+        except Exception:
+            full_t2_ps = None
+
+    if full_t2_ps is None and info.get("Waiting Time Delays"):
+        try:
+            parts = [float(x.strip()) for x in info["Waiting Time Delays"].split(",") if x.strip()]
+            if parts:
+                full_t2_ps = np.asarray(parts, dtype=np.float64) * scale_to_ps
+        except ValueError:
+            full_t2_ps = None
+
+    if full_t2_ps is None and info.get("Waiting Time (fs)"):
+        try:
+            wt_fs = float(info["Waiting Time (fs)"])
+            full_t2_ps = np.asarray([wt_fs / 1000.0], dtype=np.float64)
+        except ValueError:
+            full_t2_ps = None
+
+    in_progress = False
+    if full_t2_ps is not None and full_t2_ps.size > 0:
+        if len(t_indices) < full_t2_ps.size:
+            in_progress = True
+        mapped = [
+            float(full_t2_ps[t_idx - 1])
+            if 0 <= (t_idx - 1) < full_t2_ps.size
+            else float(t_idx - 1)
+            for t_idx in t_indices
+        ]
+        return np.asarray(mapped, dtype=np.float64), in_progress
+
+    return np.asarray([float(t_idx - 1) for t_idx in t_indices], dtype=np.float64), False
+
+
+@register_map_loader("QuickControl_2D")
+def read_QuickControl_2D(path: str, progress_tracker=None):
+    """Read a PhaseTech QuickControl 2D spectrum dataset (``.info`` + ``.scan`` + ``.wts``).
+
+    Supports both pulse-shaper time-domain acquisitions (``Domain = Time``) and
+    frequency-swept acquisitions (``Domain = Frequency``). When both parallel
+    (``_PAR#``) and perpendicular (``_PER#``) scan series are present, the
+    isotropic Magic Angle state ``(PAR + 2 * PER) / 3`` is listed first and
+    selected as the active state by default.
+    """
+    from ..oneD.load import (
+        _find_quickcontrol_2d_scans,
+        _format_quickcontrol_sample_info,
+        _quickcontrol_exp_kind,
+        _resolve_quickcontrol_info_path,
+        _resolve_quickcontrol_probe_axis,
+        _stack_quickcontrol_scans,
+        parse_quickcontrol_info,
+    )
+
+    info_path = _resolve_quickcontrol_info_path(path, expected_kind="2d")
+    info = parse_quickcontrol_info(info_path)
+    kind = _quickcontrol_exp_kind(info)
+    if kind == "1d":
+        raise ValueError(
+            f"File {info_path.name} is a 1D QuickControl dataset; use data_type='QuickControl_PP'."
+        )
+    if kind != "2d":
+        raise ValueError(f"File {info_path.name} is not a valid QuickControl 2D .info header.")
+
+    t_indices, scans_by_t = _find_quickcontrol_2d_scans(info_path)
+    if not t_indices:
+        raise ValueError(f"No 2D .scan files found for QuickControl dataset {info_path.stem!r}.")
+
+    t2delays_ps, in_progress = _extract_quickcontrol_2d_t2_ps(info_path, info, t_indices)
+    n_t2 = len(t_indices)
+
+    has_par_any = any(len(scans_by_t[t]["par"]) > 0 for t in t_indices)
+    has_per_any = any(len(scans_by_t[t]["per"]) > 0 for t in t_indices)
+    dual_pol = has_par_any and has_per_any
+
+    try:
+        target_avg = int(float(info.get("2D Average", "0") or 0))
+    except ValueError:
+        target_avg = 0
+
+    axis0_ref: np.ndarray | None = None
+    n_rows = 0
+    n_pix = 0
+
+    if dual_pol:
+        par_stacks: list[np.ndarray | None] = []
+        per_stacks: list[np.ndarray | None] = []
+        max_par = 0
+        max_per = 0
+
+        for idx_m, t_idx in enumerate(t_indices):
+            if progress_tracker is not None:
+                total_steps = max(1, 2 * n_t2)
+                if hasattr(progress_tracker, "update_split"):
+                    progress_tracker.update_split(idx_m + 1, total_steps, "loading")
+                else:
+                    progress_tracker.update(idx_m + 1, label=f"Loading T{t_idx:02d}...")
+
+            p_files = scans_by_t[t_idx]["par"]
+            s_files = scans_by_t[t_idx]["per"]
+            if p_files:
+                ax0, p_st, _ = _stack_quickcontrol_scans(
+                    p_files,
+                    n_rows_ref=n_rows or None,
+                    n_pix_ref=n_pix or None,
+                )
+                if axis0_ref is None:
+                    axis0_ref = ax0
+                    n_rows, n_pix = p_st.shape[:2]
+                par_stacks.append(p_st)
+                max_par = max(max_par, int(p_st.shape[-1]))
+            else:
+                par_stacks.append(None)
+
+            if s_files:
+                ax0, s_st, _ = _stack_quickcontrol_scans(
+                    s_files,
+                    n_rows_ref=n_rows or None,
+                    n_pix_ref=n_pix or None,
+                )
+                if axis0_ref is None:
+                    axis0_ref = ax0
+                    n_rows, n_pix = s_st.shape[:2]
+                per_stacks.append(s_st)
+                max_per = max(max_per, int(s_st.shape[-1]))
+            else:
+                per_stacks.append(None)
+
+        assert axis0_ref is not None and n_rows > 0 and n_pix > 0
+
+        cube_par = np.full((n_rows, n_pix, n_t2), np.nan, dtype=np.float64)
+        cube_per = np.full((n_rows, n_pix, n_t2), np.nan, dtype=np.float64)
+        ss_par_full = np.full((n_rows, n_pix, n_t2, max(1, max_par)), np.nan, dtype=np.float64)
+        ss_per_full = np.full((n_rows, n_pix, n_t2, max(1, max_per)), np.nan, dtype=np.float64)
+
+        for m in range(n_t2):
+            pst = par_stacks[m]
+            sst = per_stacks[m]
+            if pst is not None:
+                with np.errstate(invalid="ignore"):
+                    cube_par[:, :, m] = np.nanmean(pst, axis=-1)
+                ss_par_full[:, :, m, : pst.shape[-1]] = pst
+                if pst.shape[-1] < max_par or (target_avg > 0 and pst.shape[-1] < target_avg):
+                    in_progress = True
+            else:
+                in_progress = True
+            if sst is not None:
+                with np.errstate(invalid="ignore"):
+                    cube_per[:, :, m] = np.nanmean(sst, axis=-1)
+                ss_per_full[:, :, m, : sst.shape[-1]] = sst
+                if sst.shape[-1] < max_per or (target_avg > 0 and sst.shape[-1] < target_avg):
+                    in_progress = True
+            else:
+                in_progress = True
+
+        cube_par = np.nan_to_num(cube_par, nan=0.0)
+        cube_per = np.nan_to_num(cube_per, nan=0.0)
+        cube_ma = (cube_par + 2.0 * cube_per) / 3.0
+
+        states_data: dict[str, np.ndarray] = {
+            "Magic Angle": cube_ma,
+            "Parallel": cube_par,
+            "Perpendicular": cube_per,
+        }
+
+        max_common = min(max_par, max_per)
+        states_signal_ss: dict[str, np.ndarray] = {}
+        if max_common > 1:
+            ss_ma = (ss_par_full[:, :, :, :max_common] + 2.0 * ss_per_full[:, :, :, :max_common]) / 3.0
+            states_signal_ss["Magic Angle"] = ss_ma
+        if max_par > 1:
+            states_signal_ss["Parallel"] = ss_par_full
+        if max_per > 1:
+            states_signal_ss["Perpendicular"] = ss_per_full
+
+        raw_cube = cube_ma.copy()
+        raw_signal_ss = states_signal_ss.get("Magic Angle")
+        n_scans_total = max(1, max_common)
+    else:
+        ch_stacks: list[np.ndarray] = []
+        max_ch = 0
+        if has_par_any:
+            chan_key = "par"
+        elif has_per_any:
+            chan_key = "per"
+        else:
+            chan_key = "unpol"
+
+        for idx_m, t_idx in enumerate(t_indices):
+            if progress_tracker is not None:
+                total_steps = max(1, 2 * n_t2)
+                if hasattr(progress_tracker, "update_split"):
+                    progress_tracker.update_split(idx_m + 1, total_steps, "loading")
+                else:
+                    progress_tracker.update(idx_m + 1, label=f"Loading T{t_idx:02d}...")
+
+            c_files = scans_by_t[t_idx][chan_key]
+            ax0, c_st, _ = _stack_quickcontrol_scans(
+                c_files,
+                n_rows_ref=n_rows or None,
+                n_pix_ref=n_pix or None,
+            )
+            if axis0_ref is None:
+                axis0_ref = ax0
+                n_rows, n_pix = c_st.shape[:2]
+            ch_stacks.append(c_st)
+            max_ch = max(max_ch, int(c_st.shape[-1]))
+
+        assert axis0_ref is not None and n_rows > 0 and n_pix > 0
+        raw_cube = np.zeros((n_rows, n_pix, n_t2), dtype=np.float64)
+        ss_ch_full = np.full((n_rows, n_pix, n_t2, max(1, max_ch)), np.nan, dtype=np.float64)
+        for m, cst in enumerate(ch_stacks):
+            with np.errstate(invalid="ignore"):
+                raw_cube[:, :, m] = np.nan_to_num(np.nanmean(cst, axis=-1), nan=0.0)
+            ss_ch_full[:, :, m, : cst.shape[-1]] = cst
+            if cst.shape[-1] < max_ch or (target_avg > 0 and cst.shape[-1] < target_avg):
+                in_progress = True
+
+        states_data = {}
+        states_signal_ss = {}
+        raw_signal_ss = ss_ch_full if max_ch > 1 else None
+        n_scans_total = max(1, max_ch)
+
+    if n_t2 > 1 and not np.all(np.diff(t2delays_ps) >= 0):
+        sort_idx = np.argsort(t2delays_ps)
+        t2delays_ps = t2delays_ps[sort_idx]
+        raw_cube = raw_cube[:, :, sort_idx]
+        if raw_signal_ss is not None:
+            raw_signal_ss = raw_signal_ss[:, :, sort_idx, :]
+        for k_st in list(states_data.keys()):
+            states_data[k_st] = states_data[k_st][:, :, sort_idx]
+        for k_st in list(states_signal_ss.keys()):
+            states_signal_ss[k_st] = states_signal_ss[k_st][:, :, sort_idx, :]
+
+    probe, _unitsL, display_L, cal_source, _cal_level = _resolve_quickcontrol_probe_axis(
+        info, n_pix, info_path, check_csv_override=True
+    )
+    freq_units = display_L if display_L in ("cm-1", "nm") else "cm-1"
+
+    spec_arr: np.ndarray | None = None
+    spec_first = info_path.parent / f"{info_path.stem}_{t_indices[0]:02d}.spec"
+    if not spec_first.is_file():
+        spec_first = info_path.parent / f"{info_path.stem}.spec"
+    if spec_first.is_file():
+        try:
+            cand_spec = np.loadtxt(spec_first, dtype=np.float64).ravel()
+            if cand_spec.size == n_pix:
+                spec_arr = cand_spec
+        except Exception:
+            spec_arr = None
+
+    if probe.size > 1 and not np.all(np.diff(probe) >= 0):
+        p_order = np.argsort(probe)
+        probe = probe[p_order]
+        raw_cube = raw_cube[:, p_order, :]
+        if raw_signal_ss is not None:
+            raw_signal_ss = raw_signal_ss[:, p_order, :, :]
+        for k_st in list(states_data.keys()):
+            states_data[k_st] = states_data[k_st][:, p_order, :]
+        for k_st in list(states_signal_ss.keys()):
+            states_signal_ss[k_st] = states_signal_ss[k_st][:, p_order, :, :]
+        if spec_arr is not None:
+            spec_arr = spec_arr[p_order]
+
+    domain_str = info.get("Domain", "Time").strip().lower()
+    is_freq_domain = domain_str.startswith("freq")
+
+    if is_freq_domain:
+        pump = axis0_ref.copy()
+        datatype_str = "FreqDomain"
+        w0_cm1 = 0.0
+        dt1_fs = 0.0
+        raw_signal = raw_cube.copy()
+        raw_interferogram = None
+        raw_t1delays = None
+        Z = raw_cube.copy()
+
+        if "Parallel" in states_data and "Perpendicular" in states_data:
+            p_mat = states_data["Parallel"]
+            s_mat = states_data["Perpendicular"]
+            denom = p_mat + 2.0 * s_mat
+            peak_iso = float(np.nanmax(np.abs(denom))) if denom.size > 0 else 0.0
+            thresh = max(1e-6, 0.02 * peak_iso)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                states_data["Anisotropy"] = np.where(
+                    np.abs(denom) > thresh, (p_mat - s_mat) / denom, 0.0
+                )
+    else:
+        t1 = axis0_ref.copy()
+        w0_cm1 = 0.0
+        if "Rotating Frame (Scanned)" in info or "Rotating Frame (Fixed)" in info:
+            try:
+                rf_scan = float(info.get("Rotating Frame (Scanned)", "0") or 0.0)
+                rf_fix = float(info.get("Rotating Frame (Fixed)", "0") or 0.0)
+                w0_cm1 = rf_scan - rf_fix
+            except ValueError:
+                w0_cm1 = 0.0
+        elif "Rotating Frame" in info:
+            try:
+                w0_cm1 = float(info.get("Rotating Frame", "0") or 0.0)
+            except ValueError:
+                w0_cm1 = 0.0
+
+        dt1_fs = 0.0
+        if "Step Size (fs)" in info:
+            try:
+                dt1_fs = float(info["Step Size (fs)"])
+            except ValueError:
+                dt1_fs = 0.0
+        if dt1_fs <= 0.0 and len(t1) > 1:
+            dt1_fs = float(np.nanmean(np.abs(np.diff(t1))))
+
+        raw_signal = raw_cube.copy()
+        raw_interferogram = np.nanmean(raw_signal, axis=1)
+        raw_t1delays = t1.copy()
+        datatype_str = "shaper"
+        Z = raw_signal.copy()
+        pump = t1.copy()
+
+    units = _units_2d("ps", freq_units)
+    if freq_units == "nm":
+        units["unitsL_lbl"] = "Wavelength"
+        units["unitsL_ltx"] = "nm"
+    units["cal_source"] = cal_source
+    units["is_frequency_domain"] = is_freq_domain
+    units["w0_cm1"] = w0_cm1
+    units["dt1_fs"] = dt1_fs
+    units["quickcontrol_info"] = info
+    units["interferogram_from_signal"] = not is_freq_domain
+    units["nscans"] = int(n_scans_total)
+
+    if raw_signal_ss is not None:
+        units["raw_signal_ss"] = raw_signal_ss
+        if not is_freq_domain:
+            units["raw_interferogram_ss"] = np.nanmean(raw_signal_ss, axis=1)
+    if states_signal_ss:
+        units["states_signal_ss"] = states_signal_ss
+    if states_data:
+        units["state_names"] = list(states_data.keys())
+        units["states_data"] = states_data
+        units["active_state"] = list(states_data.keys())[0]
+
+    if spec_arr is not None:
+        units["probe_spectrum"] = spec_arr
+
+    mode_line = (
+        "Mode: Frequency-Domain 2D"
+        if is_freq_domain
+        else f"Mode: Time-Domain 2D (w0 = {w0_cm1:.1f} cm-1, dt1 = {dt1_fs:g} fs)"
+    )
+    units["sample_info"] = _format_quickcontrol_sample_info(
+        info,
+        mode_line=mode_line,
+        state_names=list(states_data.keys()) if states_data else None,
+    )
+
+    return (
+        Z,
+        pump,
+        probe,
+        t2delays_ps,
+        units,
+        freq_units,
+        datatype_str,
+        in_progress,
+        raw_signal,
+        raw_interferogram,
+        raw_t1delays,
+    )
+
 
 

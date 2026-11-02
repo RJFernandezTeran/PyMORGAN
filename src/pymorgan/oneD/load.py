@@ -134,15 +134,29 @@ def register_dataset_file_filter(
     return decorator
 
 
-def is_dataset_file(name: str, file_path: str | PathLike) -> bool:
-    """Whether ``file_path`` is an averaged dataset file for type ``name``."""
+def is_dataset_file_status(name: str, file_path: str | PathLike) -> tuple[bool, bool]:
+    """Whether ``file_path`` is a candidate/valid dataset file for type ``name``.
+
+    Returns ``(is_candidate, is_valid)``.
+    """
     fn = _DATASET_FILE_FILTERS.get(name)
     if fn is None:
-        return True
+        return True, True
     try:
-        return bool(fn(Path(file_path)))
+        res = fn(Path(file_path))
+        if isinstance(res, tuple):
+            return bool(res[0]), bool(res[1])
+        if res:
+            return True, True
+        return False, False
     except OSError:
-        return False
+        return False, False
+
+
+def is_dataset_file(name: str, file_path: str | PathLike) -> bool:
+    """Whether ``file_path`` is an averaged dataset file for type ``name``."""
+    _, valid = is_dataset_file_status(name, file_path)
+    return valid
 
 
 def dataset_glob(name: str) -> str | None:
@@ -3770,5 +3784,675 @@ def _exported_txt_is_dataset(folder: Path) -> bool:
         return True
     except (FileNotFoundError, OSError):
         return False
+
+
+# --------------------------------------------------------------------------- #
+#                PhaseTech QuickControl (1D & shared utilities)               #
+# --------------------------------------------------------------------------- #
+register_dataset_glob("QuickControl_PP", "*.info")
+
+_QUICKCONTROL_INFO_MARKERS: frozenset[str] = frozenset(
+    {
+        "QC Version",
+        "MONO1 Wavelength",
+        "Detector Pixels",
+        "Pump Type",
+        "Detection Mode",
+        "Delays",
+        "1D Average",
+        "Domain",
+        "Step Size (fs)",
+        "Waiting Time Delays",
+        "Waiting Time (fs)",
+    }
+)
+
+_QC_1D_POL_RE = re.compile(r"^_(PAR|PER)#(\d+)$", re.IGNORECASE)
+_QC_1D_UNPOL_RE = re.compile(r"^_?#(\d+)$")
+_QC_2D_MULTI_POL_RE = re.compile(r"^_T(\d+)_(PAR|PER)#(\d+)$", re.IGNORECASE)
+_QC_2D_MULTI_UNPOL_RE = re.compile(r"^_T(\d+)_?#(\d+)$", re.IGNORECASE)
+_QC_GROOVES_RE = re.compile(r"(\d+(?:\.\d+)?)\s*g\s*/\s*mm", re.IGNORECASE)
+
+
+def parse_quickcontrol_info(filepath: str | PathLike) -> dict[str, str]:
+    """Parse a PhaseTech QuickControl ``.info`` tab-delimited header file."""
+    p = Path(filepath)
+    if not p.is_file():
+        return {}
+    try:
+        with open(p, "rb") as fh:
+            raw_bytes = fh.read(262_144)
+    except OSError:
+        return {}
+    try:
+        text = raw_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        text = raw_bytes.decode("latin-1", errors="replace")
+
+    info: dict[str, str] = {}
+    for line in text.splitlines():
+        if not line.strip() or "\t" not in line:
+            continue
+        key, _, val = line.partition("\t")
+        k_clean = key.strip()
+        if k_clean:
+            info[k_clean] = val.strip()
+    return info
+
+
+def _quickcontrol_exp_kind(info: dict[str, str]) -> str | None:
+    """Return ``'1d'`` or ``'2d'`` when ``info`` is a valid QuickControl header, else ``None``."""
+    exp = info.get("Experiment Type", "").strip().upper()
+    if exp not in ("1D", "2D"):
+        return None
+    if not any(k in info for k in _QUICKCONTROL_INFO_MARKERS):
+        return None
+    return exp.lower()
+
+
+def _find_quickcontrol_1d_scans(info_path: Path) -> dict[str, list[Path]]:
+    """Discover 1D ``.scan`` files sharing ``info_path.stem``, grouped by polarisation."""
+    import glob
+
+    prefix = info_path.stem
+    folder = info_path.parent
+    par: list[tuple[int, Path]] = []
+    per: list[tuple[int, Path]] = []
+    unpol: list[tuple[int, Path]] = []
+
+    try:
+        candidates = list(folder.glob(f"{glob.escape(prefix)}*.scan"))
+    except OSError:
+        candidates = []
+
+    for f in candidates:
+        if not f.is_file() or len(f.name) <= len(prefix) + 5:
+            continue
+        if f.name[: len(prefix)] != prefix or f.name[-5:].lower() != ".scan":
+            continue
+        rest = f.name[len(prefix) : -5]
+        m_pol = _QC_1D_POL_RE.match(rest)
+        if m_pol:
+            pol = m_pol.group(1).upper()
+            idx = int(m_pol.group(2))
+            if pol == "PAR":
+                par.append((idx, f))
+            else:
+                per.append((idx, f))
+            continue
+        m_unpol = _QC_1D_UNPOL_RE.match(rest)
+        if m_unpol:
+            unpol.append((int(m_unpol.group(1)), f))
+
+    par.sort(key=lambda item: (item[0], item[1].name))
+    per.sort(key=lambda item: (item[0], item[1].name))
+    unpol.sort(key=lambda item: (item[0], item[1].name))
+    return {
+        "par": [p for _, p in par],
+        "per": [p for _, p in per],
+        "unpol": [p for _, p in unpol],
+    }
+
+
+def _find_quickcontrol_2d_scans(
+    info_path: Path,
+) -> tuple[list[int], dict[int, dict[str, list[Path]]]]:
+    """Discover 2D ``.scan`` files sharing ``info_path.stem``, grouped by waiting-time index."""
+    import glob
+
+    prefix = info_path.stem
+    folder = info_path.parent
+    multi: dict[int, dict[str, list[tuple[int, Path]]]] = {}
+    single_par: list[tuple[int, Path]] = []
+    single_per: list[tuple[int, Path]] = []
+    single_unpol: list[tuple[int, Path]] = []
+
+    try:
+        candidates = list(folder.glob(f"{glob.escape(prefix)}*.scan"))
+    except OSError:
+        candidates = []
+
+    for f in candidates:
+        if not f.is_file() or len(f.name) <= len(prefix) + 5:
+            continue
+        if f.name[: len(prefix)] != prefix or f.name[-5:].lower() != ".scan":
+            continue
+        rest = f.name[len(prefix) : -5]
+        m_mp = _QC_2D_MULTI_POL_RE.match(rest)
+        if m_mp:
+            t_idx = int(m_mp.group(1))
+            pol = "par" if m_mp.group(2).upper() == "PAR" else "per"
+            s_idx = int(m_mp.group(3))
+            bucket = multi.setdefault(t_idx, {"par": [], "per": [], "unpol": []})
+            bucket[pol].append((s_idx, f))
+            continue
+        m_mu = _QC_2D_MULTI_UNPOL_RE.match(rest)
+        if m_mu:
+            t_idx = int(m_mu.group(1))
+            s_idx = int(m_mu.group(2))
+            bucket = multi.setdefault(t_idx, {"par": [], "per": [], "unpol": []})
+            bucket["unpol"].append((s_idx, f))
+            continue
+        m_sp = _QC_1D_POL_RE.match(rest)
+        if m_sp:
+            if m_sp.group(1).upper() == "PAR":
+                single_par.append((int(m_sp.group(2)), f))
+            else:
+                single_per.append((int(m_sp.group(2)), f))
+            continue
+        m_su = _QC_1D_UNPOL_RE.match(rest)
+        if m_su:
+            single_unpol.append((int(m_su.group(1)), f))
+
+    if multi:
+        t_sorted = sorted(multi.keys())
+        out: dict[int, dict[str, list[Path]]] = {}
+        for t_idx in t_sorted:
+            b = multi[t_idx]
+            out[t_idx] = {
+                k: [p for _, p in sorted(v, key=lambda item: (item[0], item[1].name))]
+                for k, v in b.items()
+            }
+        return t_sorted, out
+
+    if single_par or single_per or single_unpol:
+        out_single = {
+            "par": [p for _, p in sorted(single_par, key=lambda item: (item[0], item[1].name))],
+            "per": [p for _, p in sorted(single_per, key=lambda item: (item[0], item[1].name))],
+            "unpol": [p for _, p in sorted(single_unpol, key=lambda item: (item[0], item[1].name))],
+        }
+        return [1], {1: out_single}
+
+    return [], {}
+
+
+def classify_quickcontrol_info(filepath: str | PathLike) -> tuple[str | None, bool]:
+    """Classify a QuickControl ``.info`` file into ``(kind, has_scans)``.
+
+    Parameters
+    ----------
+    filepath : str or PathLike
+        Candidate ``.info`` path.
+
+    Returns
+    -------
+    tuple of (str or None, bool)
+        ``kind`` is ``'1d'``, ``'2d'``, or ``None`` if not a QuickControl
+        header. ``has_scans`` indicates whether at least one companion
+        ``.scan`` file is present on disk.
+    """
+    p = Path(filepath)
+    if not p.is_file() or p.suffix.lower() != ".info":
+        return None, False
+    info = parse_quickcontrol_info(p)
+    kind = _quickcontrol_exp_kind(info)
+    if kind == "1d":
+        scans = _find_quickcontrol_1d_scans(p)
+        return "1d", bool(scans["par"] or scans["per"] or scans["unpol"])
+    if kind == "2d":
+        t_indices, _ = _find_quickcontrol_2d_scans(p)
+        return "2d", len(t_indices) > 0
+    return None, False
+
+
+def _resolve_quickcontrol_info_path(
+    path: str | PathLike, expected_kind: str | None = None
+) -> Path:
+    """Resolve a ``.info`` path from an ``.info`` file, bare prefix, sibling file, or folder."""
+    p = Path(path)
+
+    if p.is_file() and p.suffix.lower() == ".info":
+        return p
+
+    cand_direct = Path(f"{p}.info")
+    if cand_direct.is_file():
+        return cand_direct
+
+    if p.is_dir():
+        info_files = sorted(p.glob("*.info"), key=lambda f: f.name.lower())
+        matched: list[Path] = []
+        for f in info_files:
+            kind, _ = classify_quickcontrol_info(f)
+            if kind is not None and (expected_kind is None or kind == expected_kind):
+                matched.append(f)
+        named = p / f"{p.name}.info"
+        if named in matched:
+            return named
+        if len(matched) == 1:
+            return matched[0]
+        if len(matched) > 1:
+            names = ", ".join(m.stem for m in matched[:5])
+            raise ValueError(
+                f"Folder {p.name!r} contains multiple QuickControl datasets ({names}); "
+                "please specify the target .info file directly."
+            )
+        raise FileNotFoundError(f"No QuickControl .info dataset found in folder: {path}")
+
+    parent = p.parent
+    if parent.is_dir():
+        matches: list[tuple[int, int, Path]] = []
+        for cand in parent.glob("*.info"):
+            stem = cand.stem
+            if p.name == stem or (
+                p.name.startswith(stem)
+                and len(p.name) > len(stem)
+                and p.name[len(stem)] in (".", "_", "#")
+            ):
+                kind, _ = classify_quickcontrol_info(cand)
+                type_match = 1 if (expected_kind is None or kind == expected_kind) else 0
+                matches.append((type_match, len(stem), cand))
+        if matches:
+            matches.sort(key=lambda item: (item[0], item[1]), reverse=True)
+            return matches[0][2]
+
+    raise FileNotFoundError(f"QuickControl .info file not found for: {path}")
+
+
+def _resolve_quickcontrol_probe_axis(
+    info: dict[str, str],
+    n_pix: int,
+    info_path: Path,
+    *,
+    check_csv_override: bool = True,
+) -> tuple[np.ndarray, str, str, str, str | None]:
+    """Compute the QuickControl probe axis from ``CalibratedProbe.csv`` or monochromator metadata.
+
+    Returns ``(probe, unitsL, display_L, cal_source, cal_level)``.
+    """
+    try:
+        cwl_nm = float(info.get("MONO1 Wavelength", "0") or 0.0)
+    except ValueError:
+        cwl_nm = 0.0
+
+    if check_csv_override:
+        cal_candidates = [
+            (info_path.parent / "CalibratedProbe.csv", "data folder", "datadir"),
+            (info_path.parent / "calib" / "CalibratedProbe.csv", "calib folder", "datadir"),
+            (info_path.parent.parent / "CalibratedProbe.csv", "root folder", "rootdir"),
+            (
+                info_path.parent.parent / "calib" / "CalibratedProbe.csv",
+                "parent calib folder",
+                "rootdir",
+            ),
+        ]
+        for cand_path, loc, level in cal_candidates:
+            if cand_path.is_file():
+                try:
+                    cal_arr = np.loadtxt(cand_path, delimiter=",").ravel().astype(np.float64)
+                    if cal_arr.size == n_pix:
+                        p_mean = float(np.nanmean(cal_arr)) if cal_arr.size > 0 else 0.0
+                        if p_mean > 1200.0 or cwl_nm > 1200.0:
+                            return cal_arr, "cm^{-1}", "cm-1", f"CalibratedProbe.csv ({loc})", level
+                        return cal_arr, "nm", "nm", f"CalibratedProbe.csv ({loc})", level
+                except Exception:
+                    pass
+
+    if cwl_nm > 0.0 and n_pix > 0:
+        try:
+            binning = max(1, int(float(info.get("Detector Binning", "1") or 1.0)))
+        except ValueError:
+            binning = 1
+        try:
+            f_mm = float(info.get("MONO Focal Length", "0") or 0.0)
+        except ValueError:
+            f_mm = 0.0
+        try:
+            dev_deg = float(info.get("MONO Deviation Angle", "0") or 0.0)
+        except ValueError:
+            dev_deg = 0.0
+        try:
+            pitch_um = float(info.get("MONO Pixel Pitch", "0") or 0.0)
+        except ValueError:
+            pitch_um = 0.0
+        try:
+            grooves = float(info.get("MONO Grating Grooves", "0") or 0.0)
+        except ValueError:
+            grooves = 0.0
+
+        if grooves <= 0.0:
+            m_gr = _QC_GROOVES_RE.search(info.get("MONO1 Grating", ""))
+            if m_gr:
+                try:
+                    grooves = float(m_gr.group(1))
+                except ValueError:
+                    grooves = 0.0
+
+        pix = np.arange(n_pix, dtype=np.float64)
+        p_centre = 0.5 * float(n_pix - 1)
+        wl_nm: np.ndarray | None = None
+        cal_desc = ""
+
+        if f_mm > 0.0 and pitch_um > 0.0 and grooves > 0.0:
+            d_nm = 1.0e6 / grooves
+            gamma = np.deg2rad(0.5 * dev_deg)
+            cos_g = float(np.cos(gamma))
+            ratio = cwl_nm / (2.0 * d_nm * cos_g) if cos_g != 0.0 else 2.0
+            if abs(ratio) <= 1.0:
+                theta = float(np.arcsin(ratio))
+                alpha = theta - gamma
+                beta0 = theta + gamma
+                dx_mm = (pitch_um / 1000.0) * float(binning)
+                wl_nm = d_nm * (np.sin(alpha) + np.sin(beta0 + np.arctan((pix - p_centre) * dx_mm / f_mm)))
+                cal_desc = f"QuickControl Czerny-Turner ({grooves:g} g/mm, {cwl_nm:.1f} nm)"
+
+        if wl_nm is None and grooves > 0.0:
+            disp_nm_per_px = (7.7 * 30.0 / grooves) * float(binning)
+            wl_nm = cwl_nm + (pix - p_centre) * disp_nm_per_px
+            cal_desc = f"QuickControl linear grating ({grooves:g} g/mm, {cwl_nm:.1f} nm)"
+
+        if wl_nm is not None and np.all(np.isfinite(wl_nm)) and np.all(wl_nm > 0.0):
+            if cwl_nm > 1200.0:
+                return 1.0e7 / wl_nm, "cm^{-1}", "cm-1", cal_desc, None
+            return wl_nm, "nm", "nm", cal_desc, None
+
+    probe_px = np.arange(1, n_pix + 1, dtype=np.float64)
+    return probe_px, "px", "px", "Uncalibrated (pixel index)", None
+
+
+def _read_quickcontrol_scan_matrix(
+    scan_path: Path,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Read a QuickControl ``.scan`` file into ``(axis0, signal_mOD, stationary_mOD)``.
+
+    QuickControl stores differential absorbance in OD with an extra trailing
+    row whose first column is ``0.000000`` (zeros in 1D; stationary-frame
+    pump-probe in 4-frame 2D). The trailing row is stripped and OD is converted
+    to mOD.
+    """
+    raw = np.loadtxt(scan_path, dtype=np.float64)
+    if raw.ndim == 1:
+        raw = raw[np.newaxis, :]
+    if raw.shape[1] < 2:
+        raise ValueError(f"Invalid QuickControl scan matrix shape {raw.shape} in {scan_path.name}.")
+
+    if raw.shape[0] >= 2 and np.isclose(raw[-1, 0], 0.0):
+        stationary_mOD = raw[-1, 1:].astype(np.float64) * 1000.0
+        body = raw[:-1, :]
+    else:
+        stationary_mOD = np.zeros(raw.shape[1] - 1, dtype=np.float64)
+        body = raw
+
+    axis0 = body[:, 0].astype(np.float64)
+    signal_mOD = body[:, 1:].astype(np.float64) * 1000.0
+    return axis0, signal_mOD, stationary_mOD
+
+
+def _stack_quickcontrol_scans(
+    scan_files: list[Path],
+    n_rows_ref: int | None = None,
+    n_pix_ref: int | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Stack ``scan_files`` into ``(axis0, stack_3d, stationary_2d)``.
+
+    ``stack_3d`` has shape ``(n_rows, n_pix, n_scans)`` in mOD. Incomplete
+    trailing scans (e.g. from an interrupted acquisition) are padded with NaN.
+    """
+    axis0_ref: np.ndarray | None = None
+    mats: list[np.ndarray] = []
+    stats: list[np.ndarray] = []
+
+    for idx, sf in enumerate(scan_files):
+        ax0, sig, stat = _read_quickcontrol_scan_matrix(sf)
+        if idx == 0:
+            axis0_ref = ax0 if n_rows_ref is None else ax0[:n_rows_ref]
+            if n_rows_ref is None:
+                n_rows_ref = int(sig.shape[0])
+            if n_pix_ref is None:
+                n_pix_ref = int(sig.shape[1])
+        assert n_rows_ref is not None and n_pix_ref is not None
+        if sig.shape[1] != n_pix_ref:
+            raise ValueError(
+                f"Pixel count mismatch in {sf.name}: expected {n_pix_ref}, got {sig.shape[1]}."
+            )
+        if sig.shape[0] == n_rows_ref:
+            mats.append(sig)
+        elif sig.shape[0] < n_rows_ref:
+            padded = np.full((n_rows_ref, n_pix_ref), np.nan, dtype=np.float64)
+            padded[: sig.shape[0], :] = sig
+            mats.append(padded)
+        else:
+            mats.append(sig[:n_rows_ref, :])
+        stats.append(stat)
+
+    assert axis0_ref is not None
+    return axis0_ref, np.stack(mats, axis=-1), np.stack(stats, axis=-1)
+
+
+def _format_quickcontrol_sample_info(
+    info: dict[str, str],
+    *,
+    mode_line: str | None = None,
+    state_names: list[str] | None = None,
+) -> str:
+    """Build a clean human-readable metadata summary from a QuickControl ``.info`` dict."""
+    lines: list[str] = []
+    if mode_line:
+        lines.append(mode_line)
+    if info.get("Comment"):
+        lines.append(f"Comment: {info['Comment']}")
+    if info.get("Date and Time"):
+        lines.append(f"Acquired: {info['Date and Time']}")
+    if info.get("Pump Type"):
+        lines.append(f"Pump Type: {info['Pump Type']}")
+    if info.get("Detection Mode"):
+        lines.append(f"Detection Mode: {info['Detection Mode']}")
+    if state_names:
+        lines.append(f"Polarisation States: {', '.join(state_names)}")
+    if info.get("UV/Visible Pump", "").strip().upper() == "TRUE":
+        uv_delay = info.get("UV/Visible Delay", "")
+        lines.append(
+            f"UV/Visible Pump: Enabled ({uv_delay} fs)" if uv_delay else "UV/Visible Pump: Enabled"
+        )
+    if info.get("MONO1 Wavelength"):
+        try:
+            cwl = float(info["MONO1 Wavelength"])
+            if cwl > 0:
+                grating = info.get("MONO1 Grating", "")
+                lines.append(
+                    f"Monochromator: {cwl:.1f} nm ({grating})"
+                    if grating
+                    else f"Monochromator: {cwl:.1f} nm"
+                )
+        except ValueError:
+            pass
+    if info.get("QC Version"):
+        lines.append(f"QuickControl Version: {info['QC Version']}")
+    return "\n".join(lines)
+
+
+@register_dataset_file_filter("QuickControl_PP")
+def _quickcontrol_pp_is_file(path: Path | str) -> tuple[bool, bool]:
+    """Return ``(is_candidate, is_valid)`` for a QuickControl 1D ``.info`` dataset."""
+    kind, has_scans = classify_quickcontrol_info(path)
+    if kind != "1d":
+        return False, False
+    return True, has_scans
+
+
+@register_dataset_describer("QuickControl_PP")
+def _describe_quickcontrol_pp(path: Path | str) -> dict | None:
+    """Return polarisation channel metadata for a QuickControl 1D dataset."""
+    try:
+        info_path = _resolve_quickcontrol_info_path(path, expected_kind="1d")
+    except (FileNotFoundError, ValueError):
+        return None
+    kind, has_scans = classify_quickcontrol_info(info_path)
+    if kind != "1d" or not has_scans:
+        return None
+    scans = _find_quickcontrol_1d_scans(info_path)
+    if scans["par"] and scans["per"]:
+        state_names = ["Magic Angle", "Parallel", "Perpendicular"]
+    elif scans["par"]:
+        state_names = ["Parallel"]
+    elif scans["per"]:
+        state_names = ["Perpendicular"]
+    else:
+        state_names = ["Signal"]
+    return {
+        "n_spectra": 1,
+        "n_slowmod": len(state_names),
+        "state_names": state_names,
+        "is_quickcontrol": True,
+    }
+
+
+@register_loader("QuickControl_PP")
+def read_QuickControl_PP(
+    datafilename: str,
+    *,
+    load_single_scans: bool = True,
+    **kwargs,
+) -> LoaderResult:
+    """Read a PhaseTech QuickControl 1D pump-probe dataset (``.info`` + ``.scan``).
+
+    When both parallel (``_PAR#``) and perpendicular (``_PER#``) scan series are
+    present, the isotropic Magic Angle signal ``(PAR + 2 * PER) / 3`` is placed
+    at channel 0 so it is active by default, followed by ``Parallel`` (channel 1)
+    and ``Perpendicular`` (channel 2).
+
+    Parameters
+    ----------
+    datafilename : str
+        Path to ``<prefix>.info``, bare ``<prefix>``, a sibling ``.scan`` file,
+        or a folder containing a single 1D QuickControl dataset.
+    load_single_scans : bool, optional
+        Whether to populate the 4D single-scan array ``Zss_R`` (default: True).
+
+    Returns
+    -------
+    LoaderResult : tuple
+        ``(Zavg_R, delays, probe, Units, Nscans, Zss_R, Zstdv)``
+    """
+    info_path = _resolve_quickcontrol_info_path(datafilename, expected_kind="1d")
+    info = parse_quickcontrol_info(info_path)
+    kind = _quickcontrol_exp_kind(info)
+    if kind == "2d":
+        raise ValueError(
+            f"File {info_path.name} is a 2D QuickControl dataset; use data_type='QuickControl_2D'."
+        )
+    if kind != "1d":
+        raise ValueError(f"File {info_path.name} is not a valid QuickControl 1D .info header.")
+
+    scans = _find_quickcontrol_1d_scans(info_path)
+    has_par = len(scans["par"]) > 0
+    has_per = len(scans["per"]) > 0
+    has_unpol = len(scans["unpol"]) > 0
+
+    if not (has_par or has_per or has_unpol):
+        raise ValueError(f"No 1D .scan files found for QuickControl dataset {info_path.stem!r}.")
+
+    if has_par and has_per:
+        raw_delays, par_stack, _ = _stack_quickcontrol_scans(scans["par"])
+        n_delays, n_pix, n_par = par_stack.shape
+        _, per_stack, _ = _stack_quickcontrol_scans(
+            scans["per"], n_rows_ref=n_delays, n_pix_ref=n_pix
+        )
+        n_per = per_stack.shape[-1]
+        n_common = min(n_par, n_per)
+
+        with np.errstate(invalid="ignore"):
+            avg_par = np.nanmean(par_stack, axis=-1)
+            avg_per = np.nanmean(per_stack, axis=-1)
+        avg_ma = (avg_par + 2.0 * avg_per) / 3.0
+
+        ss_par_common = par_stack[:, :, :n_common]
+        ss_per_common = per_stack[:, :, :n_common]
+        ss_ma_common = (ss_par_common + 2.0 * ss_per_common) / 3.0
+
+        Zavg_R = np.stack([avg_ma, avg_par, avg_per], axis=2)
+        std_ma = (
+            np.nanstd(ss_ma_common, axis=-1, ddof=1)
+            if n_common > 1
+            else np.zeros_like(avg_ma)
+        )
+        std_par = (
+            np.nanstd(par_stack, axis=-1, ddof=1) if n_par > 1 else np.zeros_like(avg_par)
+        )
+        std_per = (
+            np.nanstd(per_stack, axis=-1, ddof=1) if n_per > 1 else np.zeros_like(avg_per)
+        )
+        Zstdv = np.stack([std_ma, std_par, std_per], axis=2)
+        Nscans: int | float = int(n_common)
+        if load_single_scans and n_common >= 1:
+            Zss_R = np.stack([ss_ma_common, ss_par_common, ss_per_common], axis=2)
+        else:
+            Zss_R = np.full((*Zavg_R.shape, 1), np.nan, dtype=np.float64)
+        detectors = ["Magic Angle", "Parallel", "Perpendicular"]
+    else:
+        if has_par:
+            chan_files = scans["par"]
+            detectors = ["Parallel"]
+        elif has_per:
+            chan_files = scans["per"]
+            detectors = ["Perpendicular"]
+        else:
+            chan_files = scans["unpol"]
+            detectors = ["Signal"]
+
+        raw_delays, ch_stack, _ = _stack_quickcontrol_scans(chan_files)
+        n_delays, n_pix, n_ch = ch_stack.shape
+        with np.errstate(invalid="ignore"):
+            avg_ch = np.nanmean(ch_stack, axis=-1)
+        std_ch = np.nanstd(ch_stack, axis=-1, ddof=1) if n_ch > 1 else np.zeros_like(avg_ch)
+        Zavg_R = avg_ch[:, :, np.newaxis]
+        Zstdv = std_ch[:, :, np.newaxis]
+        Nscans = int(n_ch)
+        if load_single_scans and n_ch >= 1:
+            Zss_R = ch_stack[:, :, np.newaxis, :]
+        else:
+            Zss_R = np.full((*Zavg_R.shape, 1), np.nan, dtype=np.float64)
+
+    delay_unit_raw = info.get("Delay Units", "fs").strip().lower()
+    if delay_unit_raw == "fs":
+        delays = raw_delays / 1000.0
+        unitsT = "ps"
+    elif delay_unit_raw == "ns":
+        delays = raw_delays
+        unitsT = "ns"
+    else:
+        delays = raw_delays
+        unitsT = "ps"
+
+    probe, unitsL, _display_L, cal_source, cal_level = _resolve_quickcontrol_probe_axis(
+        info, n_pix, info_path, check_csv_override=True
+    )
+
+    spec_arr: np.ndarray | None = None
+    spec_file = info_path.parent / f"{info_path.stem}.spec"
+    if spec_file.is_file():
+        try:
+            cand_spec = np.loadtxt(spec_file, dtype=np.float64).ravel()
+            if cand_spec.size == n_pix:
+                spec_arr = cand_spec
+        except Exception:
+            spec_arr = None
+
+    if probe.size > 1 and not np.all(np.diff(probe) >= 0):
+        p_order = np.argsort(probe)
+        probe = probe[p_order]
+        Zavg_R = Zavg_R[:, p_order, :]
+        Zstdv = Zstdv[:, p_order, :]
+        if Zss_R is not None and Zss_R.ndim == 4 and Zss_R.shape[1] == n_pix:
+            Zss_R = Zss_R[:, p_order, :, :]
+        if spec_arr is not None:
+            spec_arr = spec_arr[p_order]
+
+    Units = hlp.units2dic(unitsL, unitsT, "x1E3")
+    Units["cal_source"] = cal_source
+    if cal_level is not None:
+        Units["cal_level"] = cal_level
+    Units["detectors"] = detectors
+    Units["quickcontrol_info"] = info
+    if isinstance(Nscans, int) and Nscans > 0:
+        Units["scan_ids"] = list(range(Nscans))
+    if spec_arr is not None:
+        Units["probe_spectrum"] = spec_arr
+
+    sample_info = _format_quickcontrol_sample_info(info, state_names=detectors)
+    if sample_info:
+        Units["sample_info"] = sample_info
+
+    return Zavg_R, delays, probe, Units, Nscans, Zss_R, Zstdv
+
 
 

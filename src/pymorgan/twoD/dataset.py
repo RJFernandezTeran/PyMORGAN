@@ -180,6 +180,9 @@ class Dataset2D:
                 self.raw_signal = cube.copy()
         else:
             self.raw_signal = cube.copy()
+            if self.units.get("interferogram_from_signal"):
+                with np.errstate(invalid="ignore"):
+                    self.raw_interferogram = np.nanmean(self.raw_signal, axis=1)
         self.Z_C = None
         self._is_corrected = False
         return True
@@ -193,9 +196,12 @@ class Dataset2D:
     ) -> Dataset2D:
         """Load a 2-D dataset from ``path`` using the loader for ``data_type``."""
         loader = get_map_loader(data_type)
-        if data_type in ("MESS_2DIR", "PyMESS_2D") or getattr(loader, "__name__", None) in (
+        if data_type in ("MESS_2DIR", "PyMESS_2D", "QuickControl_2D") or getattr(
+            loader, "__name__", None
+        ) in (
             "read_MESS_2DIR",
             "read_PyMESS_2D",
+            "read_QuickControl_2D",
         ):
             res = loader(str(path), progress_tracker=progress_tracker)
         else:
@@ -296,6 +302,8 @@ class Dataset2D:
                 cal_source = "Dataset probe axis (P2DAT header)"
             elif data_type == "PyMESS_2D":
                 cal_source = "PyMESS spectral calibration (cm-1)"
+            elif data_type == "QuickControl_2D":
+                cal_source = "QuickControl monochromator calibration"
 
         return cls(
             Z,
