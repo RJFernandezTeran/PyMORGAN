@@ -209,6 +209,22 @@ def read_numeric_matrix(file_path: str | Path, default_delimiter: str | None = N
     return np.loadtxt(buf, delimiter=delimiter)
 
 
+def _is_physical_spectral_axis(axis: np.ndarray | None, is_ir: bool | None = None) -> bool:
+    """Return True when ``axis`` represents physical nm/cm-1 rather than pixel indices."""
+    if axis is None or len(axis) < 2:
+        return False
+    arr = np.asarray(axis, dtype=float).ravel()
+    if not np.all(np.isfinite(arr)):
+        return False
+    diffs = np.diff(arr)
+    if float(np.min(arr)) <= 2.0 and np.allclose(np.abs(diffs), 1.0, atol=5e-2):
+        return False
+    min_bound = 100.0 if (is_ir is True or is_ir is None) else 180.0
+    if float(np.min(arr)) < min_bound:
+        return False
+    return True
+
+
 def parse_meta_file(meta_path: Path, is_ir: bool) -> dict:
     """Parse MESS or generic setup metadata text file (_meta.txt) for grating position, CWL, and axis arrays."""
     import re
@@ -219,12 +235,20 @@ def parse_meta_file(meta_path: Path, is_ir: bool) -> dict:
     wl_axis = None
 
     if not meta_path.exists():
-        return {"cwl": 0.0, "grating": 0.0, "min_wl": None, "max_wl": None, "wn_axis": None, "wl_axis": None}
+        return {
+            "cwl": 0.0,
+            "explicit_cwl": False,
+            "grating": 0.0,
+            "min_wl": None,
+            "max_wl": None,
+            "wn_axis": None,
+            "wl_axis": None,
+        }
 
     lines = meta_path.read_text(encoding="utf-8", errors="ignore").splitlines()
     for line in lines:
         l_lower = line.lower()
-        if "centre wavelength" in l_lower or "cwl" in l_lower:
+        if "centre wavelength" in l_lower or "center wavelength" in l_lower or "cwl" in l_lower:
             nums = re.findall(r"[-+]?\d*\.\d+|\d+", line[line.find(":") if ":" in line else 0:])
             if nums:
                 cwl_val = float(nums[0])
@@ -240,6 +264,18 @@ def parse_meta_file(meta_path: Path, is_ir: bool) -> dict:
             nums = [float(x) for x in re.findall(r"[-+]?\d*\.\d+|\d+", line[line.find(":"):])]
             if nums:
                 wl_axis = np.array(nums, dtype=float)
+
+    explicit_cwl = cwl_val > 0.0
+    if not _is_physical_spectral_axis(wn_axis, is_ir=True):
+        wn_axis = None
+    if not _is_physical_spectral_axis(wl_axis, is_ir=False):
+        wl_axis = None
+    if is_ir and 0.0 < cwl_val < 100.0:
+        cwl_val = 0.0
+        explicit_cwl = False
+    elif not is_ir and 0.0 < cwl_val < 180.0:
+        cwl_val = 0.0
+        explicit_cwl = False
 
     min_wl = None
     max_wl = None
@@ -263,6 +299,7 @@ def parse_meta_file(meta_path: Path, is_ir: bool) -> dict:
 
     return {
         "cwl": cwl_val,
+        "explicit_cwl": explicit_cwl,
         "grating": grating_val,
         "min_wl": min_wl,
         "max_wl": max_wl,
@@ -390,11 +427,9 @@ def parse_pymess_calibration_h5(h5_path: Path, spectral_range: str | None = None
 
     # 4. Determine spectral range ('mid-ir', 'uv-vis', 'nir')
     n_pix = len(spec_arr)
-    axis_is_physical = (
-        raw_axis is not None
-        and len(raw_axis) > 1
-        and float(np.max(raw_axis)) > float(len(raw_axis)) + 10.0
-    )
+    axis_is_physical = _is_physical_spectral_axis(raw_axis, is_ir=None)
+    if not axis_is_physical and n_pix >= 64 and abs(cwl_nm_meta - 0.5 * float(n_pix)) <= 2.0:
+        cwl_nm_meta = 0.0
 
     detected_range: str | None = None
     # Priority 1: Explicit spectrometer_cwl_nm attribute (written when spectrometer is active)
@@ -462,10 +497,8 @@ def parse_pymess_calibration_h5(h5_path: Path, spectral_range: str | None = None
         grating_val = 0.0
 
         if active_range == "uv-vis":
-            if 200.0 <= cwl_nm_meta <= 900.0:
+            if 300.0 <= cwl_nm_meta <= 900.0:
                 cwl_val = cwl_nm_meta
-            elif wl_axis is not None and len(wl_axis) > 0 and 200.0 <= float(np.mean(wl_axis)) <= 900.0:
-                cwl_val = float(wl_axis[len(wl_axis) // 2])
         elif active_range == "nir":
             if 800.0 <= cwl_nm_meta <= 2500.0:
                 cwl_val = cwl_nm_meta
@@ -629,9 +662,14 @@ def load_experimental_spectrum(
 
         if meta_path is not None:
             parsed = parse_meta_file(meta_path, is_ir=is_ir)
-            # TRUVIS-II (type 10) does not use grating information from metafile
+            # TRUVIS-II (type 10) does not use grating information from metafile,
+            # and keeps default CWL (540 nm) unless a physical CWL was explicitly recorded.
             gratings[0] = 0.0 if cal_type_code == 10 else parsed["grating"]
-            cwl[0] = parsed["cwl"]
+            if cal_type_code == 10:
+                if parsed.get("explicit_cwl") and 300.0 <= parsed["cwl"] <= 900.0:
+                    cwl[0] = parsed["cwl"]
+            else:
+                cwl[0] = parsed["cwl"]
             min_wl_val = parsed["min_wl"]
             max_wl_val = parsed["max_wl"]
             wn_axis = parsed["wn_axis"]

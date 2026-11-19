@@ -381,7 +381,12 @@ class SuiteLauncherDialog(QDialog):
         bottom_layout.addWidget(btn_both)
 
         main_layout.addLayout(bottom_layout)
-        QTimer.singleShot(1200, self._check_updates_background)
+        if (
+            "PYTEST_CURRENT_TEST" not in os.environ
+            and "pytest" not in sys.modules
+            and os.environ.get("QT_QPA_PLATFORM", "").lower() != "offscreen"
+        ):
+            QTimer.singleShot(1200, self._check_updates_background)
 
     def _build_app_card(
         self,
@@ -590,12 +595,20 @@ class SuiteLauncherDialog(QDialog):
     def _check_updates_background(self):
         """Quietly check on startup if a newer release or bleeding-edge commit is available."""
         try:
+            if (
+                not self.isVisible()
+                or "PYTEST_CURRENT_TEST" in os.environ
+                or "pytest" in sys.modules
+                or os.environ.get("QT_QPA_PLATFORM", "").lower() == "offscreen"
+            ):
+                return
             from pymorgan.gui.updater import UpdateCheckWorker
 
             worker = UpdateCheckWorker(
                 "https://github.com/RJFernandezTeran/PyMORGAN",
                 get_version("pymorgan"),
                 self,
+                use_bg_cooldown=True,
             )
 
             def _on_bg_info(info):
@@ -615,7 +628,12 @@ class SuiteLauncherDialog(QDialog):
                         from pymorgan.gui.updater import UpdateDialog
 
                         shared_settings = QSettings("RJFernandezTeran", "PyMORGAN_Suite_Updater")
-                        shared_settings.setValue("last_popup_ts", time.time())
+                        now = time.time()
+                        last_popup_ts = float(shared_settings.value("last_popup_ts", 0) or 0)
+                        last_popup_ver = str(shared_settings.value("last_popup_ver", "") or "")
+                        if last_popup_ver == info.latest_version and (now - last_popup_ts < 45):
+                            return
+                        shared_settings.setValue("last_popup_ts", now)
                         shared_settings.setValue("last_popup_ver", info.latest_version)
                         dlg = UpdateDialog(info, "PyMORGAN Suite", self)
                         dlg.exec()

@@ -141,7 +141,7 @@ def get_default_calibration_params(
         7: {"cwl": 2000.0, "ppnm_guess": 0.30, "min_wl": -300.0, "max_wl": 300.0,  "rel_min_nm": -653.0,  "rel_max_nm": 882.0,  "grating_degree": 2, "use_cross_corr": False, **common_bc},  # RAL Intensity
         8: {"cwl": 2000.0, "ppnm_guess": 0.30, "min_wl": 1500.0, "max_wl": 2500.0, "rel_min_nm": -200.0,  "rel_max_nm": 200.0,  "grating_degree": 2, "use_cross_corr": False, **common_bc},  # UniGE TRIR Intensity
         9: {"cwl": 2000.0, "ppnm_guess": 0.30, "min_wl": 1500.0, "max_wl": 2500.0, "rel_min_nm": -200.0,  "rel_max_nm": 200.0,  "grating_degree": 2, "use_cross_corr": False, **common_bc},  # UniGE TRIR Absorbance
-        10: {"cwl": 530.0, "ppnm_guess": 1.2,  "min_wl": 320.0,  "max_wl": 780.0,  "rel_min_nm": -190.0,  "rel_max_nm": 220.0,  "grating_degree": 3, "use_cross_corr": False, **common_bc},  # UniGE TRUVIS-II
+        10: {"cwl": 540.0, "ppnm_guess": 1.2,  "min_wl": 320.0,  "max_wl": 780.0,  "rel_min_nm": -200.0,  "rel_max_nm": 220.0,  "grating_degree": 3, "use_cross_corr": True,  **common_bc},  # UniGE TRUVIS-II
         11: {"cwl": 430.0, "ppnm_guess": 1.23, "min_wl": 360.0,  "max_wl": 515.0,  "rel_min_nm": -40.0,   "rel_max_nm": 115.0,  "grating_degree": 2, "use_cross_corr": False, **common_bc},  # Light Conversion HARPIA-TA (Int.) UV
         12: {"cwl": 2000.0, "ppnm_guess": 0.30, "min_wl": 1500.0, "max_wl": 2500.0, "rel_min_nm": -200.0, "rel_max_nm": 200.0,  "grating_degree": 2, "use_cross_corr": False, **common_bc},  # PyMESS (defaults to Mid-IR TRIR)
     }

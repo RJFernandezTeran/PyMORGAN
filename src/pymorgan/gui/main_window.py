@@ -170,11 +170,21 @@ class MainWindow(
 
         self._apply_button_aesthetics()
         self._apply_button_tooltips_and_states()
-        QTimer.singleShot(1500, self._start_bg_update_check)
+        if (
+            "PYTEST_CURRENT_TEST" not in os.environ
+            and os.environ.get("QT_QPA_PLATFORM", "").lower() != "offscreen"
+        ):
+            QTimer.singleShot(1500, self._start_bg_update_check)
 
     def _start_bg_update_check(self):
         """Perform a quiet, non-blocking background check for updates."""
         try:
+            if (
+                not self.isVisible()
+                or "PYTEST_CURRENT_TEST" in os.environ
+                or os.environ.get("QT_QPA_PLATFORM", "").lower() == "offscreen"
+            ):
+                return
             from .updater import check_for_updates_background
 
             check_for_updates_background(

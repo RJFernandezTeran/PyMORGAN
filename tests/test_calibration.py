@@ -436,11 +436,12 @@ def test_gui_pymess_and_harpia_range_selectors(qapp):
     assert win.cal_set_cwl.value() == pytest.approx(2000.0)
     assert win.cal_set_ppnm.value() == pytest.approx(0.30)
 
-    # Switch PyMESS to UV/Vis (TRUVIS-II pathway) -> shaper group hidden, CWL = 530.0
+    # Switch PyMESS to UV/Vis (TRUVIS-II pathway) -> shaper group hidden, CWL = 540.0, cross-corr on
     win.cal_range_combo.setCurrentIndex(1)
     assert win.cal_shaper_group.isHidden()
-    assert win.cal_set_cwl.value() == pytest.approx(530.0)
+    assert win.cal_set_cwl.value() == pytest.approx(540.0)
     assert win.cal_set_ppnm.value() == pytest.approx(1.20)
+    assert win.cal_set_cross_corr.isChecked() is True
 
     # Switch PyMESS to NIR (UniGE NIR-TA pathway) -> shaper group hidden, Prism model active, CWL = 1000.0
     win.cal_range_combo.setCurrentIndex(2)
@@ -610,8 +611,14 @@ def test_cal_ref_plot_shared_yaxis_and_tight_layout(qapp):
         canvas = win.cal_canvas_det1
         # Shared Y-axis: only the 4 subplots exist (no _ref_twin axis)
         assert len(canvas.fig.axes) == 4
-        ref_labels = {line.get_label() for line in canvas.ax_ref.lines}
-        assert {"Raw Ref", "Exp (BC)"} <= ref_labels
+        ref_lines = {line.get_label(): line for line in canvas.ax_ref.lines}
+        assert {"Raw Ref", "Exp (BC)"} <= set(ref_lines)
+        exp_line = ref_lines["Exp (BC)"]
+        raw_ref_line = ref_lines["Raw Ref"]
+        assert exp_line.get_linewidth() >= 2.4
+        assert exp_line.get_linewidth() > raw_ref_line.get_linewidth()
+        assert exp_line.get_zorder() > raw_ref_line.get_zorder()
+        assert str(exp_line.get_color()).lower() in ("#0066cc", "#58baff")
         p_raw = canvas.ax_raw.get_position()
         p_abs = canvas.ax_abs.get_position()
         p_ref = canvas.ax_ref.get_position()
@@ -898,8 +905,44 @@ def test_real_nsta_and_trir_improved_calibration_accuracy():
     rmse_pr_new = float(np.sqrt(np.mean((np.interp(pr_exp_pix, pix_ir, res_pr_new.wavenumber_cm1) - ir_ref_pks) ** 2)))
     rmse_pr_leg = float(np.sqrt(np.mean((np.interp(pr_exp_pix, pix_ir, res_pr_leg.wavenumber_cm1) - ir_ref_pks) ** 2)))
     assert rmse_pr_new < 0.80
-    assert rmse_pr_leg > 3.5
-    assert rmse_pr_new < 0.25 * rmse_pr_leg
+    assert rmse_pr_new <= rmse_pr_leg
+
+    # Under a +10 cm-1 CWL offset, legacy k=1 derivative fitting mode-hops (>5 cm-1) while arPLS+Global stays <0.80 cm-1
+    res_pr_new_off = fit_wavelength_axis(
+        abs_pr,
+        ref_diox.spectral_axis,
+        ref_diox.absorbance,
+        cal_type_code=8,
+        cwl=pr_air.cwl[0] + 10.0,
+        ppnm_guess=pr_air.gratings[0] / 500.0,
+        rel_min_nm=-200.0,
+        rel_max_nm=200.0,
+        grating_degree=2,
+        use_derivative="global",
+        baseline_method="arpls",
+        baseline_target="both",
+        convolve_ref=True,
+        probe_weights=pr_air.detector_data[0],
+    )
+    res_pr_leg_off = fit_wavelength_axis(
+        abs_pr,
+        ref_diox.spectral_axis,
+        ref_diox.absorbance,
+        cal_type_code=8,
+        cwl=pr_air.cwl[0] + 10.0,
+        ppnm_guess=pr_air.gratings[0] / 500.0,
+        rel_min_nm=-200.0,
+        rel_max_nm=200.0,
+        grating_degree=2,
+        use_derivative="1st",
+        baseline_method="legacy_poly",
+        baseline_target="none",
+        convolve_ref=False,
+    )
+    rmse_pr_new_off = float(np.sqrt(np.mean((np.interp(pr_exp_pix, pix_ir, res_pr_new_off.wavenumber_cm1) - ir_ref_pks) ** 2)))
+    rmse_pr_leg_off = float(np.sqrt(np.mean((np.interp(pr_exp_pix, pix_ir, res_pr_leg_off.wavenumber_cm1) - ir_ref_pks) ** 2)))
+    assert rmse_pr_new_off < 0.80
+    assert rmse_pr_leg_off > 5.0
 
     res_pu_new = fit_wavelength_axis(
         abs_pu,
@@ -973,6 +1016,76 @@ def test_gui_calibration_baseline_and_global_controls(qapp):
             assert shaper_res.sample_baseline_px is not None
             assert 2015.0 < shaper_res.wavenumber_cm1[0] < 2030.0
             assert 2200.0 < shaper_res.wavenumber_cm1[-1] < 2215.0
+    finally:
+        win.close()
+
+
+def test_truvis_ii_default_cwl_540_cross_corr_and_uncalibrated_meta(tmp_path, qapp):
+    from unittest.mock import patch
+
+    from pymorgan.cal import get_default_calibration_params
+    from pymorgan.gui.main_window import MainWindow
+
+    p_def = get_default_calibration_params(10)
+    assert p_def["cwl"] == pytest.approx(540.0)
+    assert p_def["use_cross_corr"] is True
+
+    # Synthetic uncalibrated 512-px TRUVIS-II folder with 0..511 pixel-index axis in _meta.txt
+    scan_dir = tmp_path / "probe_air_120000"
+    scan_dir.mkdir()
+    spec_file = scan_dir / "probe_air_120000_sp0_ds0_intensity_0.csv"
+    np.savetxt(spec_file, np.linspace(1000.0, 2000.0, 512), fmt="%.4f")
+    pix_axis = ", ".join(f"{i:.6f}" for i in range(512))
+    (scan_dir / "probe_air_120000_meta.txt").write_text(
+        f"-- SPECTROMETER --\nWavelength axis: [{pix_axis}]\nCenter wavelength: 0.000000\nGrating: 150 l/mm\n",
+        encoding="utf-8",
+    )
+
+    exp = load_experimental_spectrum(spec_file, cal_type_code=10)
+    assert exp.cwl[0] == 0.0
+    assert exp.wavelengths is None
+
+    # Synthetic uncalibrated 512-px PyMESS UV/Vis .h5 file where DAQ wrote CWL = 256 (N // 2 pixels)
+    import h5py
+
+    uv_bad_h5 = tmp_path / "Probe_air_truvis_uncal.h5"
+    with h5py.File(uv_bad_h5, "w") as f:
+        d = f.create_group("data")
+        d.create_dataset("probe_spectrum", data=np.linspace(1.0, 10.0, 512))
+        d.create_dataset("wavelengths", data=np.arange(512, dtype=float))
+        m = f.create_group("metadata")
+        m.attrs["setup_id"] = "TRUVIS_UniGE"
+        m.attrs["spectrometer_cwl_nm"] = "256.0"
+
+    exp_h5 = load_experimental_spectrum(uv_bad_h5, cal_type_code=12)
+    assert exp_h5.spectral_range == "uv-vis"
+    assert exp_h5.cwl[0] == 0.0
+    assert exp_h5.wavelengths is None
+
+    win = MainWindow()
+    win._ensure_calibration_initialized()
+    try:
+        idx_truvis = win.cal_type_combo.findText("UniGE TRUVIS-II (Intensity)")
+        assert idx_truvis >= 0
+        win.cal_type_combo.setCurrentIndex(idx_truvis)
+        assert win.cal_set_cwl.value() == pytest.approx(540.0)
+        assert win.cal_set_cross_corr.isChecked() is True
+
+        with patch(
+            "pymorgan.gui.tabs.calibration.QFileDialog.getOpenFileName",
+            return_value=(str(spec_file), ""),
+        ):
+            win._on_cal_load_probe()
+
+        assert win.cal_set_cwl.value() == pytest.approx(540.0)
+
+        with patch(
+            "pymorgan.gui.tabs.calibration.QFileDialog.getOpenFileName",
+            return_value=(str(uv_bad_h5), ""),
+        ):
+            win._on_cal_load_probe()
+
+        assert win.cal_set_cwl.value() == pytest.approx(540.0)
     finally:
         win.close()
 

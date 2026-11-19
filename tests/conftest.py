@@ -35,6 +35,17 @@ def _close_figures():
 
 
 @pytest.fixture(autouse=True)
+def _block_live_bg_update_checks(monkeypatch):
+    """Prevent MainWindow background startup update checks from hitting GitHub during pytest."""
+    try:
+        from pymorgan.gui.main_window import MainWindow
+
+        monkeypatch.setattr(MainWindow, "_start_bg_update_check", lambda _self: None)
+    except Exception:
+        pass
+
+
+@pytest.fixture(autouse=True)
 def _cleanup_qt():
     yield
     try:

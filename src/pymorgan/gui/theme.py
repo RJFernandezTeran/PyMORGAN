@@ -47,6 +47,7 @@ DARK_TRACE_MAP = {
     "tab:orange": "#ffb35c",
     "tab:green": "#5fd98a",
     "tab:brown": "#d9a06b",
+    "#0066cc": "#58baff",
     "#000000": "#e6e6e6",
 }
 

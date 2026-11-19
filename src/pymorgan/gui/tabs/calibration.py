@@ -33,6 +33,7 @@ _DERIV_INDEX_TO_MODE = {0: "none", 1: "1st", 2: "2nd", 3: "global"}
 _DERIV_MODE_TO_INDEX = {v: k for k, v in _DERIV_INDEX_TO_MODE.items()}
 _BL_METHOD_ORDER = ["arpls", "asls", "snip", "modpoly", "legacy_poly"]
 _BL_TARGET_ORDER = ["both", "sample", "standard", "none"]
+_EXP_ABS_COLOR = "#0066cc"
 
 
 class CalibrationTabMixin:
@@ -553,7 +554,7 @@ class CalibrationTabMixin:
         ax = self.cal_canvas_det1.ax_abs
         ax.clear()
         ax.set_title("")
-        ax.plot(pix, abs_y, color="tab:purple", label="Calculated Abs")
+        ax.plot(pix, abs_y, color=_EXP_ABS_COLOR, linewidth=2.0, label="Calculated Abs", zorder=2)
         ax.grid(False)
         ax.axhline(0, color="0.75", lw=0.75, zorder=0)
         ax.set_xlabel("Pixel", fontweight="bold", fontsize=8)
@@ -652,8 +653,8 @@ class CalibrationTabMixin:
             ref_x_cut_plot,
             ref_y_cut_plot,
             color="black",
-            linewidth=1.4,
-            alpha=1.0,
+            linewidth=1.3,
+            alpha=0.95,
             linestyle="-",
             label=ref_label,
             zorder=2,
@@ -663,21 +664,22 @@ class CalibrationTabMixin:
                 ref_x_cut_plot,
                 conv_y_plot,
                 color="red",
-                linewidth=1.8,
-                alpha=0.6,
+                linewidth=1.5,
+                alpha=0.72,
                 linestyle="-",
                 label=rf"Conv Ref ($\sigma$={res.sigma_opt:.2f})",
-                zorder=4,
+                zorder=3,
             )
 
         ax_ref_plot.plot(
             ref_x_cut_plot,
             model_y_fit_plot,
-            color="tab:purple",
-            alpha=0.75,
-            linewidth=1.8,
+            color=_EXP_ABS_COLOR,
+            alpha=0.92,
+            linewidth=2.6,
+            linestyle="-",
             label=exp_label,
-            zorder=3,
+            zorder=5,
         )
 
         y_lo = min(float(np.min(ref_y_cut_plot)), float(np.min(model_y_fit_plot)))
@@ -717,9 +719,9 @@ class CalibrationTabMixin:
                 sample_bl,
                 color="tab:orange",
                 linestyle="--",
-                linewidth=1.4,
+                linewidth=1.6,
                 label="Baseline (sample)",
-                zorder=2,
+                zorder=3,
             )
             return
 
@@ -750,9 +752,9 @@ class CalibrationTabMixin:
                 baseline_meas,
                 color="tab:orange",
                 linestyle="--",
-                linewidth=1.4,
+                linewidth=1.6,
                 label="Baseline (active)",
-                zorder=2,
+                zorder=3,
             )
 
     def _update_cal_fit_plot_det1(self, res):
@@ -864,7 +866,7 @@ class CalibrationTabMixin:
             abs_y[valid] = -np.log10(i_svt[valid] / i_probe[valid])
 
             ax_abs.clear()
-            ax_abs.plot(pix, abs_y, color="tab:purple", linewidth=1.8, label="Abs", zorder=1)
+            ax_abs.plot(pix, abs_y, color=_EXP_ABS_COLOR, linewidth=2.0, label="Abs", zorder=2)
             self._plot_cal_abs_baseline(ax_abs, pix, abs_y, res, is_ir=is_ir, do_baseline=do_baseline)
 
             ax_abs.grid(False)
@@ -909,9 +911,9 @@ class CalibrationTabMixin:
                 led.set_state("loaded")
             self.statusBar().showMessage(f"Loaded Probe Spectrum: {Path(file_path).name}")
 
-            # Update Fit Settings tab with parsed metadata (preserving HARPIA UV/Vis preset CWL)
+            # Update Fit Settings tab with parsed metadata (preserving fixed TRUVIS-II / HARPIA preset CWL)
             is_ir = eff_code in (1, 4, 6, 7, 8, 9)
-            if hasattr(self, "cal_set_cwl") and exp_data.cwl and exp_data.cwl[0] > 0 and cal_type_idx != 11:
+            if hasattr(self, "cal_set_cwl") and exp_data.cwl and exp_data.cwl[0] > 0 and eff_code not in (10, 11):
                 cwl_val = exp_data.cwl[0]
                 self.cal_set_cwl.setValue(round(float(cwl_val), 2))
             if hasattr(self, "cal_set_ppnm") and exp_data.gratings and exp_data.gratings[0] > 0 and eff_code != 10:
@@ -1717,7 +1719,7 @@ class CalibrationTabMixin:
             valid = (y_pump_air > 0) & (y_pump_solv > 0)
             a_pump = np.zeros_like(y_pump_air)
             a_pump[valid] = -np.log10(y_pump_solv[valid] / y_pump_air[valid])
-            ax_abs.plot(pixels, a_pump, color="tab:purple", linewidth=1.8, label="Abs")
+            ax_abs.plot(pixels, a_pump, color=_EXP_ABS_COLOR, linewidth=2.0, label="Abs", zorder=2)
             self._plot_cal_abs_baseline(ax_abs, pixels, a_pump, fit_res, is_ir=True, do_baseline=do_baseline)
 
         ax_abs.grid(False)

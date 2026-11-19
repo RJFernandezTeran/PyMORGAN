@@ -20,10 +20,11 @@ import time
 import urllib.error
 import urllib.request
 import zipfile
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+import defusedxml.ElementTree as DET
 from packaging.version import InvalidVersion, Version
 from PyQt6.QtCore import QCoreApplication, QSettings, Qt, QThread, QUrl, pyqtSignal
 from PyQt6.QtGui import QDesktopServices
@@ -42,6 +43,52 @@ from PyQt6.QtWidgets import (
 )
 
 BLEEDING_EDGE_DIR = Path.home() / ".config" / "pymorgan" / "bleeding_edge_src"
+UPDATER_CACHE_FILE = Path.home() / ".config" / "pymorgan" / "updater_cache.json"
+BACKGROUND_CHECK_COOLDOWN_S = 900.0
+_ATOM_NS = "{http://www.w3.org/2005/Atom}"
+
+
+def _is_headless_test_env() -> bool:
+    """Return True when running inside pytest or an offscreen Qt test harness."""
+    return (
+        "PYTEST_CURRENT_TEST" in os.environ
+        or "pytest" in sys.modules
+        or os.environ.get("QT_QPA_PLATFORM", "").lower() == "offscreen"
+    )
+
+
+def _github_headers(*, accept_json: bool = False) -> dict[str, str]:
+    """Build HTTP headers for GitHub requests, attaching an env token if available."""
+    headers = {"User-Agent": "PyMORGAN-PyRATE-TA-Updater"}
+    if accept_json:
+        headers["Accept"] = "application/vnd.github.v3+json"
+    if not _is_headless_test_env():
+        token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or ""
+        if token.strip():
+            headers["Authorization"] = f"Bearer {token.strip()}"
+    return headers
+
+
+def _load_updater_cache() -> dict[str, Any]:
+    """Load persistent ETag/cooldown cache (disabled in headless pytest runs)."""
+    if _is_headless_test_env() or not UPDATER_CACHE_FILE.is_file():
+        return {}
+    try:
+        data = json.loads(UPDATER_CACHE_FILE.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_updater_cache(cache: dict[str, Any]) -> None:
+    """Persist ETag/cooldown cache without interrupting updater flows on I/O errors."""
+    if _is_headless_test_env():
+        return
+    try:
+        UPDATER_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        UPDATER_CACHE_FILE.write_text(json.dumps(cache, indent=2), encoding="utf-8")
+    except Exception:
+        pass
 
 
 @dataclass
@@ -117,6 +164,79 @@ def _select_platform_asset(assets: list[dict[str, Any]]) -> dict[str, Any] | Non
     return None
 
 
+def _atom_find(parent: Any, tag: str) -> Any:
+    """Find child element matching ``tag`` with or without Atom XML namespace."""
+    el = parent.find(f"{_ATOM_NS}{tag}")
+    return el if el is not None else parent.find(tag)
+
+
+def _atom_findall(parent: Any, tag: str) -> list[Any]:
+    """Find child elements matching ``tag`` with or without Atom XML namespace."""
+    els = parent.findall(f"{_ATOM_NS}{tag}")
+    return els if els else parent.findall(tag)
+
+
+def _atom_html_to_markdown(raw_html: str) -> str:
+    """Convert GitHub Atom HTML release notes to simple Markdown for UpdateDialog."""
+    if not raw_html or not raw_html.strip():
+        return ""
+    txt = raw_html
+    txt = re.sub(r"<h[1-3][^>]*>(.*?)</h[1-3]>", r"\n### \1\n", txt, flags=re.I | re.S)
+    txt = re.sub(r"<li[^>]*>(.*?)</li>", r"\n- \1", txt, flags=re.I | re.S)
+    txt = re.sub(r"<(?:code|tt)[^>]*>(.*?)</(?:code|tt)>", r"`\1`", txt, flags=re.I | re.S)
+    txt = re.sub(r"<(?:strong|b)[^>]*>(.*?)</(?:strong|b)>", r"**\1**", txt, flags=re.I | re.S)
+    txt = re.sub(
+        r"<a[^>]*href=[\"']([^\"']+)[\"'][^>]*>(.*?)</a>",
+        r"[\2](\1)",
+        txt,
+        flags=re.I | re.S,
+    )
+    txt = re.sub(r"<br\s*/?>|</(?:p|div|pre|ul|ol)>", "\n", txt, flags=re.I)
+    txt = re.sub(r"<[^>]+>", "", txt)
+    txt = html.unescape(txt)
+    lines = [re.sub(r"[ \t]+", " ", ln).strip() for ln in txt.splitlines()]
+    return "\n".join(ln for ln in lines if ln).strip()
+
+
+def _fetch_commits_atom(repo_slug: str, timeout: float = 5.0) -> tuple[str, str, str]:
+    """Fetch latest commit SHA, date, and title from GitHub's zero-quota Atom feed."""
+    atom_url = f"https://github.com/{repo_slug}/commits/main.atom"
+    req = urllib.request.Request(atom_url, headers={"User-Agent": "PyMORGAN-PyRATE-TA-Updater"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        xml_bytes = resp.read()
+    root = DET.fromstring(xml_bytes)
+    entry = _atom_find(root, "entry")
+    if entry is None:
+        return "", "", ""
+
+    commit_sha = ""
+    for link_el in _atom_findall(entry, "link"):
+        href = link_el.attrib.get("href", "")
+        if "/commit/" in href:
+            commit_sha = href.rsplit("/commit/", 1)[-1].strip()[:7]
+            break
+    if not commit_sha:
+        id_el = _atom_find(entry, "id")
+        if id_el is not None and id_el.text and "/" in id_el.text:
+            commit_sha = id_el.text.rsplit("/", 1)[-1].strip()[:7]
+
+    upd_el = _atom_find(entry, "updated")
+    commit_date = (upd_el.text or "").strip()[:10] if upd_el is not None else ""
+
+    commit_msg = ""
+    content_el = _atom_find(entry, "content")
+    if content_el is not None and content_el.text:
+        plain = html.unescape(re.sub(r"<[^>]+>", "", content_el.text)).strip()
+        if plain:
+            commit_msg = plain.splitlines()[0].strip()
+    if not commit_msg:
+        title_el = _atom_find(entry, "title")
+        if title_el is not None and title_el.text:
+            commit_msg = title_el.text.strip().splitlines()[0].strip()
+
+    return commit_sha, commit_date, commit_msg
+
+
 def _fetch_bleeding_edge_metadata(
     repo_slug: str, timeout: float = 5.0
 ) -> tuple[str, str, str, str]:
@@ -140,26 +260,164 @@ def _fetch_bleeding_edge_metadata(
     commit_date = ""
     commit_msg = ""
     try:
-        commit_url = f"https://api.github.com/repos/{repo_slug}/commits/main"
-        req_c = urllib.request.Request(
-            commit_url,
-            headers={
-                "User-Agent": "PyMORGAN-PyRATE-TA-Updater",
-                "Accept": "application/vnd.github.v3+json",
-            },
-        )
-        with urllib.request.urlopen(req_c, timeout=timeout) as resp_c:
-            c_data = json.loads(resp_c.read().decode("utf-8", errors="replace"))
-        commit_sha = str(c_data.get("sha", ""))[:7]
-        commit_obj = c_data.get("commit", {}) or {}
-        author_obj = commit_obj.get("author", {}) or {}
-        commit_date = str(author_obj.get("date", ""))[:10]
-        raw_msg = str(commit_obj.get("message", "")).strip()
-        commit_msg = raw_msg.splitlines()[0] if raw_msg else ""
+        commit_sha, commit_date, commit_msg = _fetch_commits_atom(repo_slug, timeout=timeout)
     except Exception:
         pass
 
+    if not commit_sha:
+        try:
+            commit_url = f"https://api.github.com/repos/{repo_slug}/commits/main"
+            req_c = urllib.request.Request(
+                commit_url,
+                headers=_github_headers(accept_json=True),
+            )
+            with urllib.request.urlopen(req_c, timeout=timeout) as resp_c:
+                c_data = json.loads(resp_c.read().decode("utf-8", errors="replace"))
+            commit_sha = str(c_data.get("sha", ""))[:7]
+            commit_obj = c_data.get("commit", {}) or {}
+            author_obj = commit_obj.get("author", {}) or {}
+            commit_date = str(author_obj.get("date", ""))[:10]
+            raw_msg = str(commit_obj.get("message", "")).strip()
+            commit_msg = raw_msg.splitlines()[0] if raw_msg else ""
+        except Exception:
+            pass
+
     return be_version, commit_sha, commit_date, commit_msg
+
+
+def _fallback_platform_asset(
+    repo_slug: str,
+    tag_name: str,
+    release_ver: str,
+    timeout: float = 3.5,
+) -> dict[str, Any] | None:
+    """Probe predictable GitHub release asset URLs when API metadata is unavailable."""
+    if not tag_name or not release_ver or "pymorgan" not in repo_slug.lower():
+        return None
+    if sys.platform == "win32":
+        candidates = (
+            f"PyMORGAN_Suite_Setup_v{release_ver}.exe",
+            f"PyMORGAN_Suite_v{release_ver}_Windows_x64_Portable.zip",
+        )
+    elif sys.platform == "darwin":
+        candidates = (f"PyMORGAN_Suite_v{release_ver}_macOS.dmg",)
+    else:
+        candidates = (f"PyMORGAN_Suite_v{release_ver}_Linux_x86_64.tar.gz",)
+
+    probe_timeout = min(timeout, 3.5)
+    for name in candidates:
+        url = f"https://github.com/{repo_slug}/releases/download/{tag_name}/{name}"
+        try:
+            req = urllib.request.Request(
+                url,
+                method="HEAD",
+                headers={"User-Agent": "PyMORGAN-PyRATE-TA-Updater"},
+            )
+            with urllib.request.urlopen(req, timeout=probe_timeout) as resp:
+                if getattr(resp, "status", 200) < 400:
+                    return {"name": name, "browser_download_url": url}
+        except Exception:
+            continue
+    return None
+
+
+def _fetch_release_via_web(
+    repo_slug: str, timeout: float = 6.0
+) -> tuple[str, str, str, str, str, dict[str, Any] | None]:
+    """Fallback release lookup via GitHub Atom feed or web redirect (zero API quota)."""
+    release_ver = ""
+    release_name = ""
+    release_notes = ""
+    html_url = f"https://github.com/{repo_slug}"
+    published_at = ""
+    tag_name = ""
+
+    atom_url = f"https://github.com/{repo_slug}/releases.atom"
+    try:
+        req = urllib.request.Request(atom_url, headers={"User-Agent": "PyMORGAN-PyRATE-TA-Updater"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            xml_bytes = resp.read()
+        root = DET.fromstring(xml_bytes)
+        entry = _atom_find(root, "entry")
+        if entry is not None:
+            for link_el in _atom_findall(entry, "link"):
+                href = link_el.attrib.get("href", "")
+                if "/releases/tag/" in href:
+                    html_url = href
+                    tag_name = href.rsplit("/releases/tag/", 1)[-1].strip()
+                    break
+            if not tag_name:
+                id_el = _atom_find(entry, "id")
+                if id_el is not None and id_el.text and "/" in id_el.text:
+                    tag_name = id_el.text.rsplit("/", 1)[-1].strip()
+            title_el = _atom_find(entry, "title")
+            title_txt = (title_el.text or "").strip() if title_el is not None else ""
+            if not tag_name:
+                tag_name = title_txt
+            release_ver = normalize_version(tag_name)
+            release_name = title_txt or tag_name
+            upd_el = _atom_find(entry, "updated")
+            published_at = (upd_el.text or "").strip()[:10] if upd_el is not None else ""
+            content_el = _atom_find(entry, "content")
+            if content_el is not None and content_el.text:
+                release_notes = _atom_html_to_markdown(content_el.text)
+    except Exception:
+        pass
+
+    if not release_ver:
+        latest_url = f"https://github.com/{repo_slug}/releases/latest"
+        try:
+            req = urllib.request.Request(
+                latest_url, headers={"User-Agent": "PyMORGAN-PyRATE-TA-Updater"}
+            )
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                final_url = str(resp.geturl())
+            if "/releases/tag/" in final_url:
+                html_url = final_url
+                tag_name = final_url.rsplit("/releases/tag/", 1)[-1].split("?")[0].strip()
+                release_ver = normalize_version(tag_name)
+                release_name = tag_name
+        except Exception:
+            pass
+
+    installer_asset = _fallback_platform_asset(repo_slug, tag_name, release_ver, timeout=timeout)
+    return release_ver, release_name, release_notes, html_url, published_at, installer_asset
+
+
+def _recompute_update_flags(info: UpdateInfo, current_version: str) -> UpdateInfo:
+    """Re-evaluate version comparison flags on an UpdateInfo instance for ``current_version``."""
+    cur_norm = normalize_version(current_version)
+    has_rel = is_newer_version(info.release_version, cur_norm) if info.release_version else False
+    has_be = (
+        is_newer_version(info.bleeding_edge_version, cur_norm)
+        if info.bleeding_edge_version
+        else False
+    )
+    if info.bleeding_edge_version and info.release_version:
+        latest = (
+            info.bleeding_edge_version
+            if is_newer_version(info.bleeding_edge_version, info.release_version)
+            else info.release_version
+        )
+    else:
+        latest = info.bleeding_edge_version or info.release_version or cur_norm
+    return UpdateInfo(
+        is_update_available=has_rel or has_be,
+        current_version=cur_norm,
+        latest_version=latest,
+        release_name=info.release_name or f"v{latest}",
+        release_notes=info.release_notes,
+        html_url=info.html_url,
+        published_at=info.published_at or info.bleeding_edge_date,
+        installer_asset=info.installer_asset,
+        release_version=info.release_version,
+        bleeding_edge_version=info.bleeding_edge_version,
+        bleeding_edge_commit=info.bleeding_edge_commit,
+        bleeding_edge_date=info.bleeding_edge_date,
+        bleeding_edge_message=info.bleeding_edge_message,
+        has_release_update=has_rel,
+        has_bleeding_edge_update=has_be,
+    )
 
 
 def fetch_latest_release(
@@ -174,10 +432,15 @@ def fetch_latest_release(
     else:
         repo_slug = clean_url
 
-    headers = {
-        "User-Agent": "PyMORGAN-PyRATE-TA-Updater",
-        "Accept": "application/vnd.github.v3+json",
-    }
+    cache = _load_updater_cache()
+    repo_cache = cache.get(repo_slug, {})
+    if not isinstance(repo_cache, dict):
+        repo_cache = {}
+
+    headers = _github_headers(accept_json=True)
+    cached_etag = repo_cache.get("etag_release")
+    if isinstance(cached_etag, str) and cached_etag:
+        headers["If-None-Match"] = cached_etag
 
     release_ver = ""
     release_name = ""
@@ -186,62 +449,77 @@ def fetch_latest_release(
     published_at = ""
     installer_asset = None
 
-    # 1. Query latest formal GitHub Release (tolerating 404 if no release is published yet)
+    def _populate_from_release_json(data: dict[str, Any]) -> None:
+        nonlocal release_ver, release_name, release_notes, html_url, published_at, installer_asset
+        tag_name = str(data.get("tag_name", "") or "")
+        release_ver = normalize_version(tag_name)
+        release_name = str(data.get("name") or tag_name)
+        release_notes = str(data.get("body") or "")
+        html_url = str(data.get("html_url") or html_url)
+        published_at = str(data.get("published_at", "") or "")[:10]
+        installer_asset = _select_platform_asset(data.get("assets", []))
+
+    # 1. Query latest formal GitHub Release (with ETag cache and zero-quota Atom/web fallback)
     api_url = f"https://api.github.com/repos/{repo_slug}/releases/latest"
+    need_web_fallback = False
     try:
         req = urllib.request.Request(api_url, headers=headers)
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             if resp.status == 200:
                 data = json.loads(resp.read().decode("utf-8"))
-                tag_name = data.get("tag_name", "")
-                release_ver = normalize_version(tag_name)
-                release_name = data.get("name") or tag_name
-                release_notes = data.get("body") or ""
-                html_url = data.get("html_url") or html_url
-                published_at = data.get("published_at", "")[:10]
-                installer_asset = _select_platform_asset(data.get("assets", []))
+                if isinstance(data, dict):
+                    _populate_from_release_json(data)
+                    resp_headers = getattr(resp, "headers", None)
+                    new_etag = (
+                        resp_headers.get("ETag") if hasattr(resp_headers, "get") else None
+                    )
+                    if isinstance(new_etag, str) and new_etag:
+                        repo_cache["etag_release"] = new_etag
+                        repo_cache["release_payload"] = data
+                        cache[repo_slug] = repo_cache
+                        _save_updater_cache(cache)
     except urllib.error.HTTPError as http_err:
-        if http_err.code != 404:
-            raise
+        if http_err.code == 304 and isinstance(repo_cache.get("release_payload"), dict):
+            _populate_from_release_json(repo_cache["release_payload"])
+        elif http_err.code != 404:
+            need_web_fallback = True
     except Exception:
-        pass
+        need_web_fallback = True
 
-    # 2. Query main branch ("Bleeding Edge") __about__.py and latest commit
+    if need_web_fallback and not release_ver:
+        (
+            release_ver,
+            release_name,
+            release_notes,
+            fb_url,
+            published_at,
+            installer_asset,
+        ) = _fetch_release_via_web(repo_slug, timeout=timeout)
+        if fb_url:
+            html_url = fb_url
+
+    # 2. Query main branch ("Bleeding Edge") __about__.py and commits Atom feed
     be_ver, be_sha, be_date, be_msg = _fetch_bleeding_edge_metadata(repo_slug, timeout=timeout)
 
     if not release_ver and not be_ver:
         raise RuntimeError(f"Could not retrieve release or main branch version from {repo_slug}.")
 
-    has_rel_update = is_newer_version(release_ver, current_version) if release_ver else False
-    has_be_update = is_newer_version(be_ver, current_version) if be_ver else False
-    update_avail = has_rel_update or has_be_update
-
-    # Determine highest available version string
-    if be_ver and release_ver:
-        latest_ver = be_ver if is_newer_version(be_ver, release_ver) else release_ver
-    else:
-        latest_ver = be_ver or release_ver or current_version
-
-    if not release_name:
-        release_name = f"v{latest_ver}"
-
-    return UpdateInfo(
-        is_update_available=update_avail,
+    info = UpdateInfo(
+        is_update_available=False,
         current_version=normalize_version(current_version),
-        latest_version=latest_ver,
+        latest_version=normalize_version(current_version),
         release_name=release_name,
         release_notes=release_notes,
         html_url=html_url,
-        published_at=published_at or be_date,
+        published_at=published_at,
         installer_asset=installer_asset,
         release_version=release_ver,
         bleeding_edge_version=be_ver,
         bleeding_edge_commit=be_sha,
         bleeding_edge_date=be_date,
         bleeding_edge_message=be_msg,
-        has_release_update=has_rel_update,
-        has_bleeding_edge_update=has_be_update,
     )
+    return _recompute_update_flags(info, current_version)
 
 
 def _is_dark_mode() -> bool:
@@ -391,15 +669,60 @@ class UpdateCheckWorker(QThread):
     check_finished = pyqtSignal(object)  # UpdateInfo
     check_failed = pyqtSignal(str)
 
-    def __init__(self, repo_url: str, current_version: str, parent: QWidget | None = None):
+    def __init__(
+        self,
+        repo_url: str,
+        current_version: str,
+        parent: QWidget | None = None,
+        *,
+        use_bg_cooldown: bool = False,
+    ):
         super().__init__(parent)
         self.repo_url = repo_url
         self.current_version = current_version
+        self.use_bg_cooldown = use_bg_cooldown
 
     def run(self):
         try:
+            clean_url = self.repo_url.rstrip("/")
+            repo_slug = (
+                clean_url.split("github.com/")[-1] if "github.com/" in clean_url else clean_url
+            )
+            headless = _is_headless_test_env()
+
+            if self.use_bg_cooldown and not headless:
+                cache = _load_updater_cache()
+                repo_cache = cache.get(repo_slug, {})
+                bg_entry = (
+                    repo_cache.get("last_bg_check") if isinstance(repo_cache, dict) else None
+                )
+                if (
+                    isinstance(bg_entry, dict)
+                    and (time.time() - float(bg_entry.get("ts", 0.0))) < BACKGROUND_CHECK_COOLDOWN_S
+                    and isinstance(bg_entry.get("info"), dict)
+                ):
+                    try:
+                        cached_info = UpdateInfo(**bg_entry["info"])
+                        self.check_finished.emit(
+                            _recompute_update_flags(cached_info, self.current_version)
+                        )
+                        return
+                    except Exception:
+                        pass
+
             info = fetch_latest_release(self.repo_url, self.current_version)
+            if not headless:
+                cache = _load_updater_cache()
+                repo_cache = cache.get(repo_slug, {})
+                if not isinstance(repo_cache, dict):
+                    repo_cache = {}
+                repo_cache["last_bg_check"] = {"ts": time.time(), "info": asdict(info)}
+                cache[repo_slug] = repo_cache
+                _save_updater_cache(cache)
+
             self.check_finished.emit(info)
+        except urllib.error.HTTPError as err:
+            self.check_failed.emit(f"GitHub HTTP {err.code}: {err.reason}")
         except urllib.error.URLError as err:
             self.check_failed.emit(f"Network connection error: {err.reason}")
         except Exception as exc:
@@ -1182,7 +1505,15 @@ def check_for_updates_background(
     show_popup: bool = True,
 ) -> None:
     """Check for updates on startup (both release and main) and notify the user with a popup."""
-    worker = UpdateCheckWorker(github_url, current_version, window)
+    if not force and _is_headless_test_env():
+        return
+
+    worker = UpdateCheckWorker(
+        github_url,
+        current_version,
+        window,
+        use_bg_cooldown=not force,
+    )
 
     def on_success(info: UpdateInfo):
         if not info.is_update_available:
