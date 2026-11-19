@@ -10,6 +10,15 @@ This package handles:
 
 from __future__ import annotations
 
+from .baseline import (
+    BASELINE_METHODS,
+    BASELINE_TARGETS,
+    baseline_arpls,
+    baseline_asls,
+    baseline_modpoly,
+    baseline_snip,
+    estimate_baseline,
+)
 from .fit import CalibrationResult, fit_wavelength_axis, get_default_calibration_params
 from .load import (
     CALIBRATION_TYPES,
@@ -40,6 +49,13 @@ from .spectrum_fit import (
 from .utils import merge_calibration, save_calibration_file, split_calibration
 
 __all__ = [
+    "BASELINE_METHODS",
+    "BASELINE_TARGETS",
+    "baseline_arpls",
+    "baseline_asls",
+    "baseline_modpoly",
+    "baseline_snip",
+    "estimate_baseline",
     "CalibrationResult",
     "SpectrumFitResult",
     "ProbeFitResult",

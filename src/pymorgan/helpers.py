@@ -60,6 +60,8 @@ def setXYlabels(
     if setXLabel:
         if normX:
             where.set_xlabel(r"Norm. %s" % (XUnits["lbl"]))
+        elif not XUnits.get("ltx"):
+            where.set_xlabel(r"%s" % (XUnits["lbl"]))
         else:
             match labelStyle:
                 case "()":
@@ -68,6 +70,8 @@ def setXYlabels(
                     where.set_xlabel(r"%s [%s]" % (XUnits["lbl"], XUnits["ltx"]))
                 case "/":
                     where.set_xlabel(r"%s / %s" % (XUnits["lbl"], XUnits["ltx"]))
+                case _:
+                    where.set_xlabel(r"%s %s" % (XUnits["lbl"], XUnits["ltx"]))
 
     if YUnits["ltx"] == r"$\times 10^{3}$":
         labelStyle = ""
@@ -75,6 +79,8 @@ def setXYlabels(
     if setYLabel:
         if normY:
             where.set_ylabel(r"Norm. %s" % (YUnits["lbl"]))
+        elif not YUnits.get("ltx"):
+            where.set_ylabel(r"%s" % (YUnits["lbl"]))
         else:
             match labelStyle:
                 case "()":
@@ -250,6 +256,36 @@ def native_x_unit(Units):
     return _NATIVE_FROM_LBL.get((Units or {}).get("unitsL_lbl", ""), "nm")
 
 
+def is_uncalibrated_probe(units_or_dataset) -> bool:
+    """Return True when a dataset or Units dict uses uncalibrated pixel indices for its probe axis."""
+    if units_or_dataset is None:
+        return False
+    if isinstance(units_or_dataset, dict):
+        units = units_or_dataset
+        cal_source = str(units.get("cal_source") or "")
+    else:
+        units = getattr(units_or_dataset, "units", None) or {}
+        if not isinstance(units, dict):
+            units = {}
+        cal_source = str(
+            getattr(units_or_dataset, "cal_source", None)
+            or units.get("cal_source")
+            or (
+                units_or_dataset.calibration_status()
+                if hasattr(units_or_dataset, "calibration_status")
+                else ""
+            )
+        )
+    cs_low = cal_source.lower()
+    if "uncalibrated" in cs_low or "pixel ind" in cs_low:
+        return True
+    if str(units.get("L", "")).lower() in ("px", "pixel", "pixels"):
+        return True
+    if str(units.get("unitsL_lbl", "")).lower().startswith("pixel"):
+        return True
+    return False
+
+
 def complementary_unit(unit):
     """Complementary unit for the secondary axis.
 
@@ -280,6 +316,8 @@ class AxisUnit:
     def label(self, style: str = "()") -> str:
         """Axis label in the delimiter convention of ``Settings.label_style``."""
         latex = self.latex
+        if not latex:
+            return f"{self.quantity}"
         if self.scale and self.scale != 1.0:
             latex = r"$10^{%d}$ %s" % (int(round(np.log10(self.scale))), latex)
         match style:
@@ -343,6 +381,8 @@ def signal_axis_unit(units) -> AxisUnit:
 
 def spectral_axis_unit(unit_token: str, scale: float = 1.0) -> AxisUnit:
     """Spectral (probe/pump) axis unit for a unit token such as ``"cm-1"``."""
+    if unit_token in ("px", "pixel", "pixels"):
+        return AxisUnit(quantity="Pixel index", unit="px", latex="", scale=1.0)
     quantity, latex = _UNIT_LABEL.get(unit_token, ("Wavenumber", unit_token))
     return AxisUnit(quantity=quantity, unit=unit_token, latex=latex, scale=scale)
 

@@ -15,7 +15,6 @@ os.environ.setdefault("QT_API", "pyqt6")
 from pathlib import Path
 
 import numpy as np
-from mpl_axes_aligner import align
 from PyQt6.QtWidgets import (
     QDialog,
     QFileDialog,
@@ -29,6 +28,11 @@ from ...log import get_logger
 from ..busy import busy_guard
 
 logger = get_logger(__name__)
+
+_DERIV_INDEX_TO_MODE = {0: "none", 1: "1st", 2: "2nd", 3: "global"}
+_DERIV_MODE_TO_INDEX = {v: k for k, v in _DERIV_INDEX_TO_MODE.items()}
+_BL_METHOD_ORDER = ["arpls", "asls", "snip", "modpoly", "legacy_poly"]
+_BL_TARGET_ORDER = ["both", "sample", "standard", "none"]
 
 
 class CalibrationTabMixin:
@@ -108,16 +112,36 @@ class CalibrationTabMixin:
         if hasattr(self, "cal_chk_do_baseline") and self.cal_chk_do_baseline is not None:
             self.cal_chk_do_baseline.toggled.connect(self._on_cal_baseline_toggled)
 
+        if hasattr(self, "cal_set_subtract_ref_baseline") and self.cal_set_subtract_ref_baseline is not None:
+            self.cal_set_subtract_ref_baseline.toggled.connect(self._on_cal_baseline_toggled)
+
+        if hasattr(self, "cal_set_bl_method") and self.cal_set_bl_method is not None:
+            self.cal_set_bl_method.currentIndexChanged.connect(self._update_cal_baseline_control_states)
+
+        if hasattr(self, "cal_set_bl_target") and self.cal_set_bl_target is not None:
+            self.cal_set_bl_target.currentIndexChanged.connect(self._update_cal_baseline_control_states)
+
         if hasattr(self, "cal_range_combo") and self.cal_range_combo is not None:
+            self.cal_range_combo.view().setMinimumWidth(200)
             self.cal_range_combo.currentIndexChanged.connect(self._on_cal_range_changed)
 
         if hasattr(self, "cal_type_combo") and self.cal_type_combo is not None:
+            self.cal_type_combo.view().setMinimumWidth(240)
             default_cal_type = getattr(pm.get_settings(), "default_calibration_datatype", "UniGE TRIR (Intensity)")
             idx = self.cal_type_combo.findText(default_cal_type)
             if idx >= 0:
                 self.cal_type_combo.setCurrentIndex(idx)
             self.cal_type_combo.currentIndexChanged.connect(self._on_cal_type_changed)
             self._on_cal_type_changed(self.cal_type_combo.currentIndex())
+
+        if hasattr(self, "cal_scroll_area") and hasattr(self, "cal_scroll_widget"):
+            tight_w = max(
+                204,
+                self.cal_scroll_widget.minimumSizeHint().width()
+                + self.cal_scroll_area.frameWidth() * 2
+                + 2,
+            )
+            self.cal_scroll_area.setFixedWidth(tight_w)
 
         if hasattr(self, "cal_spec_btn_load_probe") and self.cal_spec_btn_load_probe is not None:
             self.cal_spec_btn_load_probe.clicked.connect(self._on_cal_load_probe)
@@ -342,17 +366,104 @@ class CalibrationTabMixin:
             self.cal_set_grating_model.setCurrentIndex(deg - 1)
             self.cal_set_grating_model.setToolTip("Polynomial degree for grating dispersion model (1=Linear, 2=Quadratic, 3=Cubic).")
         if hasattr(self, "cal_set_deriv_mode") and self.cal_set_deriv_mode is not None:
-            self.cal_set_deriv_mode.setCurrentIndex(1)  # Default to 1st Derivative (dY/dx)
-            self.cal_set_deriv_mode.setToolTip("Derivative fitting mode (Standard, 1st Derivative, 2nd Derivative) to eliminate baseline drift.")
+            deriv_idx = _DERIV_MODE_TO_INDEX.get(p_def.get("use_derivative", "global"), 3)
+            self.cal_set_deriv_mode.setCurrentIndex(deriv_idx)
+            self.cal_set_deriv_mode.setToolTip(
+                "Fitting objective: Standard, 1st Deriv., 2nd Deriv., or Global (0th + 1st + 2nd simultaneously)."
+            )
         if hasattr(self, "cal_set_savgol_win") and self.cal_set_savgol_win is not None:
             self.cal_set_savgol_win.setToolTip("Window length (odd integer >= 5) for Savitzky-Golay derivative filter.")
         if hasattr(self, "cal_set_cross_corr") and self.cal_set_cross_corr is not None:
             self.cal_set_cross_corr.setChecked(p_def.get("use_cross_corr", False))
             self.cal_set_cross_corr.setToolTip("Pre-align spectrum peaks via 1D cross-correlation to estimate optimal initial guess.")
         if hasattr(self, "cal_set_subtract_ref_baseline") and self.cal_set_subtract_ref_baseline is not None:
-            self.cal_set_subtract_ref_baseline.setToolTip("Subtract fitted polynomial baseline from reference spectrum before overlay comparison.")
+            self.cal_set_subtract_ref_baseline.setToolTip("Subtract estimated baseline from reference spectrum in the overlay comparison.")
         if hasattr(self, "cal_set_convolve_ref") and self.cal_set_convolve_ref is not None:
+            self.cal_set_convolve_ref.setChecked(p_def.get("convolve_ref", True))
             self.cal_set_convolve_ref.setToolTip("Refine fit by convolving reference spectrum with Gaussian instrument response function.")
+
+        if hasattr(self, "cal_set_bl_method") and self.cal_set_bl_method is not None:
+            bm = p_def.get("baseline_method", "arpls")
+            self.cal_set_bl_method.setCurrentIndex(_BL_METHOD_ORDER.index(bm) if bm in _BL_METHOD_ORDER else 0)
+            self.cal_set_bl_method.setToolTip(
+                "Spectroscopic baseline estimator (arPLS, AsLS, SNIP, IModPoly) or Legacy in-fit polynomial."
+            )
+        if hasattr(self, "cal_set_bl_target") and self.cal_set_bl_target is not None:
+            bt = p_def.get("baseline_target", "both")
+            self.cal_set_bl_target.setCurrentIndex(_BL_TARGET_ORDER.index(bt) if bt in _BL_TARGET_ORDER else 0)
+            self.cal_set_bl_target.setToolTip(
+                "Apply baseline subtraction before fitting to Sample, Standard (on padded window), Both, or None."
+            )
+        if hasattr(self, "cal_set_bl_smooth") and self.cal_set_bl_smooth is not None:
+            self.cal_set_bl_smooth.setValue(float(p_def.get("baseline_smoothness", 0.20)))
+            self.cal_set_bl_smooth.setToolTip(
+                "Length-invariant baseline smoothness τ (0.02 = flexible, 0.20 = default, 1.00 = stiff)."
+            )
+        if hasattr(self, "cal_set_snr_weights") and self.cal_set_snr_weights is not None:
+            self.cal_set_snr_weights.setChecked(bool(p_def.get("use_snr_weights", True)))
+            self.cal_set_snr_weights.setToolTip(
+                "Weight fit residuals and sample baseline by blank/air probe intensity SNR."
+            )
+        self._update_cal_baseline_control_states()
+
+    def _update_cal_baseline_control_states(self, *_args):
+        """Enable/disable baseline sub-controls according to selected algorithm and target."""
+        bm_combo = getattr(self, "cal_set_bl_method", None)
+        bt_combo = getattr(self, "cal_set_bl_target", None)
+        smooth_spin = getattr(self, "cal_set_bl_smooth", None)
+
+        bm_idx = bm_combo.currentIndex() if bm_combo is not None else 0
+        bt_idx = bt_combo.currentIndex() if bt_combo is not None else 0
+        bm = _BL_METHOD_ORDER[bm_idx] if 0 <= bm_idx < len(_BL_METHOD_ORDER) else "arpls"
+        bt = _BL_TARGET_ORDER[bt_idx] if 0 <= bt_idx < len(_BL_TARGET_ORDER) else "both"
+
+        if bt_combo is not None:
+            bt_combo.setEnabled(bm != "legacy_poly")
+        if smooth_spin is not None:
+            smooth_spin.setEnabled(bm in ("arpls", "asls", "snip") and bt != "none")
+
+    def _read_cal_fit_options(self, p_def: dict) -> dict:
+        """Collect all spectrometer/shaper fit and baseline settings from the Fit Settings panel."""
+        deriv_idx = self.cal_set_deriv_mode.currentIndex() if hasattr(self, "cal_set_deriv_mode") else 3
+        bm_idx = self.cal_set_bl_method.currentIndex() if hasattr(self, "cal_set_bl_method") else 0
+        bt_idx = self.cal_set_bl_target.currentIndex() if hasattr(self, "cal_set_bl_target") else 0
+
+        return {
+            "cwl": self.cal_set_cwl.value() if hasattr(self, "cal_set_cwl") else p_def["cwl"],
+            "ppnm_guess": self.cal_set_ppnm.value() if hasattr(self, "cal_set_ppnm") else p_def["ppnm_guess"],
+            "rel_min_nm": self.cal_set_rel_min_nm.value() if hasattr(self, "cal_set_rel_min_nm") else p_def["rel_min_nm"],
+            "rel_max_nm": self.cal_set_rel_max_nm.value() if hasattr(self, "cal_set_rel_max_nm") else p_def["rel_max_nm"],
+            "grating_degree": (
+                (self.cal_set_grating_model.currentIndex() + 1)
+                if hasattr(self, "cal_set_grating_model")
+                else p_def.get("grating_degree", 2)
+            ),
+            "use_cross_corr": (
+                self.cal_set_cross_corr.isChecked()
+                if hasattr(self, "cal_set_cross_corr")
+                else p_def.get("use_cross_corr", False)
+            ),
+            "use_derivative": _DERIV_INDEX_TO_MODE.get(deriv_idx, "global"),
+            "savgol_window": self.cal_set_savgol_win.value() if hasattr(self, "cal_set_savgol_win") else 9,
+            "convolve_ref": (
+                self.cal_set_convolve_ref.isChecked()
+                if hasattr(self, "cal_set_convolve_ref")
+                else p_def.get("convolve_ref", True)
+            ),
+            "do_fit": self.cal_chk_do_fit.isChecked() if hasattr(self, "cal_chk_do_fit") else True,
+            "baseline_method": _BL_METHOD_ORDER[bm_idx] if 0 <= bm_idx < len(_BL_METHOD_ORDER) else "arpls",
+            "baseline_target": _BL_TARGET_ORDER[bt_idx] if 0 <= bt_idx < len(_BL_TARGET_ORDER) else "both",
+            "baseline_smoothness": (
+                self.cal_set_bl_smooth.value()
+                if hasattr(self, "cal_set_bl_smooth")
+                else float(p_def.get("baseline_smoothness", 0.20))
+            ),
+            "use_snr_weights": (
+                self.cal_set_snr_weights.isChecked()
+                if hasattr(self, "cal_set_snr_weights")
+                else bool(p_def.get("use_snr_weights", True))
+            ),
+        }
 
     def _get_cal_dialog_filter(self) -> tuple[str, str]:
         """Return (file_filter, default_pattern) sensitive to selected calibration setup type."""
@@ -362,7 +473,7 @@ class CalibrationTabMixin:
         specs = {
             "UoS TRIR": ("UoS TRIR files (*.2D);;All Files (*.*)", ""),
             "UniGE fsTA": ("UniGE fsTA files (*.dat);;All Files (*.*)", ""),
-            "UniGE nsTA": ("UniGE nsTA files (*.dat);;All Files (*.*)", ""),
+            "UniGE nsTA": ("UniGE nsTA files (*.dat *.wl);;All Files (*.*)", ""),
             "UZH Lab 2": ("UZH Lab 2 files (*.csv);;All Files (*.*)", "*ds0_intensity*.csv"),
             "UniGE NIR-TA": ("UniGE NIR-TA files (*.dat);;All Files (*.*)", ""),
             "RAL LIFEtime (Absorbance)": ("RAL LIFEtime files (*.csv);;All Files (*.*)", ""),
@@ -413,7 +524,43 @@ class CalibrationTabMixin:
             ax.set_ylabel("Counts", fontweight="bold", fontsize=8)
             ax.tick_params(labelbottom=True)
             canvas.make_draggable_legend(ax, title="Raw Intensities")
+            canvas.apply_tight_layout()
             canvas.draw()
+
+    def _update_cal_abs_plot(self):
+        """Update Calculated Absorbance plot (ax_abs) when both Probe and Svt./Filt. spectra are loaded."""
+        if not hasattr(self, "cal_canvas_det1") or self.cal_canvas_det1 is None:
+            return
+        exp_data = getattr(self, "_cal_exp_data", None)
+        svt_data = getattr(self, "_cal_svt_data", None)
+        if (
+            exp_data is None
+            or svt_data is None
+            or len(exp_data.detector_data) == 0
+            or len(svt_data.detector_data) == 0
+        ):
+            return
+        i_probe = exp_data.detector_data[0]
+        i_svt = svt_data.detector_data[0]
+        if len(i_probe) != len(i_svt):
+            return
+        valid = (i_svt > 0) & (i_probe > 0)
+        abs_y = np.zeros_like(i_probe)
+        # A = -log10(I / I0) = -log10(i_svt / i_probe)
+        abs_y[valid] = -np.log10(i_svt[valid] / i_probe[valid])
+        pix = np.arange(1, len(abs_y) + 1, dtype=float)
+
+        ax = self.cal_canvas_det1.ax_abs
+        ax.clear()
+        ax.set_title("")
+        ax.plot(pix, abs_y, color="tab:purple", label="Calculated Abs")
+        ax.grid(False)
+        ax.axhline(0, color="0.75", lw=0.75, zorder=0)
+        ax.set_xlabel("Pixel", fontweight="bold", fontsize=8)
+        ax.set_ylabel("Absorbance (OD)", fontweight="bold", fontsize=8)
+        self.cal_canvas_det1.make_draggable_legend(ax, title="Calculated Absorbance")
+        self.cal_canvas_det1.apply_tight_layout()
+        self.cal_canvas_det1.draw()
 
     def _on_cal_unit_mode_changed(self, index: int):
         mode = "nm" if index == 0 else "cm-1"
@@ -436,6 +583,177 @@ class CalibrationTabMixin:
             self._update_cal_fit_plot_det2(res_det2)
         if hasattr(self, "_update_shaper_plots"):
             self._update_shaper_plots()
+
+    def _plot_cal_ref_overlay(
+        self,
+        ax_ref_plot,
+        res,
+        ref_axis_label: str,
+        do_baseline: bool,
+        subtract_ref_baseline: bool,
+    ):
+        """Plot reference and experimental fitted spectra on a shared Y-axis."""
+        ref_x_full = getattr(res, "ref_x_full", None)
+        ref_y_full = getattr(res, "ref_y_full", None)
+        ref_x_cut = res.ref_x_cut
+        ref_y_cut = res.ref_y_cut
+
+        raw_exp = getattr(res, "exp_raw_y_fit", None)
+        if subtract_ref_baseline and res.ref_y_corr is not None:
+            ref_y_source = res.ref_y_corr
+            if do_baseline:
+                exp_y_source = res.exp_corr_y_fit if res.exp_corr_y_fit is not None else res.model_y_fit
+            else:
+                exp_y_source = raw_exp if raw_exp is not None else res.model_y_fit
+        else:
+            ref_y_source = ref_y_cut
+            if do_baseline:
+                exp_y_source = res.model_y_fit
+            else:
+                exp_y_source = (
+                    raw_exp
+                    if raw_exp is not None
+                    else (res.exp_corr_y_fit if res.exp_corr_y_fit is not None else res.model_y_fit)
+                )
+
+        sort_cut = np.argsort(ref_x_cut)
+        ref_x_cut_plot = ref_x_cut[sort_cut]
+        ref_y_cut_plot = ref_y_source[sort_cut]
+        model_y_fit_plot = exp_y_source[sort_cut]
+        if res.convolved_ref_y is not None:
+            if subtract_ref_baseline:
+                ref_bl = getattr(res, "ref_baseline_cut", None)
+                if ref_bl is None:
+                    ref_bl = res.baseline_fit
+                conv_src = res.convolved_ref_y - ref_bl if ref_bl is not None else res.convolved_ref_y
+            else:
+                conv_src = res.convolved_ref_y
+            conv_y_plot = conv_src[sort_cut]
+        else:
+            conv_y_plot = None
+
+        ref_label = "Ref (BC)" if subtract_ref_baseline else "Raw Ref"
+        exp_label = "Exp (BC)" if do_baseline else "Exp"
+
+        if ref_x_full is not None and ref_y_full is not None and len(ref_x_full) > 0:
+            sort_full = np.argsort(ref_x_full)
+            ax_ref_plot.plot(
+                ref_x_full[sort_full],
+                ref_y_full[sort_full],
+                color="0.65",
+                linewidth=0.9,
+                alpha=0.55,
+                linestyle="-",
+                label="Full Ref",
+                zorder=1,
+            )
+
+        ax_ref_plot.plot(
+            ref_x_cut_plot,
+            ref_y_cut_plot,
+            color="black",
+            linewidth=1.4,
+            alpha=1.0,
+            linestyle="-",
+            label=ref_label,
+            zorder=2,
+        )
+        if conv_y_plot is not None:
+            ax_ref_plot.plot(
+                ref_x_cut_plot,
+                conv_y_plot,
+                color="red",
+                linewidth=1.8,
+                alpha=0.6,
+                linestyle="-",
+                label=rf"Conv Ref ($\sigma$={res.sigma_opt:.2f})",
+                zorder=4,
+            )
+
+        ax_ref_plot.plot(
+            ref_x_cut_plot,
+            model_y_fit_plot,
+            color="tab:purple",
+            alpha=0.75,
+            linewidth=1.8,
+            label=exp_label,
+            zorder=3,
+        )
+
+        y_lo = min(float(np.min(ref_y_cut_plot)), float(np.min(model_y_fit_plot)))
+        y_hi = max(float(np.max(ref_y_cut_plot)), float(np.max(model_y_fit_plot)))
+        pad = 0.05 * max(y_hi - y_lo, 0.1)
+        ax_ref_plot.set_ylim(y_lo - pad, y_hi + pad)
+
+        ax_ref_plot.grid(False)
+        ax_ref_plot.axhline(0, color="0.75", lw=0.75, zorder=0)
+        ax_ref_plot.set_xlim(np.min(ref_x_cut_plot), np.max(ref_x_cut_plot))
+        ax_ref_plot.set_xlabel(ref_axis_label, fontweight="bold", fontsize=8)
+        ax_ref_plot.set_ylabel("Norm. Absorbance", fontweight="bold", fontsize=8)
+        ax_ref_plot.tick_params(axis="y", labelsize=8)
+
+        handles, labels = ax_ref_plot.get_legend_handles_labels()
+        leg = ax_ref_plot.legend(handles, labels, fontsize=7, loc="best", framealpha=0.85)
+        if leg is not None:
+            leg.set_draggable(True)
+
+    def _plot_cal_abs_baseline(
+        self,
+        ax_abs,
+        pix: np.ndarray,
+        abs_y: np.ndarray,
+        res,
+        is_ir: bool,
+        do_baseline: bool,
+    ):
+        """Plot physical sample baseline (if available) or legacy polynomial baseline on ax_abs."""
+        if not do_baseline or res is None:
+            return
+
+        sample_bl = getattr(res, "sample_baseline_px", None)
+        if sample_bl is not None and len(sample_bl) == len(pix):
+            ax_abs.plot(
+                pix,
+                sample_bl,
+                color="tab:orange",
+                linestyle="--",
+                linewidth=1.4,
+                label="Baseline (sample)",
+                zorder=2,
+            )
+            return
+
+        if res.baseline_fit is None or len(res.wavelength_nm) != len(pix):
+            return
+
+        scale = float(res.fit_params[2]) if len(res.fit_params) > 2 else 1.0
+        if abs(scale) < 1e-6:
+            scale = 1.0
+
+        meas_min = float(np.min(abs_y))
+        meas_span = float(np.max(abs_y) - meas_min)
+        ref_wl_cut_nm = 1e7 / np.clip(res.ref_x_cut, 1.0, None) if is_ir else res.ref_x_cut
+        wl_min_active = np.min(ref_wl_cut_nm)
+        wl_max_active = np.max(ref_wl_cut_nm)
+        active_pix_mask = (res.wavelength_nm >= wl_min_active) & (res.wavelength_nm <= wl_max_active)
+
+        if np.any(active_pix_mask):
+            sort_ref = np.argsort(ref_wl_cut_nm)
+            baseline_ref_units = np.interp(
+                res.wavelength_nm[active_pix_mask],
+                ref_wl_cut_nm[sort_ref],
+                res.baseline_fit[sort_ref],
+            )
+            baseline_meas = meas_min - (baseline_ref_units * (meas_span / scale))
+            ax_abs.plot(
+                pix[active_pix_mask],
+                baseline_meas,
+                color="tab:orange",
+                linestyle="--",
+                linewidth=1.4,
+                label="Baseline (active)",
+                zorder=2,
+            )
 
     def _update_cal_fit_plot_det1(self, res):
         """Update ax_fit (Bottom-Right) and ax_ref (Top-Right) without erasing 1st column (ax_raw / ax_abs)."""
@@ -515,106 +833,24 @@ class CalibrationTabMixin:
         # Update Reference Overlay plot (Top-Right ax_ref)
         ax_ref_plot = self.cal_canvas_det1.ax_ref
         ax_ref_plot.clear()
-        # Remove any previous twin axis
         for ax_twin in list(ax_ref_plot.figure.axes):
             if ax_twin is not ax_ref_plot and ax_twin.get_label() == "_ref_twin":
                 ax_twin.remove()
         ax_ref_plot.set_title("")
 
         ref_axis_label = r"Wavenumber ($\mathrm{cm}^{-1}$)" if is_ir else "Wavelength (nm)"
-
-        ref_x_full = getattr(res, "ref_x_full", None)
-        ref_y_full = getattr(res, "ref_y_full", None)
-        ref_x_cut = res.ref_x_cut
-        ref_y_cut = res.ref_y_cut
-
-        # Check subtract baseline from reference checkbox state
         subtract_ref_baseline = False
         if hasattr(self, "cal_set_subtract_ref_baseline") and self.cal_set_subtract_ref_baseline is not None:
             subtract_ref_baseline = self.cal_set_subtract_ref_baseline.isChecked()
-
         do_baseline = self.cal_chk_do_baseline.isChecked() if hasattr(self, "cal_chk_do_baseline") else True
 
-        # Experimental curve: baseline-corrected if do_baseline is checked, otherwise raw model fit
-        exp_y_source = (res.exp_corr_y_fit if do_baseline else res.model_y_fit) if res.exp_corr_y_fit is not None else res.model_y_fit
-
-        # Reference curve: baseline-corrected only if checkbox is ticked
-        if subtract_ref_baseline and res.ref_y_corr is not None:
-            ref_y_source = res.ref_y_corr
-        else:
-            ref_y_source = ref_y_cut
-
-        sort_cut = np.argsort(ref_x_cut)
-        ref_x_cut_plot = ref_x_cut[sort_cut]
-        ref_y_cut_plot = ref_y_source[sort_cut]
-        model_y_fit_plot = exp_y_source[sort_cut]
-        conv_y_plot = res.convolved_ref_y[sort_cut] if (res.convolved_ref_y is not None and not subtract_ref_baseline) else None
-
-        ref_label = "Ref (BC)" if subtract_ref_baseline else "Raw Ref"
-        exp_label = "Exp (BC)" if do_baseline else "Exp"
-
-        # --- Dual y-axis: left = reference, right = experimental (BC) ---
-        # Create twin axis for experimental data
-        ax_exp = ax_ref_plot.twinx()
-        ax_exp.set_label("_ref_twin")
-
-        # 1. Full reference spectrum in fainter gray line on LEFT axis
-        if ref_x_full is not None and ref_y_full is not None and len(ref_x_full) > 0:
-            sort_full = np.argsort(ref_x_full)
-            ax_ref_plot.plot(
-                ref_x_full[sort_full],
-                ref_y_full[sort_full],
-                color="0.65",
-                linewidth=0.9,
-                alpha=0.55,
-                linestyle="-",
-                label="Full Ref",
-                zorder=1,
-            )
-
-        # 2. Active reference in solid black on LEFT axis
-        ax_ref_plot.plot(ref_x_cut_plot, ref_y_cut_plot, color="black", linewidth=1.4,
-                         alpha=1.0, linestyle="-", label=ref_label, zorder=2)
-        if conv_y_plot is not None:
-            ax_ref_plot.plot(ref_x_cut_plot, conv_y_plot, color="red", linewidth=1.8,
-                             alpha=0.6, linestyle="-", label=rf"Conv Ref ($\sigma$={res.sigma_opt:.2f})", zorder=4)
-
-        # 3. Baseline-corrected experimental on RIGHT axis (purple, translucent)
-        ax_exp.plot(ref_x_cut_plot, model_y_fit_plot, color="tab:purple", alpha=0.7,
-                    linewidth=1.8, label=exp_label, zorder=3)
-
-        # --- Align both y-axes strictly based on ACTIVE plot region data ---
-        ref_min, ref_max = float(np.min(ref_y_cut_plot)), float(np.max(ref_y_cut_plot))
-        exp_min, exp_max = float(np.min(model_y_fit_plot)), float(np.max(model_y_fit_plot))
-
-        if abs(ref_max - ref_min) < 1e-6:
-            ref_min -= 0.05
-            ref_max += 0.05
-        if abs(exp_max - exp_min) < 1e-6:
-            exp_min -= 0.05
-            exp_max += 0.05
-
-        ax_ref_plot.set_ylim(ref_min, ref_max)
-        ax_exp.set_ylim(exp_min, exp_max)
-
-        align.yaxes(ax_ref_plot, 0.0, ax_exp, 0.0, pos=0.05)
-
-        ax_ref_plot.grid(False)
-        ax_ref_plot.axhline(0, color="0.75", lw=0.75, zorder=0)
-        ax_ref_plot.set_xlim(np.min(ref_x_cut_plot), np.max(ref_x_cut_plot))
-        ax_ref_plot.set_xlabel(ref_axis_label, fontweight="bold", fontsize=8)
-        ax_ref_plot.set_ylabel("Absorbance (Ref)", fontweight="bold", fontsize=8, color="black")
-        ax_ref_plot.tick_params(axis="y", labelsize=8, labelcolor="black")
-        ax_exp.set_ylabel(f"Absorbance ({exp_label})", fontweight="bold", fontsize=8, color="tab:purple")
-        ax_exp.tick_params(axis="y", labelsize=8, labelcolor="tab:purple")
-
-        # Merge legends from both axes
-        lines1, labels1 = ax_ref_plot.get_legend_handles_labels()
-        lines2, labels2 = ax_exp.get_legend_handles_labels()
-        leg = ax_ref_plot.legend(lines1 + lines2, labels1 + labels2, fontsize=7,
-                                 loc="best", framealpha=0.85)
-        if leg is not None:
-            leg.set_draggable(True)
+        self._plot_cal_ref_overlay(
+            ax_ref_plot,
+            res,
+            ref_axis_label=ref_axis_label,
+            do_baseline=do_baseline,
+            subtract_ref_baseline=subtract_ref_baseline,
+        )
 
         # Update Subplot 2 (ax_abs): show absorbance with baseline dashed line
         # over the ACTIVE fitting range only (mapped from ref_x_cut via wavelength axis)
@@ -629,45 +865,7 @@ class CalibrationTabMixin:
 
             ax_abs.clear()
             ax_abs.plot(pix, abs_y, color="tab:purple", linewidth=1.8, label="Abs", zorder=1)
-
-            # Baseline is defined on the active ref_x_cut wavelength grid in reference units.
-            # model = ((meas - meas_min) / meas_span) * scale + baseline
-            # =>  baseline_phys = meas_min - baseline_ref * (meas_span / scale)
-            if do_baseline and res.baseline_fit is not None and len(res.wavelength_nm) == n_pix:
-                scale = float(res.fit_params[2]) if len(res.fit_params) > 2 else 1.0
-                if abs(scale) < 1e-6:
-                    scale = 1.0
-
-                meas_min = float(np.min(abs_y))
-                meas_span = float(np.max(abs_y) - meas_min)
-
-                if is_ir:
-                    ref_wl_cut_nm = 1e7 / np.clip(res.ref_x_cut, 1.0, None)
-                else:
-                    ref_wl_cut_nm = res.ref_x_cut
-
-                # Active pixel range: pixels whose calibrated wavelength falls in ref_x_cut span
-                wl_min_active = np.min(ref_wl_cut_nm)
-                wl_max_active = np.max(ref_wl_cut_nm)
-                active_pix_mask = (res.wavelength_nm >= wl_min_active) & (res.wavelength_nm <= wl_max_active)
-
-                if np.any(active_pix_mask):
-                    # Interpolate baseline (reference units) onto active pixel wavelengths
-                    sort_ref = np.argsort(ref_wl_cut_nm)
-                    baseline_ref_units = np.interp(
-                        res.wavelength_nm[active_pix_mask],
-                        ref_wl_cut_nm[sort_ref],
-                        res.baseline_fit[sort_ref],
-                    )
-                    # Convert to physical measurement absorbance units (OD)
-                    baseline_meas = meas_min - (baseline_ref_units * (meas_span / scale))
-
-                    ax_abs.plot(
-                        pix[active_pix_mask],
-                        baseline_meas,
-                        color="tab:orange", linestyle="--", linewidth=1.4,
-                        label="Baseline (active)", zorder=2,
-                    )
+            self._plot_cal_abs_baseline(ax_abs, pix, abs_y, res, is_ir=is_ir, do_baseline=do_baseline)
 
             ax_abs.grid(False)
             ax_abs.axhline(0, color="0.75", lw=0.75, zorder=0)
@@ -675,11 +873,7 @@ class CalibrationTabMixin:
             ax_abs.set_ylabel("Absorbance (OD)", fontweight="bold", fontsize=8)
             self.cal_canvas_det1.make_draggable_legend(ax_abs, title="Calculated Absorbance")
 
-        if not getattr(self.cal_canvas_det1, "_tight_layout_done", False):
-            import contextlib
-            with contextlib.suppress(Exception):
-                self.cal_canvas_det1.figure.tight_layout()
-            self.cal_canvas_det1._tight_layout_done = True
+        self.cal_canvas_det1.apply_tight_layout()
         self.cal_canvas_det1.draw()
 
     def _on_cal_load_probe(self):
@@ -730,10 +924,12 @@ class CalibrationTabMixin:
                     if hasattr(self, "cal_set_rel_max_nm"):
                         self.cal_set_rel_max_nm.setValue(200.0)
 
-            # Plot raw intensities (Probe in black, Svt in red)
+            # Plot raw intensities (Probe in black, Svt in red) and calculated absorbance
             self._update_cal_raw_plots()
+            self._update_cal_abs_plot()
 
         except Exception as err:
+            logger.warning("Error loading probe spectrum from %s: %s", file_path, err)
             if led:
                 led.set_state("error")
             self.statusBar().showMessage(f"Error loading probe spectrum: {err}")
@@ -768,32 +964,12 @@ class CalibrationTabMixin:
                 led.set_state("loaded")
             self.statusBar().showMessage(f"Loaded Solvent Spectrum: {Path(file_path).name}")
 
-            # Plot raw intensities (Probe in black, Svt in red)
+            # Plot raw intensities (Probe in black, Svt in red) and calculated absorbance
             self._update_cal_raw_plots()
-
-            # Plot calculated absorbance A = -log10(I_probe / I_svt) if probe loaded
-            exp_data = getattr(self, "_cal_exp_data", None)
-            if exp_data is not None and len(exp_data.detector_data) > 0 and len(svt_data.detector_data) > 0:
-                i_probe = exp_data.detector_data[0]
-                i_svt = svt_data.detector_data[0]
-                valid = (i_svt > 0) & (i_probe > 0)
-                abs_y = np.zeros_like(i_probe)
-                # Correct absorbance equation: A = -log10(I / I0) = -log10(i_svt / i_probe)
-                abs_y[valid] = -np.log10(i_svt[valid] / i_probe[valid])
-
-                if hasattr(self, "cal_canvas_det1"):
-                    ax = self.cal_canvas_det1.ax_abs
-                    ax.clear()
-                    ax.set_title("")
-                    ax.plot(abs_y, color="tab:purple", label="Calculated Abs")
-                    ax.grid(False)
-                    ax.axhline(0, color="0.75", lw=0.75, zorder=0)
-                    ax.set_xlabel("Pixel", fontweight="bold", fontsize=8)
-                    ax.set_ylabel("Absorbance (OD)", fontweight="bold", fontsize=8)
-                    self.cal_canvas_det1.make_draggable_legend(ax, title="Calculated Absorbance")
-                    self.cal_canvas_det1.draw()
+            self._update_cal_abs_plot()
 
         except Exception as err:
+            logger.warning("Error loading solvent spectrum from %s: %s", file_path, err)
             if led:
                 led.set_state("error")
             self.statusBar().showMessage(f"Error loading solvent spectrum: {err}")
@@ -839,6 +1015,7 @@ class CalibrationTabMixin:
                 ax.set_xlabel(f"Spectral Axis ({ref_spec.axis_unit})", fontweight="bold", fontsize=8)
                 ax.set_ylabel("Norm. Absorbance", fontweight="bold", fontsize=8)
                 self.cal_canvas_det1.make_draggable_legend(ax, title=f"Reference Spectrum ({ref_spec.axis_unit})")
+                self.cal_canvas_det1.apply_tight_layout()
                 self.cal_canvas_det1.draw()
 
             if hasattr(self, "cal_canvas_pump"):
@@ -886,29 +1063,23 @@ class CalibrationTabMixin:
 
         from pymorgan.cal import get_default_calibration_params
         p_def = get_default_calibration_params(cal_type_idx, spectral_range=spec_range)
-
-        # Read fitting parameters directly from Fit Settings sub-tab widgets
-        cwl_val = self.cal_set_cwl.value() if hasattr(self, "cal_set_cwl") else p_def["cwl"]
-        ppnm_val = self.cal_set_ppnm.value() if hasattr(self, "cal_set_ppnm") else p_def["ppnm_guess"]
-        rel_min_val = self.cal_set_rel_min_nm.value() if hasattr(self, "cal_set_rel_min_nm") else p_def["rel_min_nm"]
-        rel_max_val = self.cal_set_rel_max_nm.value() if hasattr(self, "cal_set_rel_max_nm") else p_def["rel_max_nm"]
-
-        deg_idx = (self.cal_set_grating_model.currentIndex() + 1) if hasattr(self, "cal_set_grating_model") else p_def.get("grating_degree", 1)
-        use_corr = self.cal_set_cross_corr.isChecked() if hasattr(self, "cal_set_cross_corr") else False
-        deriv_idx = self.cal_set_deriv_mode.currentIndex() if hasattr(self, "cal_set_deriv_mode") else 0
-        deriv_mode = "none" if deriv_idx == 0 else ("1st" if deriv_idx == 1 else "2nd")
-        savgol_win = self.cal_set_savgol_win.value() if hasattr(self, "cal_set_savgol_win") else 9
-        do_convolve = self.cal_set_convolve_ref.isChecked() if hasattr(self, "cal_set_convolve_ref") else False
-        do_fit_val = self.cal_chk_do_fit.isChecked() if hasattr(self, "cal_chk_do_fit") else True
+        opts = self._read_cal_fit_options(p_def)
 
         try:
             svt_data = getattr(self, "_cal_svt_data", None)
+            probe_weights = None
             if svt_data is not None and len(svt_data.detector_data) > 0 and len(exp_data.detector_data) > 0:
                 i_probe = exp_data.detector_data[0]
                 i_svt = svt_data.detector_data[0]
+                if len(i_probe) != len(i_svt):
+                    raise ValueError(
+                        f"Probe ({len(i_probe)} px) and Svt./Filt. ({len(i_svt)} px) pixel counts do not match."
+                    )
                 valid = (i_svt > 0) & (i_probe > 0)
                 meas_y = np.zeros_like(i_probe)
                 meas_y[valid] = -np.log10(i_svt[valid] / i_probe[valid])
+                if opts["use_snr_weights"]:
+                    probe_weights = i_probe
             else:
                 meas_y = exp_data.detector_data[0]
             res = fit_wavelength_axis(
@@ -916,17 +1087,21 @@ class CalibrationTabMixin:
                 ref_x=ref_x,
                 ref_y=ref_y,
                 cal_type_code=eff_code,
-                cwl=cwl_val,
-                ppnm_guess=ppnm_val,
-                rel_min_nm=rel_min_val,
-                rel_max_nm=rel_max_val,
-                do_fit=do_fit_val,
-                grating_degree=deg_idx,
-                use_cross_corr=use_corr,
-                use_derivative=deriv_mode,
-                savgol_window=savgol_win,
-                convolve_ref=do_convolve,
+                cwl=opts["cwl"],
+                ppnm_guess=opts["ppnm_guess"],
+                rel_min_nm=opts["rel_min_nm"],
+                rel_max_nm=opts["rel_max_nm"],
+                do_fit=opts["do_fit"],
+                grating_degree=opts["grating_degree"],
+                use_cross_corr=opts["use_cross_corr"],
+                use_derivative=opts["use_derivative"],
+                savgol_window=opts["savgol_window"],
+                convolve_ref=opts["convolve_ref"],
                 spectral_range=spec_range,
+                baseline_method=opts["baseline_method"],
+                baseline_target=opts["baseline_target"],
+                baseline_smoothness=opts["baseline_smoothness"],
+                probe_weights=probe_weights,
             )
             self._cal_fit_result_det1 = res
             self._update_cal_fit_plot_det1(res)
@@ -934,7 +1109,7 @@ class CalibrationTabMixin:
             if hasattr(self, "cal_spec_btn_save") and self.cal_spec_btn_save is not None:
                 self.cal_spec_btn_save.setEnabled(True)
 
-            sigma_msg = f" (Refinement σ={res.sigma_opt:.2f} px)" if do_convolve else ""
+            sigma_msg = f" (Refinement σ={res.sigma_opt:.2f} px)" if opts["convolve_ref"] else ""
             self.statusBar().showMessage(
                 f"Calibration fit completed successfully{sigma_msg}. RMS Residual: {np.std(res.residuals):.4e}"
             )
@@ -1263,10 +1438,16 @@ class CalibrationTabMixin:
         try:
             n_pix = len(y_pump_air)
 
-            # 1. Calculate pump absorbance A = -log10(I_solvent / I_air)
+            # 1. Calculate pump absorbance A = -log10(I_solvent / I_air) without folding negative baseline dips
             valid = (y_pump_air > 0) & (y_pump_solv > 0)
             a_pump = np.zeros_like(y_pump_air)
-            a_pump[valid] = np.abs(-np.log10(y_pump_solv[valid] / y_pump_air[valid]))
+            a_pump[valid] = -np.log10(y_pump_solv[valid] / y_pump_air[valid])
+            if (
+                np.any(valid)
+                and float(np.median(a_pump[valid])) < 0.0
+                and float(np.percentile(a_pump[valid], 90)) < abs(float(np.percentile(a_pump[valid], 10)))
+            ):
+                a_pump[valid] = -a_pump[valid]
 
             # 2. Retrieve loaded reference FTIR spectrum (or load default Dioxane FTIR spectrum)
             ref_spec = getattr(self, "_cal_ref_spec", None)
@@ -1283,26 +1464,35 @@ class CalibrationTabMixin:
                 QMessageBox.warning(self, "Shaper Calibration", "Please load a Calibration Reference Spectrum (e.g. FTIR Dioxane) first.")
                 return
 
-            cal_type_idx = self.cal_type_combo.currentIndex() + 1 if hasattr(self, "cal_type_combo") else 9
+            from pymorgan.cal import get_default_calibration_params
+
+            cal_type_idx = self._get_effective_cal_type_code()
             if cal_type_idx not in (1, 4, 6, 7, 8, 9):
                 cal_type_idx = 9  # Force IR code for shaper calibration
 
-            cwl_val = self.cal_set_cwl.value() if hasattr(self, "cal_set_cwl") else 2000.0
-            ppnm_val = self.cal_set_ppnm.value() if hasattr(self, "cal_set_ppnm") else 1.2
-            rel_min_nm = self.cal_set_rel_min_nm.value() if hasattr(self, "cal_set_rel_min_nm") else -200.0
-            rel_max_nm = self.cal_set_rel_max_nm.value() if hasattr(self, "cal_set_rel_max_nm") else 200.0
+            p_def = get_default_calibration_params(cal_type_idx)
+            opts = self._read_cal_fit_options(p_def)
 
-            # 3. Fit wavelength/wavenumber axis to reference FTIR spectrum (EXACTLY like probe case!)
+            # 3. Fit wavelength/wavenumber axis to reference FTIR spectrum using full Fit Settings
             fit_res = fit_wavelength_axis(
                 meas_y=a_pump,
                 ref_x=ref_spec.spectral_axis,
                 ref_y=ref_spec.absorbance,
                 cal_type_code=cal_type_idx,
-                cwl=cwl_val,
-                ppnm_guess=ppnm_val,
-                rel_min_nm=rel_min_nm,
-                rel_max_nm=rel_max_nm,
-                do_fit=self.cal_chk_do_fit.isChecked() if hasattr(self, "cal_chk_do_fit") else True,
+                cwl=opts["cwl"],
+                ppnm_guess=opts["ppnm_guess"],
+                rel_min_nm=opts["rel_min_nm"],
+                rel_max_nm=opts["rel_max_nm"],
+                do_fit=opts["do_fit"],
+                grating_degree=opts["grating_degree"],
+                use_cross_corr=opts["use_cross_corr"],
+                use_derivative=opts["use_derivative"],
+                savgol_window=opts["savgol_window"],
+                convolve_ref=opts["convolve_ref"],
+                baseline_method=opts["baseline_method"],
+                baseline_target=opts["baseline_target"],
+                baseline_smoothness=opts["baseline_smoothness"],
+                probe_weights=y_pump_air if opts["use_snr_weights"] else None,
             )
             calibrated_pump_cm = fit_res.wavenumber_cm1
             calibrated_pump_nm = fit_res.wavelength_nm
@@ -1528,36 +1718,7 @@ class CalibrationTabMixin:
             a_pump = np.zeros_like(y_pump_air)
             a_pump[valid] = -np.log10(y_pump_solv[valid] / y_pump_air[valid])
             ax_abs.plot(pixels, a_pump, color="tab:purple", linewidth=1.8, label="Abs")
-
-            if do_baseline and fit_res is not None and getattr(fit_res, "baseline_fit", None) is not None:
-                baseline_ref_units = fit_res.baseline_fit
-                scale = float(fit_res.fit_params[2]) if len(fit_res.fit_params) > 2 else 1.0
-                if abs(scale) < 1e-6:
-                    scale = 1.0
-
-                meas_min = float(np.min(a_pump))
-                meas_span = float(np.max(a_pump) - meas_min)
-                ref_wl_cut_nm = 1e7 / np.clip(fit_res.ref_x_cut, 1.0, None)
-                wl_min_active = np.min(ref_wl_cut_nm)
-                wl_max_active = np.max(ref_wl_cut_nm)
-                active_pix_mask = (fit_res.wavelength_nm >= wl_min_active) & (fit_res.wavelength_nm <= wl_max_active)
-
-                if np.any(active_pix_mask):
-                    sort_ref = np.argsort(ref_wl_cut_nm)
-                    b_interp = np.interp(
-                        fit_res.wavelength_nm[active_pix_mask],
-                        ref_wl_cut_nm[sort_ref],
-                        baseline_ref_units[sort_ref],
-                    )
-                    baseline_meas = meas_min - (b_interp * (meas_span / scale))
-                    ax_abs.plot(
-                        pixels[active_pix_mask],
-                        baseline_meas,
-                        color="tab:orange",
-                        linestyle="--",
-                        linewidth=1.4,
-                        label="Baseline (active)",
-                    )
+            self._plot_cal_abs_baseline(ax_abs, pixels, a_pump, fit_res, is_ir=True, do_baseline=do_baseline)
 
         ax_abs.grid(False)
         ax_abs.axhline(0, color="0.75", lw=0.75, zorder=0)
@@ -1569,74 +1730,16 @@ class CalibrationTabMixin:
         ref_spec = getattr(self, "_cal_ref_spec", None)
 
         if fit_res is not None and ref_spec is not None:
-            ref_x_full = fit_res.ref_x_full
-            ref_y_full = fit_res.ref_y_full
-            ref_x_cut = fit_res.ref_x_cut
-            ref_y_cut = fit_res.ref_y_cut
-            exp_y_source = (fit_res.exp_corr_y_fit if do_baseline else fit_res.model_y_fit) if fit_res.exp_corr_y_fit is not None else fit_res.model_y_fit
-
-            sort_cut = np.argsort(ref_x_cut)
-            ref_x_cut_plot = ref_x_cut[sort_cut]
-            ref_y_cut_plot = ref_y_cut[sort_cut]
-            model_y_fit_plot = exp_y_source[sort_cut]
-            conv_y_plot = fit_res.convolved_ref_y[sort_cut] if fit_res.convolved_ref_y is not None else None
-
-            ax_exp = ax_ref.twinx()
-            ax_exp.set_label("_ref_twin")
-            for s in ("top", "bottom", "left"):
-                ax_exp.spines[s].set_visible(False)
-
-            # 1. Full reference spectrum in fainter gray line on LEFT axis
-            if ref_x_full is not None and ref_y_full is not None and len(ref_x_full) > 0:
-                sort_full = np.argsort(ref_x_full)
-                ax_ref.plot(
-                    ref_x_full[sort_full],
-                    ref_y_full[sort_full],
-                    color="0.65",
-                    linewidth=0.9,
-                    alpha=0.55,
-                    linestyle="-",
-                    label="Full Ref",
-                    zorder=1,
-                )
-
-            # 2. Active reference in solid black on LEFT axis
-            ax_ref.plot(ref_x_cut_plot, ref_y_cut_plot, color="black", linewidth=1.4, alpha=1.0, linestyle="-", label="Raw Ref", zorder=2)
-            if conv_y_plot is not None:
-                ax_ref.plot(ref_x_cut_plot, conv_y_plot, color="red", linewidth=1.8, alpha=0.6, linestyle="-", label=rf"Conv Ref ($\sigma$={fit_res.sigma_opt:.2f})", zorder=4)
-
-            # 3. Baseline-corrected experimental on RIGHT axis (purple, translucent)
-            ax_exp.plot(ref_x_cut_plot, model_y_fit_plot, color="tab:purple", alpha=0.7, linewidth=1.8, label="Exp (BC)", zorder=3)
-
-            ref_min, ref_max = float(np.min(ref_y_cut_plot)), float(np.max(ref_y_cut_plot))
-            exp_min, exp_max = float(np.min(model_y_fit_plot)), float(np.max(model_y_fit_plot))
-
-            if abs(ref_max - ref_min) < 1e-6:
-                ref_min -= 0.05
-                ref_max += 0.05
-            if abs(exp_max - exp_min) < 1e-6:
-                exp_min -= 0.05
-                exp_max += 0.05
-
-            ax_ref.set_ylim(ref_min, ref_max)
-            ax_exp.set_ylim(exp_min, exp_max)
-
-            align.yaxes(ax_ref, 0.0, ax_exp, 0.0, pos=0.05)
-
-            ax_ref.grid(False)
-            ax_ref.axhline(0, color="0.75", lw=0.75, zorder=0)
-            ax_ref.set_xlim(np.min(ref_x_cut_plot), np.max(ref_x_cut_plot))
-            ax_ref.set_xlabel(r"Wavenumber ($\mathrm{cm}^{-1}$)", fontweight="bold", fontsize=8)
-            ax_ref.set_ylabel("Absorbance (Ref)", fontweight="bold", fontsize=8, color="black")
-            ax_ref.tick_params(axis="y", labelsize=8, labelcolor="black")
-            ax_exp.set_ylabel("Absorbance (Exp BC)", fontweight="bold", fontsize=8, color="tab:purple")
-            ax_exp.tick_params(axis="y", labelsize=8, labelcolor="tab:purple")
-
-            lines1, labels1 = ax_ref.get_legend_handles_labels()
-            lines2, labels2 = ax_exp.get_legend_handles_labels()
-            leg = ax_ref.legend(lines1 + lines2, labels1 + labels2, fontsize=7, loc="best", framealpha=0.85)
-            if leg is not None:
-                leg.set_draggable(True)
+            subtract_ref_baseline = False
+            if hasattr(self, "cal_set_subtract_ref_baseline") and self.cal_set_subtract_ref_baseline is not None:
+                subtract_ref_baseline = self.cal_set_subtract_ref_baseline.isChecked()
+            self._plot_cal_ref_overlay(
+                ax_ref,
+                fit_res,
+                ref_axis_label=r"Wavenumber ($\mathrm{cm}^{-1}$)",
+                do_baseline=do_baseline,
+                subtract_ref_baseline=subtract_ref_baseline,
+            )
 
         elif ref_spec is not None:
             ax_ref.plot(ref_spec.spectral_axis, ref_spec.absorbance, color="black", linewidth=1.4, label=ref_spec.name)
@@ -1709,11 +1812,7 @@ class CalibrationTabMixin:
         ax_fit.set_xlabel("Pixel", fontweight="bold", fontsize=8)
         canvas.make_draggable_legend(ax_fit, title="Calibration Fit")
 
-        if not getattr(canvas, "_tight_layout_done", False):
-            import contextlib
-            with contextlib.suppress(Exception):
-                canvas.figure.tight_layout()
-            canvas._tight_layout_done = True
+        canvas.apply_tight_layout()
         canvas.draw()
 
     def _get_current_probe_calibration(self) -> np.ndarray | None:

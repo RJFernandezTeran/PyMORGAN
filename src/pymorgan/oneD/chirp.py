@@ -503,6 +503,16 @@ def _bisquare_weights(resid: np.ndarray, c: float = 4.685) -> np.ndarray:
     return np.where(np.abs(u) < 1.0, (1.0 - u**2) ** 2, 0.0)
 
 
+def _intermediate_cauchy_bounds(
+    t0_valid: np.ndarray, n_terms: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """Bounds for unconstrained-offset intermediate Cauchy fits (no sign assumption)."""
+    scale = max(1e2, 10.0 * float(np.ptp(t0_valid))) if t0_valid.size >= 2 else 1e2
+    lb = np.concatenate(([-np.inf], -scale * np.ones(n_terms - 1)))
+    ub = np.concatenate(([np.inf], scale * np.ones(n_terms - 1)))
+    return lb, ub
+
+
 def fit_cauchy_dispersion(
     fit_wl,
     t0,
@@ -521,8 +531,9 @@ def fit_cauchy_dispersion(
     (:func:`scipy.optimize.lsq_linear` per IRLS iteration) rather than a generic
     nonlinear solve. Returns ``(coeffs, lambda_ref)``.
 
-    Default bounds constrain the leading (offset) term to ``[-5, 5]`` ps, and
-    higher-order terms to ``[-100, 0]`` (constraining dispersion to decrease with wavelength).
+    Default bounds leave the leading (offset) term unconstrained (``[-inf, inf]``)
+    and constrain higher-order terms in sign with magnitude up to
+    ``max(100, 10 * ptp(t0))`` according to the overall slope of ``t0(lambda)``.
     """
     from scipy.optimize import lsq_linear
 
@@ -550,12 +561,13 @@ def fit_cauchy_dispersion(
         else:
             slope = 0.0
 
+        scale = max(1e2, 10.0 * float(np.ptp(valid_t0))) if valid_t0.size >= 2 else 1e2
         if slope <= 0.0:
-            lb = np.concatenate(([-5.0], 0.0 * np.ones(n_terms - 1)))
-            ub = np.concatenate(([5.0], 1e2 * np.ones(n_terms - 1)))
+            lb = np.concatenate(([-np.inf], np.zeros(n_terms - 1)))
+            ub = np.concatenate(([np.inf], scale * np.ones(n_terms - 1)))
         else:
-            lb = np.concatenate(([-5.0], -1e2 * np.ones(n_terms - 1)))
-            ub = np.concatenate(([5.0], 0.0 * np.ones(n_terms - 1)))
+            lb = np.concatenate(([-np.inf], -scale * np.ones(n_terms - 1)))
+            ub = np.concatenate(([np.inf], np.zeros(n_terms - 1)))
     else:
         lb, ub = (np.asarray(b, dtype=float) for b in bounds)
 
@@ -573,6 +585,9 @@ def fit_cauchy_dispersion(
             break
         resid = y - X @ new_coeffs
         new_w = _bisquare_weights(resid)
+        if np.count_nonzero(new_w > 0) < n_terms:
+            coeffs = new_coeffs
+            break
         converged = np.linalg.norm(new_coeffs - coeffs) < tol * (np.linalg.norm(coeffs) + tol)
         coeffs, w = new_coeffs, new_w
         if converged:
@@ -760,8 +775,7 @@ def _compute_second_pass_inits(Pfit, fit_wl, *, n_cauchy_terms, lambda_ref, smoo
     n_terms = max(1, int(round(n_cauchy_terms)))
     if np.count_nonzero(valid) >= n_terms:
         try:
-            lb = np.concatenate(([-5.0], -1e2 * np.ones(n_terms - 1)))
-            ub = np.concatenate(([5.0], 1e2 * np.ones(n_terms - 1)))
+            lb, ub = _intermediate_cauchy_bounds(Pfit[valid, 0], n_terms)
             coeffs, lam_ref = fit_cauchy_dispersion(
                 fit_wl[valid],
                 Pfit[valid, 0],
@@ -1241,6 +1255,35 @@ def fit_chirp_manual(
 # --------------------------------------------------------------------------- #
 #                 Wavelet (edge-detection based onset) fit                    #
 # --------------------------------------------------------------------------- #
+def _build_wavelet_grid(
+    delays: np.ndarray, t_min: float, t_max: float
+) -> tuple[np.ndarray, float]:
+    """Build the uniform delay grid restricted to ``[t_min, t_max]`` inside ``delays``."""
+    if not (np.isfinite(t_min) and np.isfinite(t_max) and t_min < t_max):
+        raise ValueError(
+            f"Invalid fit window [{t_min}, {t_max}]: t_min must be strictly less than t_max."
+        )
+    delays_arr = np.asarray(delays, dtype=float)
+    finite_delays = delays_arr[np.isfinite(delays_arr)]
+    mask_window = (finite_delays >= t_min) & (finite_delays <= t_max)
+    if not np.any(mask_window):
+        raise ValueError(f"No delays fall inside [{t_min}, {t_max}].")
+
+    win_delays = np.sort(finite_delays[mask_window])
+    t_lo = max(float(t_min), float(win_delays[0]))
+    t_hi = min(float(t_max), float(win_delays[-1]))
+    if t_hi <= t_lo:
+        raise ValueError(f"At least two distinct delays must fall inside [{t_min}, {t_max}].")
+
+    diffs = np.diff(win_delays)
+    pos_diffs = diffs[diffs > 0]
+    dt_est = max(float(np.min(pos_diffs)) if pos_diffs.size > 0 else 0.01, 0.001)
+    n_grid = min(200_000, max(2, int(np.ceil((t_hi - t_lo) / dt_est)) + 1))
+    t_uniform = np.linspace(t_lo, t_hi, n_grid)
+    dt = float(t_uniform[1] - t_uniform[0])
+    return t_uniform, dt
+
+
 def _wavelet_conv_modulus(
     y: np.ndarray,
     delays: np.ndarray,
@@ -1250,28 +1293,32 @@ def _wavelet_conv_modulus(
     gamma_w: float,
 ) -> np.ndarray:
     """Compute the complex wavelet convolution modulus on a uniform grid with edge padding."""
+    t_lo, t_hi = float(t_uniform[0]), float(t_uniform[-1])
     finite = np.isfinite(y) & np.isfinite(delays)
-    if np.count_nonzero(finite) < 5 or np.allclose(y[finite], 0.0):
+    in_win = finite & (delays >= t_lo) & (delays <= t_hi)
+    if np.count_nonzero(in_win) < 2:
         return np.zeros_like(t_uniform)
 
     y_valid = y[finite]
     delays_valid = delays[finite]
 
-    # Interpolate onto uniform grid
-    y_uniform = np.interp(t_uniform, delays_valid, y_valid, left=0.0, right=0.0)
+    # Interpolate onto uniform grid (hold edge values instead of forcing 0.0 cliffs)
+    y_uniform = np.interp(t_uniform, delays_valid, y_valid)
+    if np.allclose(y_uniform, y_uniform[0]):
+        return np.zeros_like(t_uniform)
 
     # Pad the signal at both ends to avoid wrap-around edge effects
-    # We pad by 1.5 ps (which is > 6 * gamma_w)
-    pad_ps = 1.5
-    npad = int(np.ceil(pad_ps / dt))
+    pad_width = max(1.5, 6.0 * float(gamma_w))
+    npad = max(1, int(np.ceil(pad_width / dt)))
     y_padded = np.pad(y_uniform, npad, mode="edge")
 
     M_padded = len(y_padded)
     t_wavelet = np.fft.fftfreq(M_padded, d=1.0) * (M_padded * dt)
 
-    # Complex Morlet wavelet
+    # Complex Morlet wavelet with admissibility correction
     omega_w = 2.0 * np.pi / omega_w_val
-    psi = np.exp(1j * omega_w * t_wavelet - (t_wavelet / gamma_w) ** 2)
+    c0 = np.exp(-0.25 * (omega_w * gamma_w) ** 2)
+    psi = (np.exp(1j * omega_w * t_wavelet) - c0) * np.exp(-(t_wavelet / gamma_w) ** 2)
 
     # FFT convolution
     fft_y = np.fft.fft(y_padded)
@@ -1288,32 +1335,43 @@ def _find_peak_subpixel(
     modulus: np.ndarray, t_uniform: np.ndarray, idx_range=None
 ) -> tuple[float, int]:
     """Find peak of modulus with sub-pixel resolution via parabolic fit."""
-    if idx_range is not None and len(idx_range) > 0:
-        sub_modulus = modulus[idx_range]
-        if len(sub_modulus) == 0:
+    if idx_range is not None:
+        idx_range_arr = np.asarray(idx_range, dtype=int)
+        if idx_range_arr.size == 0:
             return np.nan, -1
-        sub_k = np.argmax(sub_modulus)
-        k = idx_range[sub_k]
+        sub_modulus = modulus[idx_range_arr]
+        if not np.any(np.isfinite(sub_modulus)) or float(np.nanmax(sub_modulus)) <= 0.0:
+            return np.nan, -1
+        sub_k = int(np.nanargmax(sub_modulus))
+        k = int(idx_range_arr[sub_k])
+        at_sub_boundary = (sub_k == 0) or (sub_k == idx_range_arr.size - 1)
     else:
-        k = np.argmax(modulus)
+        if (
+            modulus.size == 0
+            or not np.any(np.isfinite(modulus))
+            or float(np.nanmax(modulus)) <= 0.0
+        ):
+            return np.nan, -1
+        k = int(np.nanargmax(modulus))
+        at_sub_boundary = False
 
     M = len(modulus)
-    if k <= 0 or k >= M - 1:
+    if k <= 0 or k >= M - 1 or at_sub_boundary:
         return float(t_uniform[k]), k
 
     y_minus = modulus[k - 1]
     y_zero = modulus[k]
     y_plus = modulus[k + 1]
 
-    denom = y_minus - 2.0 * y_zero + y_plus
-    if denom < 0.0:
-        delta = 0.5 * (y_minus - y_plus) / denom
-        dt = t_uniform[1] - t_uniform[0]
-        t0 = t_uniform[k] + delta * dt
-    else:
-        t0 = t_uniform[k]
+    if y_zero >= y_minus and y_zero >= y_plus:
+        denom = y_minus - 2.0 * y_zero + y_plus
+        if denom < 0.0:
+            delta = float(np.clip(0.5 * (y_minus - y_plus) / denom, -0.5, 0.5))
+            dt = float(t_uniform[1] - t_uniform[0])
+            t0 = float(np.clip(t_uniform[k] + delta * dt, t_uniform[0], t_uniform[-1]))
+            return t0, k
 
-    return float(t0), k
+    return float(t_uniform[k]), k
 
 
 def _optimise_wavelet_parameters(
@@ -1350,11 +1408,7 @@ def _optimise_wavelet_parameters(
     probe = data._detector_probe(detector)
     Z = data._detector_slice(detector)
 
-    mask_window = (delays >= t_min) & (delays <= t_max)
-    diffs = np.diff(delays[mask_window])
-    dt = float(np.min(diffs)) if diffs.size > 0 else 0.01
-    dt = max(dt, 0.001)
-    t_uniform = np.arange(t_min, t_max + dt / 2.0, dt)
+    t_uniform, dt = _build_wavelet_grid(delays, t_min, t_max)
 
     idxs = np.arange(probe.size) if fit_pixels is None else np.asarray(fit_pixels, dtype=int)
     fit_wl = probe[idxs]
@@ -1374,7 +1428,8 @@ def _optimise_wavelet_parameters(
         for j, i in enumerate(idxs):
             y = Z[:, i]
             finite = np.isfinite(y) & np.isfinite(delays)
-            if np.count_nonzero(finite) < 5 or np.allclose(y[finite], 0.0):
+            in_win = finite & (delays >= t_uniform[0]) & (delays <= t_uniform[-1])
+            if np.count_nonzero(in_win) < 2:
                 continue
             modulus = _wavelet_conv_modulus(y, delays, t_uniform, dt, ow, gw)
             t0_val, _ = _find_peak_subpixel(modulus, t_uniform)
@@ -1385,8 +1440,7 @@ def _optimise_wavelet_parameters(
             return 1e6  # Not enough points for Cauchy fit
 
         try:
-            lb = np.concatenate(([-5.0], -1e2 * np.ones(n_terms - 1)))
-            ub = np.concatenate(([5.0], 1e2 * np.ones(n_terms - 1)))
+            lb, ub = _intermediate_cauchy_bounds(t0_vals[valid], n_terms)
             coeffs, lam_ref = fit_cauchy_dispersion(
                 fit_wl[valid],
                 t0_vals[valid],
@@ -1417,6 +1471,7 @@ def _optimise_wavelet_parameters(
             _objective,
             log_init,
             method="Nelder-Mead",
+            bounds=log_bounds,
             options={"maxiter": max(1, int(opt_max_iter)), "xatol": 1e-4, "fatol": 1e-5},
         )
         best_log = result.x
@@ -1481,17 +1536,8 @@ def fit_chirp_wavelet(
     probe = data._detector_probe(detector)
     Z = data._detector_slice(detector)
 
-    # Determine uniform grid spacing dt
-    mask_window = (delays >= t_min) & (delays <= t_max)
-    if not np.any(mask_window):
-        raise ValueError(f"No delays fall inside [{t_min}, {t_max}].")
-
-    # Calculate spacing (avoid dividing by zero if only one point)
-    diffs = np.diff(delays[mask_window])
-    dt = float(np.min(diffs)) if diffs.size > 0 else 0.01
-    dt = max(dt, 0.001)  # Ensure at least 1 fs step size
-
-    t_uniform = np.arange(t_min, t_max + dt / 2.0, dt)
+    t_uniform, dt = _build_wavelet_grid(delays, t_min, t_max)
+    half_win = min(1.0, 0.5 * float(t_uniform[-1] - t_uniform[0]))
 
     idxs = np.arange(probe.size) if fit_pixels is None else np.asarray(fit_pixels, dtype=int)
     fit_wl = probe[idxs]
@@ -1506,21 +1552,22 @@ def fit_chirp_wavelet(
 
             y = Z[:, i]
             finite = np.isfinite(y) & np.isfinite(delays)
-            if np.count_nonzero(finite) < 5 or np.allclose(y[finite], 0.0):
+            in_win = finite & (delays >= t_uniform[0]) & (delays <= t_uniform[-1])
+            if np.count_nonzero(in_win) < 2:
                 Pfit[j, 0] = np.nan
                 continue
-
-            modulus = _wavelet_conv_modulus(y, delays, t_uniform, dt, omega_w, gamma_w)
 
             idx_range = None
             if t0_guess_fn is not None:
                 t0_guess = t0_guess_fn(j)
-                if np.isfinite(t0_guess):
-                    # Search within +/- 1.0 ps of guess
-                    idx_range = np.where(
-                        (t_uniform >= t0_guess - 1.0) & (t_uniform <= t0_guess + 1.0)
-                    )[0]
+                if not np.isfinite(t0_guess):
+                    Pfit[j, 0] = np.nan
+                    continue
+                idx_range = np.where(
+                    (t_uniform >= t0_guess - half_win) & (t_uniform <= t0_guess + half_win)
+                )[0]
 
+            modulus = _wavelet_conv_modulus(y, delays, t_uniform, dt, omega_w, gamma_w)
             t0, _ = _find_peak_subpixel(modulus, t_uniform, idx_range)
             Pfit[j, 0] = t0
 
@@ -1529,7 +1576,7 @@ def fit_chirp_wavelet(
 
             if preview_callback is not None:
                 # Scale modulus for plotting
-                y_interp = np.interp(t_uniform, delays[finite], y[finite], left=0.0, right=0.0)
+                y_interp = np.interp(t_uniform, delays[finite], y[finite])
                 max_abs_y = float(np.max(np.abs(y_interp)))
                 max_mod = float(np.max(modulus))
                 dcol = modulus * (max_abs_y / max_mod) if max_mod > 1e-12 else modulus
@@ -1555,14 +1602,12 @@ def fit_chirp_wavelet(
 
     _run_pass("Pass 1: detecting wavelet edge peaks...")
 
-
     if do_2nd_pass:
         valid_p1 = np.isfinite(Pfit[:, 0])
         n_terms = max(1, int(round(n_cauchy_terms)))
         if np.count_nonzero(valid_p1) >= n_terms:
             try:
-                lb = np.concatenate(([-5.0], -1e2 * np.ones(n_terms - 1)))
-                ub = np.concatenate(([5.0], 1e2 * np.ones(n_terms - 1)))
+                lb, ub = _intermediate_cauchy_bounds(Pfit[valid_p1, 0], n_terms)
                 coeffs, lam_ref = fit_cauchy_dispersion(
                     fit_wl[valid_p1],
                     Pfit[valid_p1, 0],
@@ -1693,7 +1738,9 @@ def plot_chirp_diagnostics(data, fit: ChirpFit, *, detector: int | None = None) 
     ax1.plot(probe, curve, "-", color="gold", lw=3, alpha=0.75, label="Dispersion fit")
     if np.any(valid):
         centre = float(np.nanmean(t0[valid]))
-        ax1.set_ylim(centre - 2.0, centre + 2.0)
+        t0_span = float(np.nanmax(t0[valid]) - np.nanmin(t0[valid]))
+        half_span = max(2.0, 0.6 * t0_span)
+        ax1.set_ylim(centre - half_span, centre + half_span)
     ax1.legend(loc="best")
     ax1.set_title("Fitted dispersion curve (contour overlay)")
 

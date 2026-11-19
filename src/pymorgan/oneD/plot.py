@@ -105,6 +105,8 @@ def _wn_div1000_formatter():
 
 def _axis_label_text(labelStyle, lbl, ltx):
     """Axis-label string for ``lbl``/``ltx`` honouring the delimiter style."""
+    if not ltx:
+        return f"{lbl}"
     match labelStyle:
         case "()":
             return r"%s (%s)" % (lbl, ltx)
@@ -130,6 +132,11 @@ def _resolve_x_axis(X, Units, settings, *, x_axis_unit=None, secondary_axis=None
     * ``conv``    -- callable mapping native-unit values to the display unit
       (for auxiliary overlays such as steady-state Abs/Em spectra).
     """
+    if hlp.is_uncalibrated_probe(Units):
+        xplot = np.asarray(X, dtype=float)
+        XUnits = {"lbl": "Pixel index", "ltx": "", "wn_scaled": False}
+        return xplot, XUnits, None, lambda v: np.asarray(v, dtype=float)
+
     xu = x_axis_unit if x_axis_unit is not None else settings.x_axis_unit.value
     sec_on = secondary_axis if secondary_axis is not None else settings.secondary_axis
     native = hlp.native_x_unit(Units)
@@ -1054,7 +1061,11 @@ def plot_surface(
 
     apply_delay_axis(where, "y", Yscale, Y_t, time_axis_label=time_axis_label, settings=s)
 
-    XUnits = {"lbl": Units["unitsL_lbl"], "ltx": Units["unitsL_ltx"]}
+    XUnits = (
+        {"lbl": "Pixel index", "ltx": ""}
+        if hlp.is_uncalibrated_probe(Units)
+        else {"lbl": Units["unitsL_lbl"], "ltx": Units["unitsL_ltx"]}
+    )
     YUnits = {"lbl": "Delay", "ltx": Units["unitsT_ltx"]}
     hlp.setXYlabels(where, labelStyle, XUnits, YUnits, setXLabel=show_xlabel, setYLabel=show_ylabel)
     where.set_zlabel(r"$\Delta$A", fontweight="bold")
@@ -1941,7 +1952,8 @@ def plot_kinetics(
             yplot[:, i] = Zavg_C[:, Plt_ID[i]]
         # Inherit the probe (X-axis) unit; round subject to the setting.
         value = round(Plt_val[i]) if round_labels else Plt_val[i]
-        lbl = f"{value:g} {Units['unitsL_ltx']}"
+        _probe_ltx = "px" if hlp.is_uncalibrated_probe(Units) else Units["unitsL_ltx"]
+        lbl = f"{value:g} {_probe_ltx}"
 
         if noise_slice is not None:
             y_noise = noise_slice[:, Plt_ID[i]]
@@ -2271,13 +2283,14 @@ def plot_scan_kinetics(
     if "linewidth" not in kwargs and "lw" not in kwargs:
         kwargs["linewidth"] = s.kinetics_line_width
 
+    _probe_ltx = "px" if hlp.is_uncalibrated_probe(Units) else Units["unitsL_ltx"]
     if ax is None and n_pos > 1:
         axes_list = []
         for p in range(n_pos):
             sub_fig, sub_where = _new_axes(None, None, layout="constrained")
             sub_fig.set_size_inches(*s.kinetics_figsize)
             pos_val = round(Plt_val[p]) if round_labels else Plt_val[p]
-            pos_lbl = "%g %s" % (pos_val, Units["unitsL_ltx"])
+            pos_lbl = "%g %s" % (pos_val, _probe_ltx)
             for b in range(n_bin):
                 y = Zb[:, Plt_ID[p], b]
                 if normY:
@@ -2303,7 +2316,7 @@ def plot_scan_kinetics(
 
     for p in range(n_pos):
         pos_val = round(Plt_val[p]) if round_labels else Plt_val[p]
-        pos_lbl = "%g %s" % (pos_val, Units["unitsL_ltx"])
+        pos_lbl = "%g %s" % (pos_val, _probe_ltx)
         for b in range(n_bin):
             y = Zb[:, Plt_ID[p], b]
             if normY:
@@ -2320,7 +2333,7 @@ def plot_scan_kinetics(
     _apply_time_xscale(where, Xscale, Y_t, time_axis_label=time_axis_label, settings=s)
     if created:
         pos_val0 = round(Plt_val[0]) if round_labels else Plt_val[0]
-        pos_lbl0 = "%g %s" % (pos_val0, Units["unitsL_ltx"]) if n_pos == 1 else None
+        pos_lbl0 = "%g %s" % (pos_val0, _probe_ltx) if n_pos == 1 else None
         _set_figure_window_title(pFig, "scan kinetics", data, extra=pos_lbl0)
     return where, Y_t, Zb
 

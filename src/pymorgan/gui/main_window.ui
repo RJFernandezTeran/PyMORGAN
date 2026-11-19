@@ -251,7 +251,7 @@ QTabWidget#MainTabs &gt; QTabBar::tab:!selected {
        <attribute name="title">
         <string>Pump-Probe</string>
        </attribute>
-       <layout class="QHBoxLayout" name="ppTabLayout">
+       <layout class="QHBoxLayout" name="ppTabLayout" stretch="0,1">
         <property name="spacing">
          <number>6</number>
         </property>
@@ -283,6 +283,12 @@ QTabWidget#MainTabs &gt; QTabBar::tab:!selected {
           </property>
           <item>
            <widget class="QGroupBox" name="PP_datagrp">
+            <property name="maximumSize">
+             <size>
+              <width>365</width>
+              <height>16777215</height>
+             </size>
+            </property>
             <property name="styleSheet">
              <string notr="true">font: bold</string>
             </property>
@@ -404,6 +410,12 @@ QTabWidget#MainTabs &gt; QTabBar::tab:!selected {
           </item>
           <item>
            <widget class="QGroupBox" name="oneD_PreProcessing_box">
+            <property name="maximumSize">
+             <size>
+              <width>365</width>
+              <height>16777215</height>
+             </size>
+            </property>
             <property name="title">
              <string>Pre-processing</string>
             </property>
@@ -1102,6 +1114,18 @@ font: bold</string>
           </item>
           <item>
            <widget class="QTextEdit" name="PP_SampleInfo_text">
+            <property name="sizePolicy">
+             <sizepolicy hsizetype="Preferred" vsizetype="Expanding">
+              <horstretch>0</horstretch>
+              <verstretch>0</verstretch>
+             </sizepolicy>
+            </property>
+            <property name="maximumSize">
+             <size>
+              <width>365</width>
+              <height>16777215</height>
+             </size>
+            </property>
             <property name="styleSheet">
              <string notr="true" />
             </property>
@@ -1944,9 +1968,9 @@ The magnitude sets the smoothing window width.</string>
       </widget>
       <widget class="QWidget" name="twoD_tab">
        <attribute name="title">
-        <string>Time-Domain 2D Spectroscopy</string>
+        <string>2D spectra</string>
        </attribute>
-       <layout class="QHBoxLayout" name="twoDTabLayout">
+       <layout class="QHBoxLayout" name="twoDTabLayout" stretch="0,1">
         <property name="spacing">
          <number>6</number>
         </property>
@@ -3214,26 +3238,65 @@ The magnitude sets the smoothing window width.</string>
         <attribute name="title">
          <string>Spectrometer and Shaper Calibration</string>
         </attribute>
-        <layout class="QHBoxLayout" name="cal_main_layout">
+        <layout class="QHBoxLayout" name="cal_main_layout" stretch="0,1,0">
          <item>
           <widget class="QScrollArea" name="cal_scroll_area">
+           <property name="minimumSize">
+            <size>
+             <width>204</width>
+             <height>0</height>
+            </size>
+           </property>
            <property name="maximumSize">
             <size>
-             <width>290</width>
+             <width>204</width>
              <height>16777215</height>
             </size>
+           </property>
+           <property name="horizontalScrollBarPolicy">
+            <enum>Qt::ScrollBarPolicy::ScrollBarAlwaysOff</enum>
            </property>
            <property name="widgetResizable">
             <bool>true</bool>
            </property>
            <widget class="QWidget" name="cal_scroll_widget">
             <layout class="QVBoxLayout" name="cal_controls_layout">
+             <property name="spacing">
+              <number>6</number>
+             </property>
+             <property name="leftMargin">
+              <number>4</number>
+             </property>
+             <property name="topMargin">
+              <number>4</number>
+             </property>
+             <property name="rightMargin">
+              <number>4</number>
+             </property>
+             <property name="bottomMargin">
+              <number>4</number>
+             </property>
              <item>
               <widget class="QGroupBox" name="cal_spec_group">
                <property name="title">
                 <string>Spectrometer Calibration</string>
                </property>
                <layout class="QVBoxLayout" name="cal_spec_layout">
+                <property name="spacing">
+                 <number>4</number>
+                </property>
+                <property name="leftMargin">
+                 <number>4</number>
+                </property>
+                <property name="topMargin">
+                 <number>6</number>
+                </property>
+                <property name="rightMargin">
+                 <number>4</number>
+                </property>
+                <property name="bottomMargin">
+                 <number>6</number>
+                </property>
                 <item>
                  <layout class="QHBoxLayout" name="cal_spec_load_probe_layout">
                   <item>
@@ -3326,6 +3389,12 @@ The magnitude sets the smoothing window width.</string>
                </item>
                <item>
                 <widget class="QComboBox" name="cal_type_combo">
+                 <property name="sizeAdjustPolicy">
+                  <enum>QComboBox::SizeAdjustPolicy::AdjustToMinimumContentsLengthWithIcon</enum>
+                 </property>
+                 <property name="minimumContentsLength">
+                  <number>10</number>
+                 </property>
                  <item><property name="text"><string>UoS TRIR</string></property></item>
                  <item><property name="text"><string>UniGE fsTA</string></property></item>
                  <item><property name="text"><string>UniGE nsTA</string></property></item>
@@ -3362,7 +3431,14 @@ The magnitude sets the smoothing window width.</string>
                    </widget>
                   </item>
                   <item>
-                   <widget class="QComboBox" name="cal_range_combo"/>
+                   <widget class="QComboBox" name="cal_range_combo">
+                    <property name="sizeAdjustPolicy">
+                     <enum>QComboBox::SizeAdjustPolicy::AdjustToMinimumContentsLengthWithIcon</enum>
+                    </property>
+                    <property name="minimumContentsLength">
+                     <number>10</number>
+                    </property>
+                   </widget>
                   </item>
                  </layout>
                 </widget>
@@ -3399,6 +3475,21 @@ The magnitude sets the smoothing window width.</string>
                 <string notr="true">QGroupBox::title { color: brown; font-weight: bold; }</string>
                </property>
                <layout class="QVBoxLayout" name="cal_shaper_layout">
+                <property name="spacing">
+                 <number>4</number>
+                </property>
+                <property name="leftMargin">
+                 <number>4</number>
+                </property>
+                <property name="topMargin">
+                 <number>6</number>
+                </property>
+                <property name="rightMargin">
+                 <number>4</number>
+                </property>
+                <property name="bottomMargin">
+                 <number>6</number>
+                </property>
                 <item>
                  <layout class="QHBoxLayout" name="cal_shaper_load_pump_layout">
                   <item>
@@ -3507,6 +3598,12 @@ The magnitude sets the smoothing window width.</string>
          </item>
          <item>
           <widget class="QWidget" name="cal_right_panel" native="true">
+           <property name="sizePolicy">
+            <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
+             <horstretch>1</horstretch>
+             <verstretch>0</verstretch>
+            </sizepolicy>
+           </property>
            <layout class="QVBoxLayout" name="cal_right_layout">
             <item>
              <layout class="QHBoxLayout" name="cal_toolbar_layout">
@@ -3775,6 +3872,7 @@ The magnitude sets the smoothing window width.</string>
                   <item><property name="text"><string>Standard Absorbance</string></property></item>
                   <item><property name="text"><string>1st Derivative (dY/dx)</string></property></item>
                   <item><property name="text"><string>2nd Derivative (d²Y/dx²)</string></property></item>
+                  <item><property name="text"><string>Global (0th + 1st + 2nd)</string></property></item>
                  </widget>
                 </item>
                 <item row="2" column="0">
@@ -3805,6 +3903,66 @@ The magnitude sets the smoothing window width.</string>
                 <item row="5" column="0" colspan="2">
                  <widget class="QCheckBox" name="cal_set_convolve_ref">
                   <property name="text"><string>Convolve Reference (Gaussian FWHM)</string></property>
+                  <property name="checked"><bool>true</bool></property>
+                 </widget>
+                </item>
+               </layout>
+              </widget>
+             </item>
+             <item>
+              <widget class="QGroupBox" name="cal_set_baseline_group">
+               <property name="title">
+                <string>Baseline Correction</string>
+               </property>
+               <layout class="QGridLayout" name="cal_set_baseline_layout">
+                <item row="0" column="0">
+                 <widget class="QLabel" name="cal_set_lbl_bl_method">
+                  <property name="text"><string>Algorithm:</string></property>
+                  <property name="styleSheet"><string notr="true">font-weight: bold;</string></property>
+                 </widget>
+                </item>
+                <item row="0" column="1">
+                 <widget class="QComboBox" name="cal_set_bl_method">
+                  <item><property name="text"><string>arPLS (Auto Asymmetric)</string></property></item>
+                  <item><property name="text"><string>AsLS (Whittaker Smooth)</string></property></item>
+                  <item><property name="text"><string>SNIP (Peak Clipping)</string></property></item>
+                  <item><property name="text"><string>IModPoly (Iter. Polynomial)</string></property></item>
+                  <item><property name="text"><string>Legacy Polynomial (In-Fit)</string></property></item>
+                 </widget>
+                </item>
+                <item row="1" column="0">
+                 <widget class="QLabel" name="cal_set_lbl_bl_target">
+                  <property name="text"><string>Apply To:</string></property>
+                  <property name="styleSheet"><string notr="true">font-weight: bold;</string></property>
+                 </widget>
+                </item>
+                <item row="1" column="1">
+                 <widget class="QComboBox" name="cal_set_bl_target">
+                  <item><property name="text"><string>Sample &amp; Standard</string></property></item>
+                  <item><property name="text"><string>Sample Only</string></property></item>
+                  <item><property name="text"><string>Standard Only</string></property></item>
+                  <item><property name="text"><string>None (Off)</string></property></item>
+                 </widget>
+                </item>
+                <item row="2" column="0">
+                 <widget class="QLabel" name="cal_set_lbl_bl_smooth">
+                  <property name="text"><string>Smoothness (τ):</string></property>
+                  <property name="styleSheet"><string notr="true">font-weight: bold;</string></property>
+                 </widget>
+                </item>
+                <item row="2" column="1">
+                 <widget class="QDoubleSpinBox" name="cal_set_bl_smooth">
+                  <property name="decimals"><number>2</number></property>
+                  <property name="minimum"><double>0.02</double></property>
+                  <property name="maximum"><double>1.00</double></property>
+                  <property name="singleStep"><double>0.02</double></property>
+                  <property name="value"><double>0.20</double></property>
+                 </widget>
+                </item>
+                <item row="3" column="0" colspan="2">
+                 <widget class="QCheckBox" name="cal_set_snr_weights">
+                  <property name="text"><string>Blank Intensity SNR Weighting</string></property>
+                  <property name="checked"><bool>true</bool></property>
                  </widget>
                 </item>
                </layout>

@@ -9,7 +9,7 @@ Supports:
 from __future__ import annotations
 
 import numpy as np
-from scipy.interpolate import make_interp_spline
+from scipy.interpolate import PchipInterpolator, make_interp_spline
 
 # Sellmeier coefficients for SF10 glass (lambda in micrometers)
 SF10_B = np.array([1.62153902, 0.256287842, 1.64447552])
@@ -167,6 +167,7 @@ def fit_model_eval(
     meas_y: np.ndarray,
     cal_type_code: int,
     grating_degree: int = 1,
+    interp_kind: str = "linear",
 ) -> np.ndarray:
     """Evaluate synthetic measured absorbance from reference spectrum given fit parameters.
 
@@ -184,6 +185,8 @@ def fit_model_eval(
         Calibration type indicator (1..10).
     grating_degree : int, default 1
         Degree of grating dispersion polynomial (1=Linear, 2=Quadratic, 3=Cubic).
+    interp_kind : str, default "linear"
+        Pixel interpolator type (``"linear"`` or monotonicity-preserving ``"pchip"``).
 
     Returns
     -------
@@ -191,7 +194,10 @@ def fit_model_eval(
         Evaluated model spectrum matched to ref_x wavelength points.
     """
     # Create interpolant for measured experimental data vs pixel
-    meas_interp = make_interp_spline(meas_pixels, meas_y, k=1)
+    if interp_kind == "pchip" and len(meas_pixels) >= 2:
+        meas_interp = PchipInterpolator(meas_pixels, meas_y, extrapolate=True)
+    else:
+        meas_interp = make_interp_spline(meas_pixels, meas_y, k=1)
 
     if cal_type_code == 5:
         # NIR-TA Prism model

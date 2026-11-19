@@ -175,7 +175,7 @@ def load_reference_spectrum(file_path: str | Path) -> ReferenceSpectrum:
 def read_numeric_matrix(file_path: str | Path, default_delimiter: str | None = None) -> np.ndarray:
     """Read numeric array data from text file, automatically skipping header and metadata rows."""
     path = Path(file_path)
-    lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    lines = path.read_text(encoding="utf-8", errors="ignore").replace("\x00", "").splitlines()
     numeric_lines = []
 
     for line in lines:
@@ -183,7 +183,7 @@ def read_numeric_matrix(file_path: str | Path, default_delimiter: str | None = N
         if not s or s.startswith("#") or s.startswith("%") or s.startswith("//"):
             continue
         # Test if first token is numeric
-        parts = s.replace(",", " ").split()
+        parts = s.replace(",", " ").replace(";", " ").split()
         try:
             float(parts[0])
             numeric_lines.append(s)
@@ -195,14 +195,14 @@ def read_numeric_matrix(file_path: str | Path, default_delimiter: str | None = N
 
     sample = numeric_lines[0]
     if default_delimiter is None:
-        if "\t" in sample:
-            delimiter = "\t"
-        elif "," in sample:
+        if "," in sample:
             delimiter = ","
+        elif ";" in sample:
+            delimiter = ";"
         else:
             delimiter = None
     else:
-        delimiter = default_delimiter
+        delimiter = None if default_delimiter.strip() == "" else default_delimiter
 
     import io
     buf = io.StringIO("\n".join(numeric_lines))

@@ -164,6 +164,7 @@ class PlotControlsPanel(QObject):
             raise RuntimeError(f"PC_box widgets missing from main_window.ui: {missing}")
         for attr, name in _WIDGETS.items():
             setattr(self, attr, getattr(host, name, None))
+        self._lbl_xunit = getattr(host, "PC_lblXUnit", None)
 
         # The choice combos are authoritative from Settings, not the .ui items.
         self._populate_choice_combo(self.cmb_scale, "time_axis_scale")
@@ -348,7 +349,10 @@ class PlotControlsPanel(QObject):
         if getattr(self, "_x_scaled", False):
             xlim_vals = [v * 1000.0 for v in xlim_vals]
 
-        xl = hlp.convert_spectral(np.asarray(xlim_vals, dtype=float), self._x_display, native)
+        if self._is_uncalibrated():
+            xl = np.asarray(xlim_vals, dtype=float)
+        else:
+            xl = hlp.convert_spectral(np.asarray(xlim_vals, dtype=float), self._x_display, native)
         xlo, xhi = sorted((float(xl[0]), float(xl[1])))
         ylo, yhi = sorted(self.ylim())
         pmask = (probe >= xlo) & (probe <= xhi)
@@ -380,8 +384,14 @@ class PlotControlsPanel(QObject):
         pm.update_settings(**{field: value})
         self.renderRequested.emit()
 
+    def _is_uncalibrated(self) -> bool:
+        """Return True when the active dataset uses uncalibrated pixel indices."""
+        return hlp.is_uncalibrated_probe(self._dataset)
+
     def _display_unit(self) -> str:
         """Effective spectral display unit (resolves "native" against the data)."""
+        if self._is_uncalibrated():
+            return "px"
         native = hlp.native_x_unit(self._dataset.units) if self._dataset is not None else "nm"
         return hlp.resolve_x_unit(pm.get_settings().x_axis_unit.value, native)
 
@@ -408,6 +418,8 @@ class PlotControlsPanel(QObject):
         """Switch the spectral display unit, converting the X spin-box limits."""
         old = self._x_display
         pm.update_settings(x_axis_unit=value)
+        if self._is_uncalibrated():
+            return
         new = self._display_unit()
         if self._dataset is not None and old != new:
             native = hlp.native_x_unit(self._dataset.units)
@@ -490,7 +502,7 @@ class PlotControlsPanel(QObject):
             chk_quick.setChecked(bool(s.quick_plots))
             chk_quick.blockSignals(False)
 
-        if hasattr(self, "_x_display") and self._x_display != self._display_unit():
+        if not self._is_uncalibrated() and hasattr(self, "_x_display") and self._x_display != self._display_unit():
             self._on_xunit_changed(s.x_axis_unit.value)
 
 
@@ -506,10 +518,13 @@ class PlotControlsPanel(QObject):
         if self._dataset is not None:
             det = self.detector
             det_probe = self._dataset._detector_probe(det)
-            native = hlp.native_x_unit(self._dataset.units)
-            probe_disp = hlp.convert_spectral(
-                np.asarray(det_probe, dtype=float), native, self._x_display
-            )
+            if self._is_uncalibrated():
+                probe_disp = np.asarray(det_probe, dtype=float)
+            else:
+                native = hlp.native_x_unit(self._dataset.units)
+                probe_disp = hlp.convert_spectral(
+                    np.asarray(det_probe, dtype=float), native, self._x_display
+                )
             xmin_val = float(np.nanmin(probe_disp))
             xmax_val = float(np.nanmax(probe_disp))
             if getattr(self, "_x_scaled", False):
@@ -562,7 +577,12 @@ class PlotControlsPanel(QObject):
         if dataset is None:
             return
 
-        self._x_display = self._display_unit()
+        uncal = self._is_uncalibrated()
+        for w in (self.cmb_xunit, self.secondary_chk, getattr(self, "_lbl_xunit", None)):
+            if w is not None:
+                w.setEnabled(not uncal)
+
+        self._x_display = "px" if uncal else self._display_unit()
 
         n_det = getattr(dataset, "n_detectors", 1)
         if hasattr(self, "detector_spin") and self.detector_spin is not None:
@@ -587,13 +607,16 @@ class PlotControlsPanel(QObject):
         self._zabs_full = (float(np.nanmax(np.abs(finite))) if finite.size else 1.0) or 1.0
         self._zfull_lo = float(np.nanmin(finite)) if finite.size else -1.0
         self._zfull_hi = float(np.nanmax(finite)) if finite.size else 1.0
-        native = hlp.native_x_unit(dataset.units)
-        probe = hlp.convert_spectral(
-            np.asarray(dataset._detector_probe(self.detector), dtype=float), native, self._x_display
-        )
+        if uncal:
+            probe = np.asarray(dataset._detector_probe(self.detector), dtype=float)
+            self._x_scaled = False
+        else:
+            native = hlp.native_x_unit(dataset.units)
+            probe = hlp.convert_spectral(
+                np.asarray(dataset._detector_probe(self.detector), dtype=float), native, self._x_display
+            )
+            self._x_scaled = self._x_display == "cm-1" and float(np.nanmax(np.abs(probe))) > 5000.0
         delays = np.asarray(dataset.delays, dtype=float)
-
-        self._x_scaled = self._x_display == "cm-1" and float(np.nanmax(np.abs(probe))) > 5000.0
         self._update_x_token(self._x_display)
 
         t_unit = dataset.units.get("unitsT_ltx", "ps") if hasattr(dataset, "units") and isinstance(dataset.units, dict) else "ps"
@@ -691,6 +714,8 @@ class PlotControlsPanel(QObject):
         """Convert probe positions from the X display unit to the dataset's native unit."""
         if self._dataset is None:
             return values
+        if self._is_uncalibrated():
+            return [float(v) for v in np.atleast_1d(values)]
         native = hlp.native_x_unit(self._dataset.units)
         values_list = [float(v) for v in np.atleast_1d(values)]
         if getattr(self, "_x_scaled", False):
@@ -704,6 +729,8 @@ class PlotControlsPanel(QObject):
         """Convert probe positions from the dataset's native unit to the X display unit."""
         if self._dataset is None:
             return values
+        if self._is_uncalibrated():
+            return [float(v) for v in np.atleast_1d(values)]
         native = hlp.native_x_unit(self._dataset.units)
         if native == self._x_display:
             arr = [float(v) for v in np.atleast_1d(values)]

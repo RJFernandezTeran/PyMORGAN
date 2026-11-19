@@ -41,11 +41,26 @@ MODE_WAVELET = "Edge Detection (Wavelet)"
 class ChirpFitOptionsDialog(QDialog):
     """Mode selection + per-mode fit options for the chirp/dispersion fit."""
 
-    def __init__(self, parent=None, *, n_detectors: int = 1, active_detector: int = 0):
+    def __init__(
+        self,
+        parent=None,
+        *,
+        n_detectors: int = 1,
+        active_detector: int = 0,
+        time_unit: str = "ps",
+    ):
         super().__init__(parent)
         self.setWindowTitle("Fit Chirp Correction")
         self._n_detectors = max(1, int(n_detectors))
         self._active_detector = max(0, min(int(active_detector), self._n_detectors - 1))
+        clean_t_unit = (time_unit or "ps").replace("$", "").strip() or "ps"
+        self._time_unit = clean_t_unit
+        if clean_t_unit == "ns":
+            self._sub_time_unit = "ps"
+        elif clean_t_unit == "ps":
+            self._sub_time_unit = "fs"
+        else:
+            self._sub_time_unit = f"10^-3 {clean_t_unit}"
 
         outer = QVBoxLayout(self)
 
@@ -171,16 +186,16 @@ class ChirpFitOptionsDialog(QDialog):
         form.addRow("IRF derivative terms:", self.step_deriv_cbx)
 
         self.step_tmin_spin = QDoubleSpinBox(page)
-        self.step_tmin_spin.setRange(-1000.0, 1000.0)
+        self.step_tmin_spin.setRange(-1e7, 1e7)
         self.step_tmin_spin.setDecimals(3)
         self.step_tmin_spin.setValue(-1.0)
-        form.addRow("Fit window t_min (ps):", self.step_tmin_spin)
+        form.addRow(f"Fit window t_min ({self._time_unit}):", self.step_tmin_spin)
 
         self.step_tmax_spin = QDoubleSpinBox(page)
-        self.step_tmax_spin.setRange(-1000.0, 1000.0)
+        self.step_tmax_spin.setRange(-1e7, 1e7)
         self.step_tmax_spin.setDecimals(3)
         self.step_tmax_spin.setValue(3.0)
-        form.addRow("Fit window t_max (ps):", self.step_tmax_spin)
+        form.addRow(f"Fit window t_max ({self._time_unit}):", self.step_tmax_spin)
 
         self.step_use_exp_chk = QCheckBox(page)
         self.step_use_exp_chk.setChecked(False)
@@ -195,28 +210,28 @@ class ChirpFitOptionsDialog(QDialog):
         form = QFormLayout(page)
 
         self.wavelet_tmin_spin = QDoubleSpinBox(page)
-        self.wavelet_tmin_spin.setRange(-1000.0, 1000.0)
+        self.wavelet_tmin_spin.setRange(-1e7, 1e7)
         self.wavelet_tmin_spin.setDecimals(3)
         self.wavelet_tmin_spin.setValue(-1.0)
-        form.addRow("Fit window t_min (ps):", self.wavelet_tmin_spin)
+        form.addRow(f"Fit window t_min ({self._time_unit}):", self.wavelet_tmin_spin)
 
         self.wavelet_tmax_spin = QDoubleSpinBox(page)
-        self.wavelet_tmax_spin.setRange(-1000.0, 1000.0)
+        self.wavelet_tmax_spin.setRange(-1e7, 1e7)
         self.wavelet_tmax_spin.setDecimals(3)
         self.wavelet_tmax_spin.setValue(3.0)
-        form.addRow("Fit window t_max (ps):", self.wavelet_tmax_spin)
+        form.addRow(f"Fit window t_max ({self._time_unit}):", self.wavelet_tmax_spin)
 
         self.wavelet_omega_spin = QDoubleSpinBox(page)
         self.wavelet_omega_spin.setRange(1.0, 10000.0)
         self.wavelet_omega_spin.setDecimals(1)
         self.wavelet_omega_spin.setValue(125.0)
-        form.addRow("Wavelet oscillation period (fs):", self.wavelet_omega_spin)
+        form.addRow(f"Wavelet oscillation period ({self._sub_time_unit}):", self.wavelet_omega_spin)
 
         self.wavelet_gamma_spin = QDoubleSpinBox(page)
         self.wavelet_gamma_spin.setRange(1.0, 10000.0)
         self.wavelet_gamma_spin.setDecimals(1)
         self.wavelet_gamma_spin.setValue(225.0)
-        form.addRow("Wavelet width (fs):", self.wavelet_gamma_spin)
+        form.addRow(f"Wavelet width ({self._sub_time_unit}):", self.wavelet_gamma_spin)
 
         self.wavelet_optimise_chk = QCheckBox(page)
         self.wavelet_optimise_chk.setChecked(False)
@@ -269,10 +284,17 @@ class ChirpFitOptionsDialog(QDialog):
     def _detector_value(spin: QSpinBox | None) -> int:
         return spin.value() if spin is not None else 0
 
+    @staticmethod
+    def _commit_spins(*spins) -> None:
+        for spin in spins:
+            if spin is not None:
+                spin.interpretText()
+
     def fit_kwargs(self) -> dict:
         """Keyword arguments for the selected mode's ``chirp.fit_chirp_*`` function."""
         mode = self.mode()
         if mode == MODE_AUTOMATIC:
+            self._commit_spins(self.auto_detector_spin, self.auto_nterms_spin, self.auto_smooth_spin)
             deriv_mask = _DERIV_OPTIONS[self.auto_deriv_cbx.currentIndex()][1]
             return {
                 "detector": self._detector_value(self.auto_detector_spin),
@@ -284,6 +306,12 @@ class ChirpFitOptionsDialog(QDialog):
                 "smooth_window": self.auto_smooth_spin.value(),
             }
         if mode == MODE_STEP:
+            self._commit_spins(
+                self.step_detector_spin,
+                self.step_tmin_spin,
+                self.step_tmax_spin,
+                self.step_nterms_spin,
+            )
             deriv_mask = _DERIV_OPTIONS[self.step_deriv_cbx.currentIndex()][1]
             return {
                 "detector": self._detector_value(self.step_detector_spin),
@@ -295,6 +323,16 @@ class ChirpFitOptionsDialog(QDialog):
                 "cauchy_lambda_ref": self._lambda_ref(self.step_lambda_ref_edit),
             }
         if mode == MODE_WAVELET:
+            self._commit_spins(
+                self.wavelet_detector_spin,
+                self.wavelet_tmin_spin,
+                self.wavelet_tmax_spin,
+                self.wavelet_omega_spin,
+                self.wavelet_gamma_spin,
+                self.wavelet_opt_maxiter_spin,
+                self.wavelet_smooth_spin,
+                self.wavelet_nterms_spin,
+            )
             return {
                 "detector": self._detector_value(self.wavelet_detector_spin),
                 "t_min": self.wavelet_tmin_spin.value(),
@@ -309,6 +347,7 @@ class ChirpFitOptionsDialog(QDialog):
                 "cauchy_lambda_ref": self._lambda_ref(self.wavelet_lambda_ref_edit),
             }
         # Manual: only the dispersion-fit options apply (no per-pixel IRF fit).
+        self._commit_spins(self.manual_detector_spin, self.manual_nterms_spin)
         return {
             "detector": self._detector_value(self.manual_detector_spin),
             "n_cauchy_terms": self.manual_nterms_spin.value(),

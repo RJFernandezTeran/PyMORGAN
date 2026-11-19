@@ -160,6 +160,18 @@ def test_unige_nsta_loader(tmp_path):
     assert len(exp.detector_data[0]) == 100
     np.testing.assert_allclose(exp.detector_data[0], sig)
 
+    # ps-ta style export with double tab (\t\t) between signal and rms signal
+    double_tab_path = tmp_path / "nsta_double_tab.dat"
+    lines = ["% pixel\tsignal\trms signal\treference\trms reference"]
+    for p, s, rs, r, rr in zip(pix, sig, rms_sig, ref, rms_ref, strict=True):
+        lines.append(f"{p}\t{s:.6f}\t\t{rs:.4f}\t{r:.2f}\t{rr:.4f}")
+    double_tab_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    exp_dt = load_experimental_spectrum(double_tab_path, cal_type_code=3)
+    assert len(exp_dt.detector_data) == 1
+    assert len(exp_dt.detector_data[0]) == 100
+    np.testing.assert_allclose(exp_dt.detector_data[0], sig, atol=1e-6)
+
 
 def test_shaper_panel_visibility_toggle(qapp):
     from pymorgan.gui.main_window import MainWindow
@@ -456,5 +468,513 @@ def test_gui_pymess_and_harpia_range_selectors(qapp):
     assert win.cal_set_ppnm.value() == pytest.approx(0.62)
     assert win.cal_set_rel_min_nm.value() == pytest.approx(-190.0)
     assert win.cal_set_rel_max_nm.value() == pytest.approx(190.0)
+
+
+def test_unige_nsta_real_testdata_load_and_fit():
+    from pathlib import Path
+
+    from pymorgan.cal import get_default_calibration_params
+
+    base = Path(r"C:\Users\ricar\switchdrive\Ambizione UniGE\Scripts\testData\UniGE_nsTA")
+    folders = [
+        (base / "nsTA" / "Raw" / "18", 113, 235),
+        (base / "cal", 120, 242),
+    ]
+    if not all(f.is_dir() for f, _, _ in folders):
+        pytest.skip("UniGE nsTA testData directories not present")
+
+    ref_path = Path(__file__).resolve().parent.parent / "src" / "pymorgan" / "cal" / "ref_spectra" / "UVVis-Holmium.csv"
+    ref = load_reference_spectrum(ref_path)
+    p_def = get_default_calibration_params(3)
+    assert p_def["use_cross_corr"] is True
+
+    for folder, pk_445, pk_536 in folders:
+        wl = load_experimental_spectrum(folder / "WL.dat", cal_type_code=3)
+        ho = load_experimental_spectrum(folder / "HOLMIUM.dat", cal_type_code=3)
+
+        assert len(wl.detector_data) == 1
+        assert len(ho.detector_data) == 1
+        i_wl = wl.detector_data[0]
+        i_ho = ho.detector_data[0]
+        assert len(i_wl) == 524
+        assert len(i_ho) == 524
+        assert np.all(np.isfinite(i_wl)) and np.all(i_wl > 0)
+        assert np.all(np.isfinite(i_ho)) and np.all(i_ho > 0)
+
+        meas_y = -np.log10(i_ho / i_wl)
+        res = fit_wavelength_axis(
+            meas_y,
+            ref.spectral_axis,
+            ref.absorbance,
+            cal_type_code=3,
+            cwl=p_def["cwl"],
+            ppnm_guess=p_def["ppnm_guess"],
+            rel_min_nm=p_def["rel_min_nm"],
+            rel_max_nm=p_def["rel_max_nm"],
+            grating_degree=p_def["grating_degree"],
+            use_derivative=p_def["use_derivative"],
+            use_cross_corr=p_def["use_cross_corr"],
+        )
+        assert len(res.wavelength_nm) == 524
+        assert res.wavelength_nm[pk_445] == pytest.approx(445.2, abs=1.5)
+        assert res.wavelength_nm[pk_536] == pytest.approx(536.3, abs=2.0)
+
+
+def test_gui_unige_nsta_load_order_populates_raw_and_abs(qapp):
+    from pathlib import Path
+
+    from pymorgan.gui.main_window import MainWindow
+
+    folder = Path(r"C:\Users\ricar\switchdrive\Ambizione UniGE\Scripts\testData\UniGE_nsTA\nsTA\Raw\18")
+    if not folder.is_dir():
+        pytest.skip("UniGE nsTA Raw/18 testData directory not present")
+
+    win = MainWindow()
+    win._ensure_calibration_initialized()
+    idx_nsta = win.cal_type_combo.findText("UniGE nsTA")
+    assert idx_nsta >= 0
+    win.cal_type_combo.setCurrentIndex(idx_nsta)
+    assert win.cal_set_cross_corr.isChecked() is True
+
+    # Load filter (HOLMIUM.dat) into _cal_svt_data first, then blank (WL.dat) into _cal_exp_data
+    win._cal_svt_data = load_experimental_spectrum(folder / "HOLMIUM.dat", cal_type_code=3)
+    win._update_cal_raw_plots()
+    win._update_cal_abs_plot()
+    assert "Calculated Abs" not in {line.get_label() for line in win.cal_canvas_det1.ax_abs.lines}
+
+    win._cal_exp_data = load_experimental_spectrum(folder / "WL.dat", cal_type_code=3)
+    win._update_cal_raw_plots()
+    win._update_cal_abs_plot()
+
+    raw_labels = {line.get_label() for line in win.cal_canvas_det1.ax_raw.lines}
+    abs_labels = {line.get_label() for line in win.cal_canvas_det1.ax_abs.lines}
+    assert {"Probe", "Solvent"} <= raw_labels
+    assert "Calculated Abs" in abs_labels
+
+
+def test_cal_tab_left_panel_not_squashed_on_load(qapp):
+    from pymorgan.gui.main_window import MainWindow
+
+    win = MainWindow()
+    win._ensure_calibration_initialized()
+    expected_w = win.cal_scroll_area.minimumWidth()
+    assert expected_w == win.cal_scroll_area.maximumWidth()
+    assert expected_w >= 204
+    if os.environ.get("QT_QPA_PLATFORM") != "offscreen":
+        assert expected_w < 290
+    assert win.cal_main_layout.stretch(0) == 0
+    assert win.cal_main_layout.stretch(1) == 1
+    assert win.cal_main_layout.stretch(2) == 0
+
+    win.move(-10000, -10000)
+    win.show()
+    win.MainTabs.setCurrentIndex(2)
+    qapp.processEvents()
+
+    try:
+        assert win.cal_scroll_area.width() == expected_w
+        win.cal_canvas_det1.show()
+        qapp.processEvents()
+        assert win.cal_scroll_area.width() == expected_w
+    finally:
+        win.close()
+
+
+def test_cal_ref_plot_shared_yaxis_and_tight_layout(qapp):
+    from pathlib import Path
+
+    from pymorgan.gui.main_window import MainWindow
+
+    folder = Path(r"C:\Users\ricar\switchdrive\Ambizione UniGE\Scripts\testData\UniGE_nsTA\nsTA\Raw\18")
+    if not folder.is_dir():
+        pytest.skip("UniGE nsTA Raw/18 testData directory not present")
+
+    win = MainWindow()
+    win.move(-10000, -10000)
+    win.show()
+    win.MainTabs.setCurrentIndex(2)
+    win._ensure_calibration_initialized()
+    idx_nsta = win.cal_type_combo.findText("UniGE nsTA")
+    win.cal_type_combo.setCurrentIndex(idx_nsta)
+
+    win._cal_exp_data = load_experimental_spectrum(folder / "WL.dat", cal_type_code=3)
+    win._cal_svt_data = load_experimental_spectrum(folder / "HOLMIUM.dat", cal_type_code=3)
+    win._update_cal_raw_plots()
+    win._update_cal_abs_plot()
+    ref_path = Path(__file__).resolve().parent.parent / "src" / "pymorgan" / "cal" / "ref_spectra" / "UVVis-Holmium.csv"
+    win._cal_ref_spec = load_reference_spectrum(ref_path)
+    win._on_cal_do_fit()
+    qapp.processEvents()
+
+    try:
+        canvas = win.cal_canvas_det1
+        # Shared Y-axis: only the 4 subplots exist (no _ref_twin axis)
+        assert len(canvas.fig.axes) == 4
+        ref_labels = {line.get_label() for line in canvas.ax_ref.lines}
+        assert {"Raw Ref", "Exp (BC)"} <= ref_labels
+        p_raw = canvas.ax_raw.get_position()
+        p_abs = canvas.ax_abs.get_position()
+        p_ref = canvas.ax_ref.get_position()
+        assert p_raw.height > 0.35
+        assert p_abs.y1 < p_raw.y0
+        assert p_raw.x1 < p_ref.x0
+    finally:
+        win.close()
+
+
+def test_baseline_estimators_synthetic_and_scale_invariance():
+    from pymorgan.cal import (
+        baseline_arpls,
+        baseline_asls,
+        baseline_modpoly,
+        baseline_snip,
+        estimate_baseline,
+    )
+
+    for n in (64, 1000):
+        x = np.linspace(0.0, 1.0, n)
+        true_bl = 0.12 + 0.25 * x + 0.08 * np.sin(np.pi * x)
+        peaks = (
+            0.85 * np.exp(-0.5 * ((x - 0.22) / 0.03) ** 2)
+            + 1.15 * np.exp(-0.5 * ((x - 0.55) / 0.035) ** 2)
+            + 0.65 * np.exp(-0.5 * ((x - 0.80) / 0.025) ** 2)
+        )
+        y = true_bl + peaks
+
+        for fn in (
+            lambda arr: baseline_arpls(arr, smoothness=0.08),
+            lambda arr: baseline_asls(arr, smoothness=0.08),
+            lambda arr: baseline_snip(arr, smoothness=0.10),
+            lambda arr: baseline_modpoly(arr, poly_order=3),
+        ):
+            est = fn(y)
+            assert est.shape == y.shape
+            rmse = float(np.sqrt(np.mean((est - true_bl) ** 2)))
+            assert rmse < 0.032
+
+        np.testing.assert_array_equal(estimate_baseline(y, method="legacy_poly"), np.zeros(n))
+        np.testing.assert_array_equal(estimate_baseline(y, method="none"), np.zeros(n))
+
+    with pytest.raises(ValueError, match="Unknown baseline method"):
+        estimate_baseline(np.ones(20), method="not_a_real_method")
+
+
+def test_varpro_global_fit_synthetic_ground_truth():
+    # High-resolution reference with 5 sharp peaks and rising wing baseline
+    ref_x = np.linspace(380.0, 720.0, 1400)
+    ref_bl = 0.05 + 0.0012 * (ref_x - 400.0) + 0.35 * np.exp(-((ref_x - 375.0) / 14.0) ** 2)
+    peaks = (
+        0.9 * np.exp(-0.5 * ((ref_x - 435.0) / 3.0) ** 2)
+        + 1.2 * np.exp(-0.5 * ((ref_x - 485.0) / 3.5) ** 2)
+        + 0.7 * np.exp(-0.5 * ((ref_x - 535.0) / 3.0) ** 2)
+        + 1.0 * np.exp(-0.5 * ((ref_x - 590.0) / 4.0) ** 2)
+        + 0.8 * np.exp(-0.5 * ((ref_x - 640.0) / 3.5) ** 2)
+    )
+    ref_y = ref_bl + peaks
+
+    # Quadratic grating ground truth over 96 pixels centered near 535 nm
+    n_pix = 96
+    pix = np.arange(1, n_pix + 1, dtype=float)
+    c_pix = (1.0 + n_pix) / 2.0
+    wl0_true, ppnm_true, c2_true = 537.5, 0.42, 0.35
+    pix_true = (ref_x - wl0_true) * ppnm_true + 1e-4 * c2_true * ((ref_x - wl0_true) ** 2) + c_pix
+    true_wl = np.interp(pix, pix_true, ref_x)
+
+    # Sample spectrum with strong curved + ramped baseline and low edge SNR
+    rng = np.random.default_rng(42)
+    from scipy.ndimage import gaussian_filter1d
+
+    ref_conv = gaussian_filter1d(peaks, sigma=2.5)
+    meas_clean = np.interp(true_wl, ref_x, ref_conv) * 0.65
+    u = (pix - c_pix) / (0.5 * n_pix)
+    meas_bl = 0.18 + 0.32 * u + 0.12 * (u**2)
+    probe_i0 = 100.0 * np.exp(-1.5 * (u**2)) + 5.0
+    noise = rng.normal(0.0, 0.002 / np.sqrt(probe_i0 / 100.0))
+    meas_y = meas_clean + meas_bl + noise
+
+    res_global = fit_wavelength_axis(
+        meas_y,
+        ref_x,
+        ref_y,
+        cal_type_code=2,
+        cwl=530.0,
+        ppnm_guess=0.40,
+        rel_min_nm=-130.0,
+        rel_max_nm=150.0,
+        grating_degree=2,
+        use_derivative="global",
+        baseline_method="arpls",
+        baseline_target="both",
+        convolve_ref=True,
+        probe_weights=probe_i0,
+    )
+    rmse_global = float(np.sqrt(np.mean((res_global.wavelength_nm - true_wl) ** 2)))
+    assert rmse_global < 0.12
+    assert res_global.sample_baseline_px is not None
+    assert len(res_global.sample_baseline_px) == n_pix
+    assert res_global.exp_raw_y_fit is not None
+
+    # Verify all target and derivative variants execute cleanly
+    for target in ("none", "sample", "standard", "both"):
+        r_t = fit_wavelength_axis(
+            meas_y,
+            ref_x,
+            ref_y,
+            cal_type_code=2,
+            cwl=530.0,
+            ppnm_guess=0.40,
+            rel_min_nm=-130.0,
+            rel_max_nm=150.0,
+            grating_degree=2,
+            use_derivative="global",
+            baseline_method="arpls",
+            baseline_target=target,
+            convolve_ref=False,
+        )
+        assert len(r_t.wavelength_nm) == n_pix
+
+    for mode in ("none", "1st", "2nd", "1st+2nd"):
+        r_m = fit_wavelength_axis(
+            meas_y,
+            ref_x,
+            ref_y,
+            cal_type_code=2,
+            cwl=530.0,
+            ppnm_guess=0.40,
+            rel_min_nm=-130.0,
+            rel_max_nm=150.0,
+            grating_degree=2,
+            use_derivative=mode,
+            baseline_method="asls",
+            baseline_target="both",
+            convolve_ref=False,
+        )
+        assert len(r_m.wavelength_nm) == n_pix
+
+
+def test_real_nsta_and_trir_improved_calibration_accuracy():
+    from pathlib import Path
+
+    from scipy.ndimage import gaussian_filter1d
+
+    from pymorgan.cal import estimate_baseline, get_default_calibration_params
+
+    nsta_dir = Path(r"C:\Users\ricar\switchdrive\Ambizione UniGE\Scripts\testData\UniGE_nsTA\nsTA\Raw\18")
+    trir_dir = Path(r"C:\Users\ricar\switchdrive\Ambizione UniGE\Scripts\testData\Calibration_Data\TRIR+shaper")
+    if not nsta_dir.is_dir() or not trir_dir.is_dir():
+        pytest.skip("nsTA Raw/18 or TRIR+shaper testData directories not present")
+
+    ref_dir = Path(__file__).resolve().parent.parent / "src" / "pymorgan" / "cal" / "ref_spectra"
+    ref_ho = load_reference_spectrum(ref_dir / "UVVis-Holmium.csv")
+    ref_diox = load_reference_spectrum(ref_dir / "FTIR-DioxaneRAL_2cm-1.csv")
+
+    def _subpixel_peak(x: np.ndarray, y: np.ndarray, target_x: float, win_dx: float) -> float:
+        m = (x >= target_x - win_dx) & (x <= target_x + win_dx)
+        xs, ys = x[m], y[m]
+        idx = int(np.argmax(ys))
+        if 0 < idx < len(ys) - 1:
+            c = np.polyfit(xs[idx - 1 : idx + 2], ys[idx - 1 : idx + 2], 2)
+            if c[0] < 0:
+                xv = -c[1] / (2.0 * c[0])
+                if xs[0] <= xv <= xs[-1]:
+                    return float(xv)
+        return float(xs[idx])
+
+    # 1. UniGE nsTA Raw/18 (8 Holmium Oxide bands 385.6-637.2 nm)
+    wl_i = load_experimental_spectrum(nsta_dir / "WL.dat", 3).detector_data[0]
+    ho_i = load_experimental_spectrum(nsta_dir / "HOLMIUM.dat", 3).detector_data[0]
+    abs_nsta = -np.log10(ho_i / wl_i)
+
+    ux_ho = np.arange(300.0, 780.0, 0.02)
+    uy_ho = np.interp(ux_ho, ref_ho.spectral_axis, ref_ho.absorbance)
+    uy_ho_conv = gaussian_filter1d(uy_ho - estimate_baseline(uy_ho, "arpls", 0.15), sigma=1.0 / 0.02)
+    ho_ref_pks = np.array([
+        _subpixel_peak(ux_ho, uy_ho_conv, t, 2.0)
+        for t in (385.6, 418.4, 445.65, 453.15, 459.85, 485.3, 536.4, 637.2)
+    ])
+    pix_nsta = np.arange(1, len(abs_nsta) + 1, dtype=float)
+    ho_exp_pix = np.array([
+        _subpixel_peak(pix_nsta, abs_nsta - estimate_baseline(abs_nsta, "arpls", 0.15), p, 4.0)
+        for p in (34.4, 77.7, 114.1, 124.1, 133.0, 165.8, 235.9, 373.1)
+    ])
+
+    p_nsta = get_default_calibration_params(3)
+    res_nsta_new = fit_wavelength_axis(
+        abs_nsta,
+        ref_ho.spectral_axis,
+        ref_ho.absorbance,
+        cal_type_code=3,
+        cwl=p_nsta["cwl"],
+        ppnm_guess=p_nsta["ppnm_guess"],
+        rel_min_nm=p_nsta["rel_min_nm"],
+        rel_max_nm=p_nsta["rel_max_nm"],
+        grating_degree=p_nsta["grating_degree"],
+        use_cross_corr=p_nsta["use_cross_corr"],
+        use_derivative=p_nsta["use_derivative"],
+        convolve_ref=p_nsta["convolve_ref"],
+        baseline_method=p_nsta["baseline_method"],
+        baseline_target=p_nsta["baseline_target"],
+        baseline_smoothness=p_nsta["baseline_smoothness"],
+        probe_weights=wl_i,
+    )
+    res_nsta_leg = fit_wavelength_axis(
+        abs_nsta,
+        ref_ho.spectral_axis,
+        ref_ho.absorbance,
+        cal_type_code=3,
+        cwl=p_nsta["cwl"],
+        ppnm_guess=p_nsta["ppnm_guess"],
+        rel_min_nm=p_nsta["rel_min_nm"],
+        rel_max_nm=p_nsta["rel_max_nm"],
+        grating_degree=2,
+        use_cross_corr=True,
+        use_derivative="1st",
+        convolve_ref=False,
+        baseline_method="legacy_poly",
+        baseline_target="none",
+    )
+    rmse_nsta_new = float(np.sqrt(np.mean((np.interp(ho_exp_pix, pix_nsta, res_nsta_new.wavelength_nm) - ho_ref_pks) ** 2)))
+    rmse_nsta_leg = float(np.sqrt(np.mean((np.interp(ho_exp_pix, pix_nsta, res_nsta_leg.wavelength_nm) - ho_ref_pks) ** 2)))
+    assert rmse_nsta_new < 0.20
+    assert rmse_nsta_new < rmse_nsta_leg
+
+    # 2. TRIR+shaper Probe and Shaper Pump (6 Dioxane bands 2071.9-2191.8 cm-1)
+    pr_air = load_experimental_spectrum(trir_dir / "probe_air_172426" / "probe_air_172426_sp0_ds0_intensity_0.csv", 8)
+    pr_diox = load_experimental_spectrum(trir_dir / "probe_diox_172445" / "probe_diox_172445_sp0_ds0_intensity_0.csv", 8)
+    pu_air = load_experimental_spectrum(trir_dir / "pump_air_171745" / "pump_air_171745_sp0_ds0_intensity_0.csv", 8)
+    pu_diox = load_experimental_spectrum(trir_dir / "pump_diox_171859" / "pump_diox_171859_sp0_ds0_intensity_0.csv", 8)
+
+    abs_pr = -np.log10(pr_diox.detector_data[0] / pr_air.detector_data[0])
+    abs_pu = -np.log10(pu_diox.detector_data[0] / pu_air.detector_data[0])
+
+    ux_ir = np.arange(1990.0, 2220.0, 0.02)
+    uy_ir = np.interp(ux_ir, ref_diox.spectral_axis, ref_diox.absorbance)
+    uy_ir_conv = gaussian_filter1d(uy_ir - estimate_baseline(uy_ir, "arpls", 0.20), sigma=1.5 / 0.02)
+    ir_ref_pks = np.array([
+        _subpixel_peak(ux_ir, uy_ir_conv, t, 2.5)
+        for t in (2071.9, 2087.8, 2104.7, 2130.2, 2175.7, 2191.8)
+    ])
+    pix_ir = np.arange(1, 65, dtype=float)
+    pr_exp_pix = np.array([
+        _subpixel_peak(pix_ir, abs_pr - estimate_baseline(abs_pr, "arpls", 0.22), p, 2.0)
+        for p in (20.3, 25.7, 30.8, 39.6, 53.5, 58.2)
+    ])
+    pu_exp_pix = np.array([
+        _subpixel_peak(pix_ir, abs_pu - estimate_baseline(abs_pu, "arpls", 0.22), p, 2.0)
+        for p in (19.5, 24.9, 30.5, 39.2, 52.9, 57.6)
+    ])
+
+    res_pr_new = fit_wavelength_axis(
+        abs_pr,
+        ref_diox.spectral_axis,
+        ref_diox.absorbance,
+        cal_type_code=8,
+        cwl=pr_air.cwl[0],
+        ppnm_guess=pr_air.gratings[0] / 500.0,
+        rel_min_nm=-200.0,
+        rel_max_nm=200.0,
+        grating_degree=2,
+        use_derivative="global",
+        baseline_method="arpls",
+        baseline_target="both",
+        convolve_ref=True,
+        probe_weights=pr_air.detector_data[0],
+    )
+    res_pr_leg = fit_wavelength_axis(
+        abs_pr,
+        ref_diox.spectral_axis,
+        ref_diox.absorbance,
+        cal_type_code=8,
+        cwl=pr_air.cwl[0],
+        ppnm_guess=pr_air.gratings[0] / 500.0,
+        rel_min_nm=-200.0,
+        rel_max_nm=200.0,
+        grating_degree=2,
+        use_derivative="1st",
+        baseline_method="legacy_poly",
+        baseline_target="none",
+        convolve_ref=False,
+    )
+    rmse_pr_new = float(np.sqrt(np.mean((np.interp(pr_exp_pix, pix_ir, res_pr_new.wavenumber_cm1) - ir_ref_pks) ** 2)))
+    rmse_pr_leg = float(np.sqrt(np.mean((np.interp(pr_exp_pix, pix_ir, res_pr_leg.wavenumber_cm1) - ir_ref_pks) ** 2)))
+    assert rmse_pr_new < 0.80
+    assert rmse_pr_leg > 3.5
+    assert rmse_pr_new < 0.25 * rmse_pr_leg
+
+    res_pu_new = fit_wavelength_axis(
+        abs_pu,
+        ref_diox.spectral_axis,
+        ref_diox.absorbance,
+        cal_type_code=8,
+        cwl=pu_air.cwl[0],
+        ppnm_guess=pu_air.gratings[0] / 500.0,
+        rel_min_nm=-200.0,
+        rel_max_nm=200.0,
+        grating_degree=2,
+        use_derivative="global",
+        baseline_method="arpls",
+        baseline_target="both",
+        convolve_ref=True,
+        probe_weights=pu_air.detector_data[0],
+    )
+    rmse_pu_new = float(np.sqrt(np.mean((np.interp(pu_exp_pix, pix_ir, res_pu_new.wavenumber_cm1) - ir_ref_pks) ** 2)))
+    assert rmse_pu_new < 0.55
+
+
+def test_gui_calibration_baseline_and_global_controls(qapp):
+    from pymorgan.gui.main_window import MainWindow
+
+    win = MainWindow()
+    win._ensure_calibration_initialized()
+    try:
+        assert win.cal_set_bl_method.count() == 5
+        assert win.cal_set_bl_method.currentIndex() == 0
+        assert win.cal_set_bl_target.count() == 4
+        assert win.cal_set_bl_target.currentIndex() == 0
+        assert win.cal_set_bl_smooth.value() == pytest.approx(0.20)
+        assert win.cal_set_snr_weights.isChecked() is True
+        assert win.cal_set_deriv_mode.count() == 4
+        assert win.cal_set_deriv_mode.currentIndex() == 3
+        assert "Global" in win.cal_set_deriv_mode.currentText()
+        assert win.cal_set_bl_smooth.isEnabled() is True
+
+        # Selecting Legacy Polynomial disables target and smoothness sub-controls
+        win.cal_set_bl_method.setCurrentIndex(4)
+        assert win.cal_set_bl_target.isEnabled() is False
+        assert win.cal_set_bl_smooth.isEnabled() is False
+
+        # Switching back to arPLS restores controls
+        win.cal_set_bl_method.setCurrentIndex(0)
+        assert win.cal_set_bl_target.isEnabled() is True
+        assert win.cal_set_bl_smooth.isEnabled() is True
+
+        # Setting Apply To = None disables smoothness spinbox
+        win.cal_set_bl_target.setCurrentIndex(3)
+        assert win.cal_set_bl_smooth.isEnabled() is False
+
+        # Restore defaults and verify shaper fit forwards new baseline/global controls
+        win.cal_set_bl_target.setCurrentIndex(0)
+        idx_trir = win.cal_type_combo.findText("UniGE TRIR (Intensity)")
+        win.cal_type_combo.setCurrentIndex(idx_trir)
+        from pathlib import Path
+        trir_dir = Path(r"C:\Users\ricar\switchdrive\Ambizione UniGE\Scripts\testData\Calibration_Data\TRIR+shaper")
+        if trir_dir.is_dir():
+            pu_air = load_experimental_spectrum(trir_dir / "pump_air_171745" / "pump_air_171745_sp0_ds0_intensity_0.csv", 8)
+            pu_diox = load_experimental_spectrum(trir_dir / "pump_diox_171859" / "pump_diox_171859_sp0_ds0_intensity_0.csv", 8)
+            win._cal_shaper_pump_air_y = pu_air.detector_data[0]
+            win._cal_shaper_pump_solvent_y = pu_diox.detector_data[0]
+            win.cal_set_cwl.setValue(pu_air.cwl[0])
+            win.cal_set_ppnm.setValue(pu_air.gratings[0] / 500.0)
+            win._on_cal_shaper_do_fit()
+            shaper_res = win._cal_shaper_fit_res
+            assert shaper_res is not None
+            assert shaper_res.baseline_method == "arpls"
+            assert shaper_res.baseline_target == "both"
+            assert shaper_res.sample_baseline_px is not None
+            assert 2015.0 < shaper_res.wavenumber_cm1[0] < 2030.0
+            assert 2200.0 < shaper_res.wavenumber_cm1[-1] < 2215.0
+    finally:
+        win.close()
+
 
 

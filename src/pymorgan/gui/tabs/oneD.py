@@ -1511,7 +1511,17 @@ class OneDTabMixin:
         from ..chirp_progress_dialog import ChirpFitProgressDialog
 
         det = getattr(self.plot_controls, "detector", 0) if hasattr(self, "plot_controls") else 0
-        dlg = ChirpFitOptionsDialog(self, n_detectors=self.dataset.n_detectors, active_detector=det)
+        t_unit = (
+            self.dataset.units.get("unitsT_ltx", "ps")
+            if isinstance(getattr(self.dataset, "units", None), dict)
+            else "ps"
+        )
+        dlg = ChirpFitOptionsDialog(
+            self,
+            n_detectors=self.dataset.n_detectors,
+            active_detector=det,
+            time_unit=t_unit,
+        )
         if dlg.exec() != QDialog.DialogCode.Accepted:
             return
         mode = dlg.mode()

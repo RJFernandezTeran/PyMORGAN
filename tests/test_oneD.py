@@ -12,6 +12,7 @@ from pymorgan.oneD.chirp import (
     _interpolate_nans,
     cauchy_t0,
     fit_cauchy_dispersion,
+    fit_chirp_wavelet,
     load_chirp_fit,
     save_chirp_fit,
 )
@@ -338,6 +339,90 @@ def test_apply_chirp_correction_dataset(dataset):
 
     ds.apply_chirp_correction(fit)
     assert ds.chirp_fit is fit
+
+
+def _make_wavelet_test_dataset(delays, probe, true_t0, *, sg=0.06, spike=None):
+    from scipy.special import erf
+
+    Z = np.zeros((delays.size, probe.size, 1), dtype=float)
+    for i, t0_i in enumerate(true_t0):
+        col = 0.5 * (1.0 + erf((delays - t0_i) / (np.sqrt(2.0) * sg)))
+        if spike is not None:
+            t_spike, amp_spike, width_spike = spike
+            col = col + amp_spike * np.exp(-(((delays - t_spike) / width_spike) ** 2))
+        Z[:, i, 0] = col
+    units = {
+        "T": "ps",
+        "L": "nm",
+        "unitsT_lbl": "Delay",
+        "unitsT_ltx": "ps",
+        "unitsL_lbl": "Wavelength",
+        "unitsL_ltx": "nm",
+        "unitsZ_lbl": r"$\Delta$A",
+        "unitsZ_ltx": "mOD",
+    }
+    return Dataset1D(Z, delays, probe, units)
+
+
+def test_fit_chirp_wavelet_respects_shifted_bounds():
+    delays = np.linspace(-1.0, 15.0, 641)
+    probe = np.linspace(400.0, 700.0, 40)
+    true_t0 = 8.0 + 1.0 * ((550.0 / probe) ** 2 - 1.0)  # spans ~7.62 to ~8.89 ps
+    ds = _make_wavelet_test_dataset(delays, probe, true_t0, spike=(0.0, 10.0, 0.05))
+
+    for opt in (False, True):
+        fit = fit_chirp_wavelet(
+            ds,
+            t_min=6.5,
+            t_max=11.0,
+            do_2nd_pass=True,
+            optimise_wavelet=opt,
+            opt_max_iter=25,
+        )
+        t0_pfit = fit.Pfit[:, 0]
+        finite = np.isfinite(t0_pfit)
+        assert np.all(finite)
+        assert np.all((t0_pfit >= 6.5) & (t0_pfit <= 11.0))
+        curve = cauchy_t0(fit.coeffs, probe, fit.lambda_ref)
+        np.testing.assert_allclose(t0_pfit, true_t0, atol=0.05)
+        np.testing.assert_allclose(curve, true_t0, atol=0.05)
+
+
+def test_fit_chirp_wavelet_excludes_out_of_bounds_artifact():
+    delays = np.linspace(-2.0, 5.0, 701)
+    probe = np.linspace(420.0, 680.0, 40)
+    true_t0 = 0.45 + 0.35 * ((550.0 / probe) ** 2 - 0.5)
+    ds = _make_wavelet_test_dataset(delays, probe, true_t0, spike=(0.0, 20.0, 0.05))
+
+    fit = fit_chirp_wavelet(ds, t_min=0.25, t_max=1.2, do_2nd_pass=True)
+    t0_pfit = fit.Pfit[:, 0]
+    assert np.all(np.isfinite(t0_pfit))
+    assert np.all((t0_pfit >= 0.25) & (t0_pfit <= 1.2))
+    curve = cauchy_t0(fit.coeffs, probe, fit.lambda_ref)
+    np.testing.assert_allclose(t0_pfit, true_t0, atol=0.03)
+    np.testing.assert_allclose(curve, true_t0, atol=0.03)
+
+
+def test_fit_chirp_wavelet_tmax_exceeds_delays_no_cliff():
+    delays = np.linspace(-1.5, 2.0, 176)
+    probe = np.linspace(400.0, 700.0, 40)
+    true_t0 = 0.1 + 0.3 * ((550.0 / probe) ** 2 - 1.0)
+    ds = _make_wavelet_test_dataset(delays, probe, true_t0, sg=0.15 / (2.0 * np.sqrt(2.0 * np.log(2.0))))
+
+    fit = fit_chirp_wavelet(ds, t_min=-1.0, t_max=3.0, do_2nd_pass=True)
+    t0_pfit = fit.Pfit[:, 0]
+    assert np.all(np.isfinite(t0_pfit))
+    assert np.all((t0_pfit >= -1.0) & (t0_pfit <= 2.0))
+    np.testing.assert_allclose(t0_pfit, true_t0, atol=0.03)
+
+
+def test_fit_chirp_wavelet_invalid_bounds(dataset):
+    with pytest.raises(ValueError):
+        fit_chirp_wavelet(dataset, t_min=2.0, t_max=2.0)
+    with pytest.raises(ValueError):
+        fit_chirp_wavelet(dataset, t_min=5.0, t_max=1.0)
+    with pytest.raises(ValueError):
+        fit_chirp_wavelet(dataset, t_min=1e6, t_max=2e6)
 
 
 # --------------------------------------------------------------------------- #

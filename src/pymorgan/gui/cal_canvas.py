@@ -7,7 +7,7 @@ import matplotlib
 matplotlib.use("QtAgg")
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
-from PyQt6.QtWidgets import QDialog, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QDialog, QSizePolicy, QVBoxLayout, QWidget
 
 from pymorgan.gui.theme import adapt_axes_traces, base_line_color, is_dark_palette, style_figure
 
@@ -41,11 +41,13 @@ class CalibrationCanvas(FigureCanvas):
     """
 
     def __init__(self, parent=None, detector_name: str = "Detector 1"):
-        self.fig = Figure(figsize=(8, 6), dpi=100)
+        self.fig = Figure(figsize=(6, 5), dpi=100)
         self.fig.patch.set_facecolor("white")
 
         super().__init__(self.fig)
         self.setParent(parent)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.updateGeometry()
 
         self.detector_name = detector_name
         self.unit_mode = "nm"  # "nm" or "cm-1"
@@ -59,6 +61,20 @@ class CalibrationCanvas(FigureCanvas):
 
         self.fig.subplots_adjust(left=0.08, right=0.96, top=0.96, bottom=0.08, hspace=0.08, wspace=0.18)
         self.draw_placeholder()
+
+    def apply_tight_layout(self):
+        """Fit the 2x2 subplot grid cleanly inside the figure bounds."""
+        import contextlib
+
+        with contextlib.suppress(Exception):
+            self.fig.tight_layout(pad=0.8, h_pad=0.9, w_pad=1.0)
+
+    def resizeEvent(self, event):
+        """Reflow subplot spacing cleanly when the calibration widget resizes."""
+        super().resizeEvent(event)
+        if self.width() > 50 and self.height() > 50:
+            self.apply_tight_layout()
+            super().draw()
 
     def set_unit_mode(self, mode: str):
         """Set unit mode to 'nm' or 'cm-1' without clearing 1st column data."""
@@ -142,9 +158,9 @@ class CalibrationCanvas(FigureCanvas):
         self.ax_fit.set_ylabel(fit_axis_label, fontweight="bold", fontsize=8)
         self.make_draggable_legend(self.ax_fit, title="Calibration Fit")
 
-        # Re-apply theme styling and adjust hspace & wspace for clear layout
+        # Re-apply theme styling and fit all 4 subplots into figure bounds
         _style_cal_figure(self.fig)
-        self.fig.subplots_adjust(left=0.09, right=0.91, top=0.96, bottom=0.12, hspace=0.30, wspace=0.22)
+        self.apply_tight_layout()
         self.draw()
 
 
@@ -246,6 +262,7 @@ class CalibrationCanvasWidget(QWidget):
         super().__init__(parent)
         from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavToolbar
 
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.canvas = CalibrationCanvas(self, detector_name=detector_name)
         self.toolbar = NavToolbar(self.canvas, self)
 
@@ -257,6 +274,7 @@ class CalibrationCanvasWidget(QWidget):
 
         # Expose figure, subplots, and canvas attributes directly for convenience
         self.fig = self.canvas.fig
+        self.figure = self.canvas.fig
         self.ax_raw = self.canvas.ax_raw
         self.ax_abs = self.canvas.ax_abs
         self.ax_ref = self.canvas.ax_ref
@@ -266,6 +284,10 @@ class CalibrationCanvasWidget(QWidget):
         """Open a dedicated QDialog window displaying the selected subplot in full resolution."""
         dlg = SubplotPopUpDialog(source_ax, f"{self.canvas.detector_name} - {title}", parent=self)
         dlg.exec()
+
+    def apply_tight_layout(self):
+        """Fit the 2x2 subplot grid cleanly inside the canvas bounds."""
+        self.canvas.apply_tight_layout()
 
     def draw(self):
         self.canvas.draw()

@@ -587,6 +587,12 @@ class Dataset1D:
         from ..settings import get_settings
 
         units = self.units or {}
+        if hlp.is_uncalibrated_probe(self):
+            return hlp.DatasetUnits(
+                x=hlp.AxisUnit(quantity="Pixel index", unit="px", latex="", scale=1.0),
+                y=hlp.delay_axis_unit(units),
+                z=hlp.signal_axis_unit(units),
+            )
         native = hlp.native_x_unit(units)
         scale = 1.0
         unit = native
@@ -614,10 +620,15 @@ class Dataset1D:
         signal-to-noise ratio, the data kind, the number of delays and the
         probe-axis resolution. Units are plain text (no LaTeX markup).
         """
+        from .. import helpers as hlp
+
         u = self.units or {}
-        probe_unit = _PLAIN_PROBE_UNIT.get(
-            u.get("unitsL_lbl", ""), _ltx_to_text(u.get("unitsL_ltx", ""))
-        )
+        if hlp.is_uncalibrated_probe(self):
+            probe_unit = "px"
+        else:
+            probe_unit = _PLAIN_PROBE_UNIT.get(
+                u.get("unitsL_lbl", ""), _ltx_to_text(u.get("unitsL_ltx", ""))
+            )
         noise_unit = (
             "mOD" if u.get("unitsZ") in ("mOD", "x1E3") else _ltx_to_text(u.get("unitsZ_ltx", ""))
         )
@@ -656,12 +667,17 @@ class Dataset1D:
 
     def sample_info_console(self) -> str:
         """Return a plain text, console-friendly summary of the 1-D dataset."""
+        from .. import helpers as hlp
+
         u = self.units or {}
-        probe_unit = _PLAIN_PROBE_UNIT.get(
-            u.get("unitsL_lbl", ""), _ltx_to_text(u.get("unitsL_ltx", ""))
-        )
-        # Convert any unicode exponents to plain text
-        probe_unit = probe_unit.replace("cm⁻¹", "cm-1")
+        if hlp.is_uncalibrated_probe(self):
+            probe_unit = "px"
+        else:
+            probe_unit = _PLAIN_PROBE_UNIT.get(
+                u.get("unitsL_lbl", ""), _ltx_to_text(u.get("unitsL_ltx", ""))
+            )
+            # Convert any unicode exponents to plain text
+            probe_unit = probe_unit.replace("cm⁻¹", "cm-1")
 
         noise_unit = (
             "mOD" if u.get("unitsZ") in ("mOD", "x1E3") else _ltx_to_text(u.get("unitsZ_ltx", ""))

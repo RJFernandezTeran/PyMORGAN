@@ -3,7 +3,7 @@
 
 #define MyAppName "PyMORGAN Suite"
 #ifndef MyAppVersion
-  #define MyAppVersion "1.261103.2"
+  #define MyAppVersion "1.261119.2"
 #endif
 #define MyAppPublisher "Dr. Ricardo J. Fernández-Terán"
 #define MyAppURL "https://github.com/RJFernandezTeran/PyMORGAN"

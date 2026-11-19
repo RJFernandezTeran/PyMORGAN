@@ -1017,3 +1017,66 @@ def test_ui_files_never_expose_absolute_paths():
         assert not re.search(r"[A-Za-z]:\\", content)
         assert "/Users/" not in content and "/home/" not in content
 
+
+def test_main_tabs_titles_and_left_panel_resize_behavior(qapp):
+    from pymorgan.gui.main_window import MainWindow
+
+    win = MainWindow()
+    win.move(-10000, -10000)
+    win.show()
+    qapp.processEvents()
+
+    try:
+        assert win.MainTabs.tabText(1) == "2D spectra"
+        assert win.ppTabLayout.stretch(0) == 0
+        assert win.ppTabLayout.stretch(1) == 1
+        assert win.twoDTabLayout.stretch(0) == 0
+        assert win.twoDTabLayout.stretch(1) == 1
+
+        win.MainTabs.setCurrentIndex(0)
+        win._set_dataset_widgets_visible(True)
+        w0 = max(1200, win.minimumSizeHint().width())
+        win.resize(w0, 880)
+        qapp.processEvents()
+        left_before = win.PP_datagrp.width()
+        axes_before = win.PPaxes.width()
+        assert left_before <= 365
+
+        win.resize(w0 + 600, 880)
+        qapp.processEvents()
+        assert win.PP_datagrp.width() <= 365
+        assert win.PP_datagrp.width() == left_before
+        assert win.PPaxes.width() > axes_before
+    finally:
+        win.close()
+
+
+def test_uncalibrated_probe_disables_xunit_and_uses_pixel_index_label(qapp, tmp_path):
+    import scipy.io as sio
+
+    uncal_dir = tmp_path / "uncal"
+    uncal_dir.mkdir(parents=True, exist_ok=True)
+    uncal_info = synthetic.make_synthetic_unige_nsta(uncal_dir / "nsta_uncal.dat", npixels=20)
+
+    cal_dir = tmp_path / "calibrated"
+    cal_dir.mkdir(parents=True, exist_ok=True)
+    cal_info = synthetic.make_synthetic_unige_nsta(cal_dir / "nsta_cal.dat", npixels=20)
+    sio.savemat(cal_dir / "pix2lam.mat", {"lam": np.linspace(400.0, 700.0, 20)})
+
+    win = MainWindow()
+    try:
+        # 1. Load uncalibrated dataset (pixel indices)
+        win.load_path(uncal_info["path"], "UniGE_nsTA")
+        assert win.PC_xUnit.isEnabled() is False
+        assert win.PC_secondaryAxis.isEnabled() is False
+        assert win.PPaxes.ax.get_xlabel() == "Pixel index"
+        assert win.PC_xMin.suffix() == " px"
+
+        # 2. Load calibrated dataset -> controls re-enabled and Wavelength label restored
+        win.load_path(cal_info["path"], "UniGE_nsTA")
+        assert win.PC_xUnit.isEnabled() is True
+        assert win.PC_secondaryAxis.isEnabled() is True
+        assert "Wavelength" in win.PPaxes.ax.get_xlabel()
+    finally:
+        win.close()
+
