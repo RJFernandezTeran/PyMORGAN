@@ -74,6 +74,56 @@ class TwoDTabMixin:
             dt = getattr(self.twoD_dataset, "data_type", None)
             self.twoD_load_path(self._twoD_current_path, data_type=dt, force=True)
 
+    def twoD_reprocess_data(self, _checked: bool = False, *, silent: bool = False):
+        """Reprocess the active 2D dataset in memory using current Phasing/FT controls."""
+        if self.twoD_dataset is None:
+            if self._twoD_current_path:
+                self.twoD_reload_data()
+            return
+
+        if (
+            self.twoD_dataset.datatype in ("shaper", "interferometer", "FreqDomain")
+            or getattr(self.twoD_dataset, "is_frequency_domain", False)
+        ):
+            for cache_attr in (
+                "_cls_cache",
+                "_ivcls_cache",
+                "_nls_cache",
+                "_sd_results",
+                "_kubo_fit_dataset",
+            ):
+                if hasattr(self.twoD_dataset, cache_attr):
+                    delattr(self.twoD_dataset, cache_attr)
+            self._update_spectral_diffusion_controls_state()
+
+            tracker = None
+            if silent or len(self.twoD_dataset.delays) <= 60:
+                try:
+                    from ...twoD.progress import ProgressTracker
+
+                    tracker = ProgressTracker(1, is_gui=False)
+                except Exception:
+                    tracker = None
+            self._run_twoD_dataset_process(progress_tracker=tracker)
+
+        if self.twoD_plot_controls is not None:
+            lst_delays = getattr(self, "twoD_t2delay_lst", None)
+            active_idx = lst_delays.currentIndex().row() if lst_delays is not None else 0
+            if active_idx < 0 or active_idx >= len(self.twoD_dataset.delays):
+                active_idx = max(0, len(self.twoD_dataset.delays) - 1)
+            pump_arr = np.asarray(self.twoD_dataset.pump, dtype=float)
+            cur_pu_lo, cur_pu_hi = sorted(self.twoD_plot_controls.pump_lim())
+            if pump_arr.size and cur_pu_hi >= float(np.nanmin(pump_arr)) and cur_pu_lo <= float(np.nanmax(pump_arr)):
+                self.twoD_plot_controls.update_delay_index(active_idx, force_reset_pct=False)
+            else:
+                self.twoD_plot_controls.set_dataset(self.twoD_dataset, active_idx)
+
+        self._twoD_preview_contour()
+        self._update_twoD_sample_info()
+        if hasattr(self, "_twoD_update_other_plot"):
+            self._twoD_update_other_plot()
+        self._twoD_update_phase_coeffs_display()
+
     @busy_guard("Loading 2D dataset...")
     def twoD_load_path(self, path: str, data_type: str | None = None, force: bool = False):
         """Load a 2-D dataset from ``path``."""
@@ -113,13 +163,35 @@ class TwoDTabMixin:
         try:
             self.twoD_dataset = pm.load_2D(path, data_type=dt, progress_tracker=progress)
             self._twoD_current_path = path
+            self._twoD_raw_probe = (
+                self.twoD_dataset.probe.copy()
+                if getattr(self.twoD_dataset, "probe", None) is not None
+                else None
+            )
+            self._twoD_raw_cal_level = getattr(self.twoD_dataset, "cal_level", None)
 
-            if dt == "P2DAT":
-                sub_chk = getattr(self, "twoD_sub_scat_chk", None)
-                if sub_chk is not None:
-                    sub_chk.blockSignals(True)
-                    sub_chk.setChecked(False)
-                    sub_chk.blockSignals(False)
+            shot_spin = getattr(self, "twoD_shot_rotation", None)
+            if (
+                shot_spin is not None
+                and self.twoD_dataset is not None
+                and getattr(self.twoD_dataset, "raw_signal", None) is not None
+                and not getattr(self.twoD_dataset, "is_frequency_domain", False)
+            ):
+                n_bins = max(2, int(self.twoD_dataset.raw_signal.shape[0]))
+                shot_spin.blockSignals(True)
+                shot_spin.setRange(-(n_bins - 1), n_bins - 1)
+                shot_spin.blockSignals(False)
+
+            sub_chk = getattr(self, "twoD_sub_scat_chk", None)
+            if sub_chk is not None and self.twoD_dataset is not None:
+                has_neg_ref = (
+                    dt != "P2DAT"
+                    and len(self.twoD_dataset.delays) > 1
+                    and float(np.nanmin(self.twoD_dataset.delays)) < -0.05
+                )
+                sub_chk.blockSignals(True)
+                sub_chk.setChecked(bool(has_neg_ref))
+                sub_chk.blockSignals(False)
 
             if self.twoD_dataset is not None and (
                 self.twoD_dataset.datatype in ("shaper", "interferometer", "FreqDomain")
@@ -239,6 +311,9 @@ class TwoDTabMixin:
         phase_range = getattr(self, "twoD_phase_fit_range", None)
         phase_points = phase_range.value() if phase_range is not None else 10
 
+        shot_spin = getattr(self, "twoD_shot_rotation", None)
+        shot_rotation = int(shot_spin.value()) if shot_spin is not None else 0
+
         pump_corr = getattr(self, "twoD_pump_corr_chk", None)
         pumpcorrection = pump_corr.isChecked() if pump_corr is not None else False
 
@@ -256,6 +331,7 @@ class TwoDTabMixin:
             "zeropad_next2k": zeropad_next2k,
             "phase_method": phase_method,
             "phase_points": phase_points,
+            "shot_rotation": shot_rotation,
             "pumpcorrection": pumpcorrection,
             "bkg_sub": False,
             "bkgIdx": bkgIdx,
@@ -267,12 +343,13 @@ class TwoDTabMixin:
             return
         proc_kwargs = self._twoD_collect_process_kwargs()
 
-        self._twoD_raw_probe = (
-            self.twoD_dataset.probe.copy()
-            if hasattr(self.twoD_dataset, "probe") and self.twoD_dataset.probe is not None
-            else None
-        )
-        self._twoD_raw_cal_level = getattr(self.twoD_dataset, "cal_level", None)
+        if getattr(self, "_twoD_raw_probe", None) is None:
+            self._twoD_raw_probe = (
+                self.twoD_dataset.probe.copy()
+                if hasattr(self.twoD_dataset, "probe") and self.twoD_dataset.probe is not None
+                else None
+            )
+            self._twoD_raw_cal_level = getattr(self.twoD_dataset, "cal_level", None)
 
         auto_cal = getattr(self, "twoD_auto_cal_chk", None)
         autocalibrate_probe = auto_cal.isChecked() if auto_cal is not None else False
@@ -291,6 +368,13 @@ class TwoDTabMixin:
         if autocalibrate_probe and cal_probe_vec is not None:
             self.twoD_dataset.probe = cal_probe_vec.copy()
             self.twoD_dataset.cal_level = "autocalibrated"
+        elif (
+            not autocalibrate_probe
+            and getattr(self, "_twoD_raw_probe", None) is not None
+            and len(self._twoD_raw_probe) == len(self.twoD_dataset.probe)
+        ):
+            self.twoD_dataset.probe = self._twoD_raw_probe.copy()
+            self.twoD_dataset.cal_level = getattr(self, "_twoD_raw_cal_level", None)
 
     def _update_twoD_state_selector(self):
         """Show and populate the polarization/slow-modulation state selector if multiple states exist."""
@@ -366,11 +450,14 @@ class TwoDTabMixin:
             return
 
         for delay in delays:
-            if abs(delay) < 1 and delay != 0:
+            a_d = abs(float(delay))
+            if a_d < 0.9995 and a_d != 0.0:
                 delay_str = f"{delay * 1000:.3g} fs"
-            elif abs(delay) >= 1 and abs(delay) < 1e3:
+            elif a_d == 0.0:
+                delay_str = "0 fs"
+            elif a_d < 999.5:
                 delay_str = f"{delay:.3g} ps"
-            elif abs(delay) >= 1e3 and abs(delay) < 1e6:
+            elif a_d < 999500.0:
                 delay_str = f"{delay / 1000:.3g} ns"
             else:
                 delay_str = f"{delay:.3g} ps"
@@ -407,21 +494,18 @@ class TwoDTabMixin:
         ax = getattr(self.twoDaxes, "ax", None)
         if ax is None:
             return
-        xmin, xmax = ax.get_xlim()
-        ymin, ymax = ax.get_ylim()
+        s = pm.get_settings()
+        pump_axis_val = s.pump_axis.value if hasattr(s.pump_axis, "value") else s.pump_axis
+        is_vertical = pump_axis_val == "Vertical"
+        to_native = pm.twoD.plot.native_converter(self.twoD_dataset, settings=s)
+        x_nat = to_native(ax.get_xlim())
+        y_nat = to_native(ax.get_ylim())
+        pu_nat = y_nat if is_vertical else x_nat
+        pr_nat = x_nat if is_vertical else y_nat
 
         pc = self.twoD_plot_controls
-        for w, val in (
-            (pc.pump_min, xmin),
-            (pc.pump_max, xmax),
-            (pc.probe_min, ymin),
-            (pc.probe_max, ymax),
-        ):
-            if w is not None:
-                w.blockSignals(True)
-                w.setValue(val)
-                w.blockSignals(False)
-
+        pc.set_pump_lim_native(float(pu_nat[0]), float(pu_nat[1]))
+        pc.set_probe_lim_native(float(pr_nat[0]), float(pr_nat[1]))
         pc.limitsChanged.emit()
 
     def _update_twoD_sample_info(self):
@@ -517,19 +601,22 @@ class TwoDTabMixin:
             probe_lim=kwargs.get("probe_lim"),
             Nlevels=kwargs.get("Nlevels"),
             filled=kwargs.get("filled"),
+            secondary_axis=kwargs.get("secondary_axis"),
         )
 
         if self.twoD_plot_controls is not None:
-            xlim = (
+            raw_xlim = (
                 self.twoD_plot_controls.probe_lim()
                 if is_vertical
                 else self.twoD_plot_controls.pump_lim()
             )
-            ylim = (
+            raw_ylim = (
                 self.twoD_plot_controls.pump_lim()
                 if is_vertical
                 else self.twoD_plot_controls.probe_lim()
             )
+            xlim = pm.twoD.plot.ordered_display_limits(raw_xlim, self.twoD_dataset, settings=s)
+            ylim = pm.twoD.plot.ordered_display_limits(raw_ylim, self.twoD_dataset, settings=s)
             _safe_set_limits(ax, xlim, ylim)
         sq_chk = getattr(self, "twoD_PC_square", None)
         if sq_chk is not None and sq_chk.isChecked():
@@ -571,7 +658,8 @@ class TwoDTabMixin:
                 fig.tight_layout()
                 plt.show(block=False)
             else:
-                fig, ax = plt.subplots(figsize=(6, 6))
+                use_dual = bool(self._twoD_dual_axis())
+                fig, ax = plt.subplots(figsize=(6.8, 6.2) if use_dual else (6, 6))
                 self.render_twoD_contour_frame(active_delay, ax=ax)
                 fig.tight_layout()
                 plt.show(block=False)
@@ -888,10 +976,12 @@ class TwoDTabMixin:
                         return
                     self.statusBar().clearMessage()
 
+                    to_native = pm.twoD.plot.native_converter(self.twoD_dataset, settings=s)
                     resolved_coords = []
                     for x, y in points:
-                        pump_wn = y if is_vertical else x
-                        probe_wn = x if is_vertical else y
+                        x_n, y_n = (float(v) for v in to_native([x, y]))
+                        pump_wn = y_n if is_vertical else x_n
+                        probe_wn = x_n if is_vertical else y_n
                         resolved_coords.append((pump_wn, probe_wn))
                     self._plot_single_coordinates(resolved_coords)
 
@@ -938,12 +1028,15 @@ class TwoDTabMixin:
                         if abs(xmax - xmin) < 1e-5 or abs(ymax - ymin) < 1e-5:
                             return
 
+                        to_native = pm.twoD.plot.native_converter(self.twoD_dataset, settings=s)
+                        x_nat = tuple(sorted(float(v) for v in to_native([xmin, xmax])))
+                        y_nat = tuple(sorted(float(v) for v in to_native([ymin, ymax])))
                         if is_vertical:
-                            pump_range = (ymin, ymax)
-                            probe_range = (xmin, xmax)
+                            pump_range = y_nat
+                            probe_range = x_nat
                         else:
-                            pump_range = (xmin, xmax)
-                            probe_range = (ymin, ymax)
+                            pump_range = x_nat
+                            probe_range = y_nat
 
                         self._selected_areas.append((pump_range, probe_range))
 
@@ -1164,10 +1257,13 @@ class TwoDTabMixin:
         if ax is None:
             return
 
-        contour_xlim = ax.get_xlim()
-        contour_ylim = ax.get_ylim()
+        to_native = pm.twoD.plot.native_converter(self.twoD_dataset, settings=s)
+        to_display = pm.twoD.plot.display_converter(self.twoD_dataset, settings=s)
+        contour_xlim = tuple(float(v) for v in to_native(ax.get_xlim()))
+        contour_ylim = tuple(float(v) for v in to_native(ax.get_ylim()))
         contour_pump_lim = contour_ylim if is_vertical else contour_xlim
         contour_probe_lim = contour_xlim if is_vertical else contour_ylim
+        dual_sec = self._twoD_dual_axis()
 
         import matplotlib.pyplot as plt
 
@@ -1186,7 +1282,15 @@ class TwoDTabMixin:
                 )
                 fig, new_ax = plt.subplots(figsize=(7.5, 4.375))
                 n_before = len(new_ax.get_lines())
-                plot_spectra(slice_ds, [active_delay], ax=new_ax, fig=fig, normY=self._twoD_norm())
+                plot_spectra(
+                    slice_ds,
+                    [active_delay],
+                    ax=new_ax,
+                    fig=fig,
+                    normY=self._twoD_norm(),
+                    x_axis_unit="cm-1",
+                    secondary_axis=dual_sec,
+                )
 
                 # Make the line black and label it "Diagonal"
                 line = new_ax.get_lines()[n_before]
@@ -1218,7 +1322,15 @@ class TwoDTabMixin:
                     )
                     fig, new_ax = plt.subplots(figsize=(7.5, 4.375))
                     n_before = len(new_ax.get_lines())
-                    plot_spectra(slice_ds, [active_delay], ax=new_ax, fig=fig, normY=self._twoD_norm())
+                    plot_spectra(
+                        slice_ds,
+                        [active_delay],
+                        ax=new_ax,
+                        fig=fig,
+                        normY=self._twoD_norm(),
+                        x_axis_unit="cm-1",
+                        secondary_axis=dual_sec,
+                    )
 
                     line = new_ax.get_lines()[n_before]
                     line.set_color("purple")
@@ -1254,7 +1366,15 @@ class TwoDTabMixin:
                         )
                         fig, new_ax = plt.subplots(figsize=(7.5, 4.375))
                         n_before = len(new_ax.get_lines())
-                        plot_spectra(slice_ds, [active_delay], ax=new_ax, fig=fig, normY=self._twoD_norm())
+                        plot_spectra(
+                            slice_ds,
+                            [active_delay],
+                            ax=new_ax,
+                            fig=fig,
+                            normY=self._twoD_norm(),
+                            x_axis_unit="cm-1",
+                            secondary_axis=False,
+                        )
 
                         line = new_ax.get_lines()[n_before]
                         line.set_color("r")
@@ -1293,8 +1413,15 @@ class TwoDTabMixin:
                         new_ax.legend(loc="best")
 
                         # Draw cut line overlays on 2D contour plot
-                        ax.plot([w3_val + rel_disp[0], w3_val + rel_disp[-1]], [w1_val + rel_disp[0], w1_val + rel_disp[-1]], "k-", linewidth=1.5, alpha=0.8)
-                        ax.plot([w3_val - rel_disp[0], w3_val - rel_disp[-1]], [w1_val + rel_disp[0], w1_val + rel_disp[-1]], "r--", linewidth=1.5, alpha=0.8)
+                        pu_d = to_display([w1_val + rel_disp[0], w1_val + rel_disp[-1]])
+                        pr_diag_d = to_display([w3_val + rel_disp[0], w3_val + rel_disp[-1]])
+                        pr_anti_d = to_display([w3_val - rel_disp[0], w3_val - rel_disp[-1]])
+                        if is_vertical:
+                            ax.plot(pr_diag_d, pu_d, "k-", linewidth=1.5, alpha=0.8)
+                            ax.plot(pr_anti_d, pu_d, "r--", linewidth=1.5, alpha=0.8)
+                        else:
+                            ax.plot(pu_d, pr_diag_d, "k-", linewidth=1.5, alpha=0.8)
+                            ax.plot(pu_d, pr_anti_d, "r--", linewidth=1.5, alpha=0.8)
                         self.twoDaxes.canvas.draw()
 
                         fig.tight_layout()
@@ -1312,7 +1439,7 @@ class TwoDTabMixin:
                     self._picker = None
                     if not points:
                         return
-                    pump_wn = points[0]
+                    pump_wn = float(to_native([points[0]])[0])
                     t2_delays = self._ask_values(
                         "Transient spectra slices",
                         "Delays to plot (comma-separated or range e.g. 1:0.1:5, 'all'):",
@@ -1354,7 +1481,7 @@ class TwoDTabMixin:
                     self._picker = None
                     if not points:
                         return
-                    probe_wn = points[0]
+                    probe_wn = float(to_native([points[0]])[0])
                     t2_delays = self._ask_values(
                         "Transient spectra slices",
                         "Delays to plot (comma-separated or range e.g. 1:0.1:5, 'all'):",
@@ -1410,7 +1537,8 @@ class TwoDTabMixin:
                         if abs(xmax - xmin) < 1e-5 or abs(ymax - ymin) < 1e-5:
                             return
 
-                        pump_range = (ymin, ymax) if is_vertical else (xmin, xmax)
+                        raw_pump = (ymin, ymax) if is_vertical else (xmin, xmax)
+                        pump_range = tuple(sorted(float(v) for v in to_native(raw_pump)))
 
                         if self._rect_cid is not None:
                             self.twoDaxes.canvas.mpl_disconnect(self._rect_cid)
@@ -1500,7 +1628,8 @@ class TwoDTabMixin:
                         if abs(xmax - xmin) < 1e-5 or abs(ymax - ymin) < 1e-5:
                             return
 
-                        probe_range = (xmin, xmax) if is_vertical else (ymin, ymax)
+                        raw_probe = (xmin, xmax) if is_vertical else (ymin, ymax)
+                        probe_range = tuple(sorted(float(v) for v in to_native(raw_probe)))
 
                         if self._rect_cid is not None:
                             self.twoDaxes.canvas.mpl_disconnect(self._rect_cid)
@@ -1578,7 +1707,8 @@ class TwoDTabMixin:
                     self._picker = None
                     if not points:
                         return
-                    self._plot_several_pump_slices(points, active_delay, contour_probe_lim)
+                    pts_nat = [float(v) for v in to_native(points)]
+                    self._plot_several_pump_slices(pts_nat, active_delay, contour_probe_lim)
 
                 picker_axis = "y" if is_vertical else "x"
                 self._picker = ContourPicker(self.twoDaxes.canvas, ax, picker_axis, done).start()
@@ -1601,7 +1731,8 @@ class TwoDTabMixin:
                     self._picker = None
                     if not points:
                         return
-                    self._plot_several_probe_slices(points, active_delay, contour_pump_lim)
+                    pts_nat = [float(v) for v in to_native(points)]
+                    self._plot_several_probe_slices(pts_nat, active_delay, contour_pump_lim)
 
                 picker_axis = "x" if is_vertical else "y"
                 self._picker = ContourPicker(self.twoDaxes.canvas, ax, picker_axis, done).start()
@@ -1614,6 +1745,13 @@ class TwoDTabMixin:
                 if vals:
                     self._plot_several_probe_slices(vals, active_delay, contour_pump_lim)
 
+    def _twoD_dual_axis(self) -> bool | None:
+        if self.twoD_plot_controls is not None:
+            return self.twoD_plot_controls.dual_axis()
+        if self.twoD_dataset is not None and getattr(self.twoD_dataset, "is_electronic", False):
+            return True
+        return None
+
     def _get_twoD_axis_labels(self):
 
         s = pm.get_settings()
@@ -1625,8 +1763,16 @@ class TwoDTabMixin:
             self.twoD_dataset.units if self.twoD_dataset is not None else {"unitsL": "cm-1"}
         )
         unitsL = units_dict.get("unitsL", "cm-1")
+        if (
+            self.twoD_dataset is not None
+            and getattr(self.twoD_dataset, "is_electronic", False)
+            and str(unitsL).strip() in ("cm-1", "cm^-1", "cm⁻¹", "cm^{-1}")
+        ):
+            unitsL_lbl = r"$\times 10^{3}$ cm$^{-1}$"
+        else:
+            unitsL_lbl = unitsL
 
-        pumpAll, probeAll = hlp.fmt2Dlabel(flabel_delim, flabel, unitsL)
+        pumpAll, probeAll = hlp.fmt2Dlabel(flabel_delim, flabel, unitsL_lbl)
 
         match flabel:
             case "Omega_n":
@@ -1651,7 +1797,15 @@ class TwoDTabMixin:
         pm.apply_style()
         slice_ds = self.twoD_dataset.get_slice_at_pump(pump_wn)
         fig, ax = plt.subplots(figsize=(7.5, 4.375))
-        plot_spectra(slice_ds, t2_delays, ax=ax, fig=fig, normY=self._twoD_norm())
+        plot_spectra(
+            slice_ds,
+            t2_delays,
+            ax=ax,
+            fig=fig,
+            normY=self._twoD_norm(),
+            x_axis_unit="cm-1",
+            secondary_axis=self._twoD_dual_axis(),
+        )
 
         pumpAll, probeAll, pump_symbol, probe_symbol = self._get_twoD_axis_labels()
         ax.set_xlabel(probeAll)
@@ -1669,7 +1823,15 @@ class TwoDTabMixin:
         pm.apply_style()
         slice_ds = self.twoD_dataset.get_slice_at_probe(probe_wn)
         fig, ax = plt.subplots(figsize=(7.5, 4.375))
-        plot_spectra(slice_ds, t2_delays, ax=ax, fig=fig, normY=self._twoD_norm())
+        plot_spectra(
+            slice_ds,
+            t2_delays,
+            ax=ax,
+            fig=fig,
+            normY=self._twoD_norm(),
+            x_axis_unit="cm-1",
+            secondary_axis=self._twoD_dual_axis(),
+        )
 
         pumpAll, probeAll, pump_symbol, probe_symbol = self._get_twoD_axis_labels()
         ax.set_xlabel(pumpAll)
@@ -1687,7 +1849,15 @@ class TwoDTabMixin:
         pm.apply_style()
         slice_ds = self.twoD_dataset.get_slice_integrate_pump(pump_range[0], pump_range[1])
         fig, ax = plt.subplots(figsize=(7.5, 4.375))
-        plot_spectra(slice_ds, t2_delays, ax=ax, fig=fig, normY=self._twoD_norm())
+        plot_spectra(
+            slice_ds,
+            t2_delays,
+            ax=ax,
+            fig=fig,
+            normY=self._twoD_norm(),
+            x_axis_unit="cm-1",
+            secondary_axis=self._twoD_dual_axis(),
+        )
 
         pumpAll, probeAll, pump_symbol, probe_symbol = self._get_twoD_axis_labels()
         ax.set_xlabel(probeAll)
@@ -1707,7 +1877,15 @@ class TwoDTabMixin:
         pm.apply_style()
         slice_ds = self.twoD_dataset.get_slice_integrate_probe(probe_range[0], probe_range[1])
         fig, ax = plt.subplots(figsize=(7.5, 4.375))
-        plot_spectra(slice_ds, t2_delays, ax=ax, fig=fig, normY=self._twoD_norm())
+        plot_spectra(
+            slice_ds,
+            t2_delays,
+            ax=ax,
+            fig=fig,
+            normY=self._twoD_norm(),
+            x_axis_unit="cm-1",
+            secondary_axis=self._twoD_dual_axis(),
+        )
 
         pumpAll, probeAll, pump_symbol, probe_symbol = self._get_twoD_axis_labels()
         ax.set_xlabel(pumpAll)
@@ -1731,13 +1909,22 @@ class TwoDTabMixin:
         Nplots = len(pump_wns)
         cm = hlp.get_trace_cmap(s.traces_cmap, Nplots)
         pumpAll, probeAll, pump_symbol, probe_symbol = self._get_twoD_axis_labels()
+        dual_sec = self._twoD_dual_axis()
 
         lines = []
         labels = []
         for i, p_wn in enumerate(pump_wns):
             slice_ds = self.twoD_dataset.get_slice_at_pump(p_wn)
             n_before = len(ax.get_lines())
-            plot_spectra(slice_ds, [t2], ax=ax, fig=fig, normY=self._twoD_norm())
+            plot_spectra(
+                slice_ds,
+                [t2],
+                ax=ax,
+                fig=fig,
+                normY=self._twoD_norm(),
+                x_axis_unit="cm-1",
+                secondary_axis=dual_sec if i == Nplots - 1 else False,
+            )
             line = ax.get_lines()[n_before]
             line.set_color(cm[i])
             lbl = f"{p_wn:.1f}"
@@ -1775,13 +1962,22 @@ class TwoDTabMixin:
         Nplots = len(probe_wns)
         cm = hlp.get_trace_cmap(s.traces_cmap, Nplots)
         pumpAll, probeAll, pump_symbol, probe_symbol = self._get_twoD_axis_labels()
+        dual_sec = self._twoD_dual_axis()
 
         lines = []
         labels = []
         for i, pr_wn in enumerate(probe_wns):
             slice_ds = self.twoD_dataset.get_slice_at_probe(pr_wn)
             n_before = len(ax.get_lines())
-            plot_spectra(slice_ds, [t2], ax=ax, fig=fig, normY=self._twoD_norm())
+            plot_spectra(
+                slice_ds,
+                [t2],
+                ax=ax,
+                fig=fig,
+                normY=self._twoD_norm(),
+                x_axis_unit="cm-1",
+                secondary_axis=dual_sec if i == Nplots - 1 else False,
+            )
             line = ax.get_lines()[n_before]
             line.set_color(cm[i])
             lbl = f"{pr_wn:.1f}"
@@ -2445,25 +2641,27 @@ class TwoDTabMixin:
                             pass
 
                     if has_drawn_rect:
+                        to_native = pm.twoD.plot.native_converter(self.twoD_dataset, settings=s)
+                        x_nat = tuple(sorted(float(v) for v in to_native([xmin, xmax])))
+                        y_nat = tuple(sorted(float(v) for v in to_native([ymin, ymax])))
                         if is_vertical:
-                            pump_range = (ymin, ymax)
-                            probe_range = (xmin, xmax)
+                            pump_range = y_nat
+                            probe_range = x_nat
                         else:
-                            pump_range = (xmin, xmax)
-                            probe_range = (ymin, ymax)
+                            pump_range = x_nat
+                            probe_range = y_nat
                     else:
                         # Default to current view limits of the 2D plot axis
-                        xlim = ax.get_xlim()
-                        ylim = ax.get_ylim()
-                        x_lo, x_hi = min(xlim), max(xlim)
-                        y_lo, y_hi = min(ylim), max(ylim)
+                        to_native = pm.twoD.plot.native_converter(self.twoD_dataset, settings=s)
+                        x_nat = tuple(sorted(float(v) for v in to_native(ax.get_xlim())))
+                        y_nat = tuple(sorted(float(v) for v in to_native(ax.get_ylim())))
 
                         if is_vertical:
-                            pump_range = (y_lo, y_hi)
-                            probe_range = (x_lo, x_hi)
+                            pump_range = y_nat
+                            probe_range = x_nat
                         else:
-                            pump_range = (x_lo, x_hi)
-                            probe_range = (y_lo, y_hi)
+                            pump_range = x_nat
+                            probe_range = y_nat
 
                     if self._rect_cid is not None:
                         self.twoDaxes.canvas.mpl_disconnect(self._rect_cid)
@@ -2656,10 +2854,9 @@ class TwoDTabMixin:
             else self.twoD_plot_controls.probe_lim()
         )
         # The panel holds limits in the dataset's own units; the axes may be
-        # drawn in another (Settings.twoD_freq_unit).
-        to_display = pm.twoD.plot.display_converter(self.twoD_dataset, settings=s)
-        xlim = tuple(to_display(xlim))
-        ylim = tuple(to_display(ylim))
+        # drawn in another (Settings.twoD_freq_unit) or inverted for 2D-ES.
+        xlim = pm.twoD.plot.ordered_display_limits(xlim, self.twoD_dataset, settings=s)
+        ylim = pm.twoD.plot.ordered_display_limits(ylim, self.twoD_dataset, settings=s)
         _safe_set_limits(ax, xlim, ylim)
         self.twoDaxes.canvas.draw_idle()
 
@@ -2792,7 +2989,9 @@ class TwoDTabMixin:
                 cls_points=cls_points,
                 ivcls_points=ivcls_points,
                 nls_points=nls_points,
+                secondary_axis=kwargs.get("secondary_axis"),
             )
+            to_display = pm.twoD.plot.display_converter(plot_dataset, settings=s)
 
             # Draw FIT as black contour lines on top if BOTH
             if (
@@ -2827,13 +3026,15 @@ class TwoDTabMixin:
                         probe_full = probe_full[probe_indices]
                         Zmap_sim = Zmap_sim[np.ix_(pump_indices, probe_indices)]
 
+                pump_disp = to_display(pump_full)
+                probe_disp = to_display(probe_full)
                 if is_vertical:
-                    X_sim = probe_full
-                    Y_sim = pump_full
+                    X_sim = probe_disp
+                    Y_sim = pump_disp
                     Z_contour = Zmap_sim
                 else:
-                    X_sim = pump_full
-                    Y_sim = probe_full
+                    X_sim = pump_disp
+                    Y_sim = probe_disp
                     Z_contour = Zmap_sim.T
 
                 sim_max = np.nanmax(np.abs(Zmap_sim))
@@ -2851,7 +3052,7 @@ class TwoDTabMixin:
             if in_other_tab and hasattr(self, "twoD_other_btn_TD") and self.twoD_other_btn_TD.isChecked():
                 pixel_idx = self.twoD_other_pixel_spin.value()
                 if pixel_idx >= 1 and pixel_idx - 1 < len(self.twoD_dataset.probe):
-                    probe_val = self.twoD_dataset.probe[pixel_idx - 1]
+                    probe_val = float(to_display([self.twoD_dataset.probe[pixel_idx - 1]])[0])
                     if is_vertical:
                         ax.axvline(
                             probe_val, color="black", linestyle="--", linewidth=1.5, alpha=0.8
@@ -2866,16 +3067,18 @@ class TwoDTabMixin:
             traceback.print_exc()
             self.statusBar().showMessage(f"Plot failed: {exc}", 5000)
 
-        xlim = (
+        raw_xlim = (
             self.twoD_plot_controls.probe_lim()
             if is_vertical
             else self.twoD_plot_controls.pump_lim()
         )
-        ylim = (
+        raw_ylim = (
             self.twoD_plot_controls.pump_lim()
             if is_vertical
             else self.twoD_plot_controls.probe_lim()
         )
+        xlim = pm.twoD.plot.ordered_display_limits(raw_xlim, plot_dataset, settings=s)
+        ylim = pm.twoD.plot.ordered_display_limits(raw_ylim, plot_dataset, settings=s)
         _safe_set_limits(ax, xlim, ylim)
 
         sq_chk = getattr(self, "twoD_PC_square", None)
@@ -2883,6 +3086,12 @@ class TwoDTabMixin:
             ax.set_aspect("equal")
         else:
             ax.set_aspect("auto")
+
+        try:
+            w.figure.set_layout_engine(None)
+            w.figure.tight_layout()
+        except Exception:
+            pass
 
         self._style_preview(w)
         w.canvas.draw_idle()
@@ -3217,13 +3426,20 @@ class TwoDTabMixin:
                     label="Current",
                 )
 
+            is_elec_other = bool(getattr(self.twoD_dataset, "is_electronic", False))
             ax.set_xlabel("Pixel number", fontsize=10 if is_qt else 12, fontweight="bold")
             ax.set_ylabel(
-                f"Fitted freq. ({self.twoD_dataset.freq_units})",
+                r"Fitted freq. ($10^{3}$ cm$^{-1}$)"
+                if is_elec_other
+                else f"Fitted freq. ({self.twoD_dataset.freq_units})",
                 fontsize=10 if is_qt else 12,
                 fontweight="bold",
                 rotation=90,
             )
+            if is_elec_other:
+                from ...oneD.plot import _wn_div1000_formatter
+
+                ax.yaxis.set_major_formatter(_wn_div1000_formatter())
             if not is_qt:
                 ax.set_title("Probe Calibration", fontsize=12, fontweight="bold")
             ax.set_xlim(pixels.min() + 0.5, pixels.max() + 1.5)
@@ -3425,12 +3641,19 @@ class TwoDTabMixin:
             ax.axhline(0, lw=0.75, c="0.75")
 
             # Left axis: Pump spectrum amplitude
+            is_elec_ph = bool(getattr(self.twoD_dataset, "is_electronic", False))
             ax.plot(pump_pos, abs_fft, "k-", linewidth=1.0 if is_qt else 1.5, label="Pump")
             ax.set_xlabel(
-                f"Pump Frequency ({self.twoD_dataset.freq_units})",
+                r"Pump Frequency ($10^{3}$ cm$^{-1}$)"
+                if is_elec_ph
+                else f"Pump Frequency ({self.twoD_dataset.freq_units})",
                 fontsize=10 if is_qt else 12,
                 fontweight="bold",
             )
+            if is_elec_ph:
+                from ...oneD.plot import _wn_div1000_formatter
+
+                ax.xaxis.set_major_formatter(_wn_div1000_formatter())
             ax.set_ylabel(
                 "Amplitude (a.u.)",
                 fontsize=10 if is_qt else 12,

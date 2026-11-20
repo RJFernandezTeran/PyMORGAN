@@ -883,3 +883,154 @@ def test_kubo_dialog_gui_workflow():
 
     dlg.close()
     assert app is not None
+
+
+def test_shot_rotation_pipeline_and_gui(tmp_path):
+    """Verify integer shot rotation before FT across Dataset2D, single scans, and GUI."""
+    from PyQt6.QtWidgets import QApplication
+    from synthetic import make_synthetic_quickcontrol_2d
+
+    from pymorgan.gui.main_window import MainWindow
+    from pymorgan.twoD.progress import ProgressTracker
+
+    rng = np.random.default_rng(123)
+    n_bins = 64
+    dt1_fs = 30.0
+    w0_cm1 = 1800.0
+    c_cm_fs = 2.99792458e-5
+    t1_fs = np.arange(n_bins, dtype=float) * dt1_fs
+    probe = np.linspace(1960.0, 2040.0, 20)
+    delays = np.array([0.2, 1.0])
+
+    # Damped time-domain oscillation centred near 2000 cm-1 (delta_w = 200 cm-1)
+    env = np.exp(-t1_fs / 450.0)
+    osc = np.cos(2.0 * np.pi * (2000.0 - w0_cm1) * c_cm_fs * t1_fs) * env
+    pr_prof = -np.exp(-0.5 * ((probe - 2000.0) / 8.0) ** 2) + 0.8 * np.exp(
+        -0.5 * ((probe - 1985.0) / 8.0) ** 2
+    )
+
+    sig_ss_ref = np.zeros((n_bins, len(probe), len(delays), 3), dtype=float)
+    for k in range(3):
+        noise_k = 1.0e-4 * rng.standard_normal((n_bins, len(probe), len(delays)))
+        for m, scale in enumerate((1.0, 0.7)):
+            sig_ss_ref[:, :, m, k] = scale * np.outer(osc, pr_prof) + noise_k[:, :, m]
+    sig_ref = np.mean(sig_ss_ref, axis=-1)
+    int_ss_ref = np.mean(sig_ss_ref, axis=1)
+    int_ref = np.mean(sig_ref, axis=1)
+
+    units = {
+        "unitsL": "cm-1",
+        "unitsL_lbl": "Wavenumber",
+        "unitsL_ltx": r"cm$^{-1}$",
+        "unitsT": "ps",
+        "unitsT_ltx": "ps",
+        "unitsZ": "mOD",
+        "unitsZ_lbl": r"$S_{\text{2DIR}}$",
+        "unitsZ_ltx": r"mOD cm$^{1/2}$",
+        "interferogram_from_signal": True,
+    }
+
+    ds_ref = Dataset2D(
+        sig_ref.copy(),
+        t1_fs.copy(),
+        probe.copy(),
+        delays.copy(),
+        dict(units),
+        freq_units="cm-1",
+        datatype="shaper",
+        raw_signal=sig_ref.copy(),
+        raw_interferogram=int_ref.copy(),
+        raw_t1delays=t1_fs.copy(),
+        raw_signal_ss=sig_ss_ref.copy(),
+        raw_interferogram_ss=int_ss_ref.copy(),
+        w0_cm1=w0_cm1,
+        dt1_fs=dt1_fs,
+    )
+    silent = ProgressTracker(1, is_gui=False)
+    proc_opts = dict(
+        apodise_method="Cos",
+        zeropad_enable=True,
+        zeropad_factor=2,
+        zeropad_next2k=True,
+        progress_tracker=silent,
+    )
+    ds_ref.process(shot_rotation=0, **proc_opts)
+
+    # Misalign time-domain data by -3 shots; +3 shot_rotation must recover ds_ref exactly
+    shift_err = -3
+    ds_shifted = Dataset2D(
+        np.roll(sig_ref, shift_err, axis=0),
+        t1_fs.copy(),
+        probe.copy(),
+        delays.copy(),
+        dict(units),
+        freq_units="cm-1",
+        datatype="shaper",
+        raw_signal=np.roll(sig_ref, shift_err, axis=0),
+        raw_interferogram=np.roll(int_ref, shift_err, axis=0),
+        raw_t1delays=t1_fs.copy(),
+        raw_signal_ss=np.roll(sig_ss_ref, shift_err, axis=0),
+        raw_interferogram_ss=np.roll(int_ss_ref, shift_err, axis=0),
+        w0_cm1=w0_cm1,
+        dt1_fs=dt1_fs,
+    )
+    ds_shifted.process(shot_rotation=0, **proc_opts)
+    z_unrotated = ds_shifted.Z_R.copy()
+    assert not np.allclose(z_unrotated, ds_ref.Z_R, atol=1e-2)
+
+    ds_shifted.process(shot_rotation=3, **proc_opts)
+    assert ds_shifted.shot_rotation == 3
+    np.testing.assert_allclose(ds_shifted.raw_signal, sig_ref, atol=1e-12)
+    np.testing.assert_allclose(ds_shifted.raw_interferogram, int_ref, atol=1e-12)
+    np.testing.assert_allclose(ds_shifted.Z_R, ds_ref.Z_R, atol=1e-10)
+
+    # Idempotency across arbitrary sequential shot rotations
+    ds_shifted.process(shot_rotation=-2, **proc_opts)
+    ds_shifted.process(shot_rotation=0, **proc_opts)
+    np.testing.assert_allclose(ds_shifted.Z_R, z_unrotated, atol=1e-10)
+    ds_shifted.process(shot_rotation=3, **proc_opts)
+    np.testing.assert_allclose(ds_shifted.Z_R, ds_ref.Z_R, atol=1e-10)
+
+    # Single-scan map computation forwards shot_rotation cleanly
+    scans_ref = ds_ref.compute_scan_maps_at_t2(
+        0.2, shot_rotation=0, apodise_method="Cos", zeropad_factor=2, zeropad_next2k=True
+    )
+    scans_rot = ds_shifted.compute_scan_maps_at_t2(
+        0.2, shot_rotation=3, apodise_method="Cos", zeropad_factor=2, zeropad_next2k=True
+    )
+    assert len(scans_ref) == len(scans_rot) == 3
+    for (_, _, z_a), (_, _, z_b) in zip(scans_ref, scans_rot, strict=True):
+        np.testing.assert_allclose(z_a, z_b, atol=1e-10)
+
+    # Deep copy preserves unrotated base arrays
+    ds_cp = ds_shifted.copy(deep=True)
+    assert ds_cp.shot_rotation == 3
+    ds_cp.process(shot_rotation=0, **proc_opts)
+    np.testing.assert_allclose(ds_cp.Z_R, z_unrotated, atol=1e-10)
+
+    # End-to-end GUI verification on Phasing/FT sub-tab
+    app = QApplication.instance() or QApplication([])
+    meta = make_synthetic_quickcontrol_2d(tmp_path / "qc_shot_rot")
+    win = MainWindow()
+    try:
+        win.twoD_load_path(str(meta["info_path"]), data_type="QuickControl_2D")
+        assert hasattr(win, "twoD_shot_rotation")
+        assert win.twoD_shot_rotation.value() == 0
+        n_td = win.twoD_dataset.raw_signal.shape[0]
+        assert win.twoD_shot_rotation.minimum() == -(n_td - 1)
+        assert win.twoD_shot_rotation.maximum() == (n_td - 1)
+
+        z0 = win.twoD_dataset.Z_R.copy()
+        base_td = win.twoD_dataset._base_raw_signal.copy()
+
+        win.twoD_shot_rotation.setValue(2)
+        assert win.twoD_dataset.shot_rotation == 2
+        np.testing.assert_allclose(win.twoD_dataset.raw_signal, np.roll(base_td, 2, axis=0))
+        assert not np.allclose(win.twoD_dataset.Z_R, z0)
+
+        win.twoD_shot_rotation.setValue(0)
+        assert win.twoD_dataset.shot_rotation == 0
+        np.testing.assert_allclose(win.twoD_dataset.Z_R, z0, atol=1e-12)
+    finally:
+        win.close()
+    assert app is not None

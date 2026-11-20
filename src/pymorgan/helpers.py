@@ -139,6 +139,36 @@ def fmt2Dlabel(labelStyle, freqLabel, unitsF):
     return pumpAll, probeAll
 
 
+def fmt2Dlabel_wavelength(labelStyle, freqLabel, unitsF="nm"):
+    """Format complementary 2-D wavelength axis labels matching ``freqLabel``."""
+    match freqLabel:
+        case "Omega_n" | "Omega_n/2pic":
+            pumpLabel = r"$\lambda_{1}$"
+            probeLabel = r"$\lambda_{3}$"
+        case "Omega_PP":
+            pumpLabel = r"$\lambda_{\text{pump}}$"
+            probeLabel = r"$\lambda_{\text{probe}}$"
+        case "Pump-Probe":
+            pumpLabel = "Pump Wavelength"
+            probeLabel = "Probe Wavelength"
+        case _:
+            pumpLabel = r"$\lambda_{1}$"
+            probeLabel = r"$\lambda_{3}$"
+
+    match labelStyle:
+        case "[]":
+            pumpAll = r"%s [%s]" % (pumpLabel, unitsF)
+            probeAll = r"%s [%s]" % (probeLabel, unitsF)
+        case "/":
+            pumpAll = r"%s / %s" % (pumpLabel, unitsF)
+            probeAll = r"%s / %s" % (probeLabel, unitsF)
+        case _:
+            pumpAll = r"%s (%s)" % (pumpLabel, unitsF)
+            probeAll = r"%s (%s)" % (probeLabel, unitsF)
+
+    return pumpAll, probeAll
+
+
 def units2dic(unitsL, unitsT, unitsZ):
     match unitsL:
         case "cm^{-1}" | "cm-1":
@@ -390,6 +420,33 @@ def to_display_axis(values, unit_in, unit_out=None, threshold: float = DISPLAY_S
     converted = convert_spectral(values, unit_in, unit_out)
     factor = display_scale(converted, threshold)
     return converted / factor, factor, scaled_unit_label(unit_out, factor)
+
+
+def is_electronic_2d(
+    pump,
+    probe,
+    native_unit: str = "cm-1",
+    *,
+    threshold: float = DISPLAY_SCALE_THRESHOLD,
+) -> bool:
+    """Return True when a 2-D dataset spans the electronic (NIR/Vis/UV) spectral range."""
+    u_norm = "cm-1" if native_unit in ("cm-1", "cm^{-1}", "cm^-1") else str(native_unit)
+    vals_list = []
+    for arr in (pump, probe):
+        if arr is not None:
+            a = np.asarray(arr, dtype=float).ravel()
+            a = a[np.isfinite(a)]
+            if a.size:
+                vals_list.append(a)
+    if not vals_list:
+        return False
+    span = np.concatenate(vals_list)
+    if u_norm in SPECTRAL_UNITS:
+        wn = convert_spectral(span, u_norm, "cm-1")
+    else:
+        return False
+    finite = wn[np.isfinite(wn)]
+    return bool(finite.size > 0 and float(np.max(finite)) > threshold)
 
 
 def x_unit_label(unit):
@@ -866,25 +923,18 @@ def print2Ddelay(t2_ps, onlyNumbers=False):
     (see ``Settings.t2_label_style``). The unit follows the magnitude
     (fs / ps / ns / us).
     """
-    if not onlyNumbers:
-        if abs(t2_ps) < 1:
-            t2_text = r"$t_{2} =$ %.3g fs" % (t2_ps * 1000)
-        elif abs(t2_ps) >= 1 and abs(t2_ps) < 1e3:
-            t2_text = r"$t_{2} =$ %.3g ps" % (t2_ps)
-        elif abs(t2_ps) >= 1e3 and abs(t2_ps) < 1e6:
-            t2_text = r"$t_{2} =$ %.3g ns" % (t2_ps / 1000)
-        else:
-            t2_text = r"$t_{2} =$ %.3g $\mu$s" % (t2_ps / 1e6)
+    a_t2 = abs(float(t2_ps))
+    if a_t2 < 0.9995 and a_t2 > 0.0:
+        num_text = r"%.3g fs" % (t2_ps * 1000)
+    elif a_t2 == 0.0:
+        num_text = r"0 fs"
+    elif a_t2 < 999.5:
+        num_text = r"%.3g ps" % (t2_ps)
+    elif a_t2 < 999500.0:
+        num_text = r"%.3g ns" % (t2_ps / 1000)
     else:
-        if abs(t2_ps) < 1:
-            t2_text = r"%.3g fs" % (t2_ps * 1000)
-        elif abs(t2_ps) >= 1 and abs(t2_ps) < 1e3:
-            t2_text = r"%.3g ps" % (t2_ps)
-        elif abs(t2_ps) >= 1e3 and abs(t2_ps) < 1e6:
-            t2_text = r"%.3g ns" % (t2_ps / 1000)
-        else:
-            t2_text = r"%.3g $\mu$s" % (t2_ps / 1e6)
-    return t2_text
+        num_text = r"%.3g $\mu$s" % (t2_ps / 1e6)
+    return num_text if onlyNumbers else (r"$t_{2} =$ " + num_text)
 
 
 

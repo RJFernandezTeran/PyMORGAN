@@ -82,6 +82,15 @@ class Dataset2D:
         self.raw_signal = raw_signal
         self.raw_interferogram = raw_interferogram
         self.raw_t1delays = raw_t1delays
+        self._base_raw_signal = (
+            np.asarray(raw_signal, dtype=float).copy() if raw_signal is not None else None
+        )
+        self._base_raw_interferogram = (
+            np.asarray(raw_interferogram, dtype=float).copy()
+            if raw_interferogram is not None
+            else None
+        )
+        self.shot_rotation: int = 0
 
         sig_ss = raw_signal_ss if raw_signal_ss is not None else self.units.get("raw_signal_ss")
         int_ss = (
@@ -180,9 +189,12 @@ class Dataset2D:
                 self.raw_signal = cube.copy()
         else:
             self.raw_signal = cube.copy()
+            self._base_raw_signal = cube.copy()
             if self.units.get("interferogram_from_signal"):
                 with np.errstate(invalid="ignore"):
                     self.raw_interferogram = np.nanmean(self.raw_signal, axis=1)
+                self._base_raw_interferogram = self.raw_interferogram.copy()
+            self.shot_rotation = 0
         self.Z_C = None
         self._is_corrected = False
         return True
@@ -351,6 +363,19 @@ class Dataset2D:
         return self._is_corrected
 
     @property
+    def is_electronic(self) -> bool:
+        """Whether the 2-D spectral axes fall in the electronic (NIR/Vis/UV) regime."""
+        from pymorgan import helpers as hlp
+
+        native = (
+            (self.units.get("unitsL") if isinstance(self.units, dict) else None)
+            or getattr(self, "freq_units", None)
+            or "cm-1"
+        )
+        pu = None if (self.datatype in ("shaper", "interferometer") and np.array_equal(self.pump, self.raw_t1delays)) else self.pump
+        return hlp.is_electronic_2d(pu, self.probe, native_unit=str(native))
+
+    @property
     def has_single_scans(self) -> bool:
         """Whether per-scan 2D data is available for previewing and recombining."""
         return (
@@ -439,6 +464,15 @@ class Dataset2D:
         probe_unit = fmt_unit(self.units.get("unitsL", "cm-1"))
         delay_unit = self.units.get("unitsT_ltx", "ps")
 
+        def _nm_suffix(arr_wn: np.ndarray) -> str:
+            if not self.is_electronic or arr_wn.size == 0:
+                return ""
+            lo_wn = float(np.nanmin(arr_wn))
+            hi_wn = float(np.nanmax(arr_wn))
+            if lo_wn > 0.0 and hi_wn > 0.0:
+                return f" ({1.0e7 / hi_wn:.1f}\u2013{1.0e7 / lo_wn:.1f} nm)"
+            return ""
+
         # --- Pump line ---
         if self.datatype in ("shaper", "interferometer") and self.raw_t1delays is not None:
             t1 = np.asarray(self.raw_t1delays, dtype=float)
@@ -446,18 +480,18 @@ class Dataset2D:
             pump_unit = fmt_unit(self.units.get("unitsL", "cm-1"))
             line_pump = (
                 f"<b>Pump (t\u2081):</b> [{t1.min():.1f}, {t1.max():.1f}] fs, dt\u2081: {dt1:.2f} fs, Bins: {len(t1)}<br>"
-                f"<b>Pump (\u03c9\u2081):</b> [{pump.min():.1f}, {pump.max():.1f}] {pump_unit}, Res: {pump_res:.2f} {pump_unit}, Bins: {len(pump)}"
+                f"<b>Pump (\u03c9\u2081):</b> [{pump.min():.1f}, {pump.max():.1f}] {pump_unit}{_nm_suffix(pump)}, Res: {pump_res:.2f} {pump_unit}, Bins: {len(pump)}"
             )
         else:
             pump_unit = fmt_unit(self.units.get("unitsL", "cm-1"))
             line_pump = (
-                f"<b>Pump (\u03c9\u2081):</b> [{pump.min():.1f}, {pump.max():.1f}] {pump_unit}"
+                f"<b>Pump (\u03c9\u2081):</b> [{pump.min():.1f}, {pump.max():.1f}] {pump_unit}{_nm_suffix(pump)}"
                 f", Res: {pump_res:.2f} {pump_unit}, Bins: {len(pump)}"
             )
 
         # --- Probe line ---
         line_probe = (
-            f"<b>Probe (\u03c9\u2083):</b> [{probe.min():.1f}, {probe.max():.1f}] {probe_unit}"
+            f"<b>Probe (\u03c9\u2083):</b> [{probe.min():.1f}, {probe.max():.1f}] {probe_unit}{_nm_suffix(probe)}"
             f", Res: {probe_res:.2f} {probe_unit}, Bins: {len(probe)}"
         )
 
@@ -650,6 +684,11 @@ class Dataset2D:
                 else None
             ),
         )
+        new_ds._base_raw_signal = _dup(getattr(self, "_base_raw_signal", self.raw_signal))
+        new_ds._base_raw_interferogram = _dup(
+            getattr(self, "_base_raw_interferogram", self.raw_interferogram)
+        )
+        new_ds.shot_rotation = int(getattr(self, "shot_rotation", 0) or 0)
         new_ds.Z_C = _dup(self.Z_C)
         sub_spec = getattr(self, "subtracted_spectrum", None)
         new_ds.subtracted_spectrum = (
@@ -755,6 +794,7 @@ class Dataset2D:
         zeropad_next2k: bool = False,
         phase_method: str = "No fit",
         phase_points: int = 10,
+        shot_rotation: int = 0,
         pumpcorrection: bool = False,
         bkg_sub: bool = False,
         bkgIdx: int = 0,
@@ -766,8 +806,9 @@ class Dataset2D:
     ):
         """Process raw time-domain signal and interferogram data to frequency-domain.
 
-        Performs baseline correction, apodization, zero-padding, FFT, and phasing.
-        Updates self.Z_R and self.pump.
+        Optionally rotates the time-domain t1 arrays circularly by ``shot_rotation``
+        shots before baseline correction, apodisation, zero-padding, FFT, and phasing.
+        Updates ``self.Z_R`` and ``self.pump``.
         """
         from . import process
 
@@ -779,6 +820,7 @@ class Dataset2D:
             zeropad_next2k=zeropad_next2k,
             phase_method=phase_method,
             phase_points=phase_points,
+            shot_rotation=shot_rotation,
             pumpcorrection=pumpcorrection,
             bkg_sub=bkg_sub,
             bkgIdx=bkgIdx,
@@ -841,6 +883,7 @@ class Dataset2D:
             sig_avg = np.nanmean(self.raw_signal_ss[:, :, :, indices], axis=-1)
             sig_avg = np.nan_to_num(sig_avg, nan=0.0)
             self.raw_signal = sig_avg
+            self._base_raw_signal = sig_avg.copy()
 
             if (
                 self.raw_interferogram_ss is not None
@@ -850,6 +893,12 @@ class Dataset2D:
                 int_avg = np.nanmean(self.raw_interferogram_ss[:, :, indices], axis=-1)
                 int_avg = np.nan_to_num(int_avg, nan=0.0)
                 self.raw_interferogram = int_avg
+                self._base_raw_interferogram = int_avg.copy()
+            elif self.units.get("interferogram_from_signal"):
+                int_avg = np.nan_to_num(np.nanmean(sig_avg, axis=1), nan=0.0)
+                self.raw_interferogram = int_avg
+                self._base_raw_interferogram = int_avg.copy()
+            self.shot_rotation = 0
 
         if self.is_frequency_domain or self.datatype in ("FreqDomain", "processed"):
             self.Z_R = self.raw_signal.copy()
@@ -944,7 +993,10 @@ class Dataset2D:
                         )
                         sub_int = np.nan_to_num(sub_int, nan=0.0)
                     else:
-                        sub_int = np.asarray(self.raw_interferogram[:, slice_indices], dtype=float).copy()
+                        base_int_ref = getattr(self, "_base_raw_interferogram", None)
+                        if base_int_ref is None:
+                            base_int_ref = self.raw_interferogram
+                        sub_int = np.asarray(base_int_ref[:, slice_indices], dtype=float).copy()
 
                 mini_ds = Dataset2D(
                     sub_sig.copy(),
@@ -963,6 +1015,7 @@ class Dataset2D:
                     dt1_fs=self.dt1_fs,
                 )
                 kw = dict(process_kwargs)
+                kw.setdefault("shot_rotation", int(getattr(self, "shot_rotation", 0) or 0))
                 kw["bkg_sub"] = bkg_sub and (bkg_idx != idx)
                 kw["bkgIdx"] = local_bkg_idx
                 kw["autocalibrate_probe"] = False

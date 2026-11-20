@@ -287,3 +287,150 @@ def test_gui_quickcontrol_browser_filtering_and_stripped_labels(qapp, tmp_path: 
         assert win._twoD_state_cbx.currentText() == "Magic Angle"
     finally:
         win.close()
+
+
+def test_quickcontrol_2d_v094_negative_footer_encoder_t2_and_probe_spectrum(tmp_path: Path):
+    """Verify v0.9.4 trailing single-beam footer stripping, negative T2 recovery, and no false in_progress."""
+    sub_list = tmp_path / "with_list"
+    meta = synthetic.make_synthetic_quickcontrol_2d(
+        sub_list,
+        prefix="ir_v094_01",
+        n_t1=41,
+        dt1_fs=25.0,
+        n_pixels=20,
+        t2_fs=(-20000.0, 250.0, 1500.0),
+        n_scans=2,
+        polarised=False,
+        write_wts=False,
+        qc_v094_footer=True,
+        include_wt_list=True,
+    )
+
+    ds = pm.load_2D(meta["info_path"], data_type="QuickControl_2D")
+    assert ds.in_progress is False
+    assert len(ds.raw_t1delays) == 41
+    np.testing.assert_allclose(ds.raw_t1delays, meta["axis0"])
+    np.testing.assert_allclose(ds.delays, [-20.0, 0.25, 1.5])
+    # Single-beam ~50 OD (~50,000 mOD) footer row must be completely stripped
+    assert float(np.nanmax(np.abs(ds.raw_signal))) < 50.0
+    np.testing.assert_allclose(ds.raw_signal, meta["ma_cube_mOD"], rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(ds.units["probe_spectrum"], meta["single_beam"], rtol=1e-5)
+
+    # Also verify fallback to footer column-0 encoder T2 when neither .wts nor Waiting Time list exists
+    sub_enc = tmp_path / "encoder_only"
+    meta_enc = synthetic.make_synthetic_quickcontrol_2d(
+        sub_enc,
+        prefix="ir_v094_enc01",
+        n_t1=41,
+        dt1_fs=25.0,
+        n_pixels=20,
+        t2_fs=(-20000.0, 250.0, 1500.0),
+        n_scans=2,
+        polarised=False,
+        write_wts=False,
+        qc_v094_footer=True,
+        include_wt_list=False,
+    )
+    ds_enc = pm.load_2D(meta_enc["info_path"], data_type="QuickControl_2D")
+    np.testing.assert_allclose(ds_enc.delays, [-20.0, 0.25, 1.5])
+    assert len(ds_enc.raw_t1delays) == 41
+
+
+def test_quickcontrol_2d_partial_interrupted_scan_nan_padding(tmp_path: Path):
+    """Verify an interrupted partial .scan file preserves its final row and NaN-pads missing rows."""
+    meta = synthetic.make_synthetic_quickcontrol_2d(
+        tmp_path,
+        prefix="ir_partial_01",
+        n_t1=30,
+        dt1_fs=25.0,
+        n_pixels=16,
+        t2_fs=(500.0,),
+        n_scans=2,
+        polarised=False,
+        qc_v094_footer=True,
+    )
+    # Truncate scan #002 to 15 genuine rows without a trailing single-beam footer
+    scan2_path = tmp_path / "ir_partial_01_T01#002.scan"
+    full_lines = scan2_path.read_text(encoding="utf-8").splitlines()
+    scan2_path.write_text("\n".join(full_lines[:15]) + "\n", encoding="utf-8")
+
+    ds = pm.load_2D(meta["info_path"], data_type="QuickControl_2D")
+    assert ds.in_progress is True
+    assert ds.raw_signal.shape == (30, 16, 1)
+    assert ds.raw_signal_ss is not None
+    # Scan 2 must retain all 15 measured rows and have NaN for rows 15..29
+    assert np.all(np.isfinite(ds.raw_signal_ss[:15, :, 0, 1]))
+    assert np.all(np.isnan(ds.raw_signal_ss[15:, :, 0, 1]))
+
+
+def test_quickcontrol_2d_electronic_2des_unfolding_dual_axes_and_gui(qapp, tmp_path: Path):
+    """Verify visible 2D-ES Nyquist unfolding, decreasing 10^3 cm-1 + dual nm axes, and GUI limits."""
+    import matplotlib.pyplot as plt
+
+    meta = synthetic.make_synthetic_quickcontrol_2des(
+        tmp_path,
+        prefix="vis_2des_01",
+        n_t1=107,
+        dt1_fs=12.0,
+        n_pixels=128,
+        t2_fs=(250.0, 1500.0),
+        n_scans=2,
+        w0_scanned_cm1=880.0,
+        peak_cm1=20800.0,
+    )
+
+    ds = pm.load_2D(meta["info_path"], data_type="QuickControl_2D")
+    ds.process(apodise_method="Cos", zeropad_factor=2)
+
+    assert ds.is_electronic is True
+    assert ds.freq_units == "cm-1"
+    assert np.all(np.diff(ds.probe) > 0)
+    assert float(np.min(ds.probe)) > 12000.0
+    assert ds.w0_cm1 > 18000.0
+    assert ds.units["unitsZ_lbl"] == r"S$_{\text{2DES}}$"
+    assert "nm)" in ds.sample_info()
+
+    # Peak in processed 2D-ES map must land near 20,800 cm-1 along both pump and probe
+    i_pu, i_pr = np.unravel_index(np.argmin(ds.Z[:, :, 0]), ds.Z[:, :, 0].shape)
+    assert ds.pump[i_pu] == pytest.approx(20800.0, abs=20.0)
+    assert ds.probe[i_pr] == pytest.approx(20800.0, abs=60.0)
+
+    # Round-trip display <-> native coordinate conversion
+    to_disp = pm.twoD.plot.display_converter(ds)
+    to_nat = pm.twoD.plot.native_converter(ds)
+    np.testing.assert_allclose(to_disp([20500.0, 21200.0]), [20.5, 21.2])
+    np.testing.assert_allclose(to_nat([20.5, 21.2]), [20500.0, 21200.0])
+
+    fig, ax = plt.subplots(figsize=(6.8, 6.2))
+    try:
+        ds.plot_map(0.25, ax=ax)
+        # Option A: wavenumbers decrease left-to-right / bottom-to-top so nm increases
+        assert ax.get_xlim()[0] > ax.get_xlim()[1]
+        assert ax.get_ylim()[0] > ax.get_ylim()[1]
+        assert 10.0 < ax.get_xlim()[0] < 35.0
+        sec_axes = getattr(ax, "_pymorgan_sec_axes", None)
+        assert sec_axes is not None and len(sec_axes) == 2
+        assert "nm" in sec_axes[0].get_xlabel()
+        assert "nm" in sec_axes[1].get_ylabel()
+    finally:
+        plt.close(fig)
+
+    win = MainWindow()
+    try:
+        win.twoD_load_path(str(meta["info_path"]), data_type="QuickControl_2D")
+        pc = win.twoD_plot_controls
+        assert pc.freq_scale() == 1000.0
+        assert pc.pump_min.suffix() == " 10³ cm⁻¹"
+        assert 15.0 < pc.pump_min.value() < pc.pump_max.value() < 30.0
+        assert 10.0 < pc.probe_min.value() < pc.probe_max.value() < 30.0
+        assert win.twoD_PC_dualAxis.isChecked() is True
+        assert win.twoD_PC_square.isChecked() is False
+        assert win.twoDaxes.ax.get_xlim()[0] > win.twoDaxes.ax.get_xlim()[1]
+        assert win.twoDaxes.ax.get_ylim()[0] > win.twoDaxes.ax.get_ylim()[1]
+
+        # Syncing limits from an inverted axis must keep spinboxes ordered (Min <= Max) in 10^3 cm-1
+        win._on_twoD_sync_limits()
+        assert pc.pump_min.value() < pc.pump_max.value()
+        assert pc.probe_min.value() < pc.probe_max.value()
+    finally:
+        win.close()

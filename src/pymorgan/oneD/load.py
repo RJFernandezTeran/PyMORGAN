@@ -3799,10 +3799,13 @@ _QUICKCONTROL_INFO_MARKERS: frozenset[str] = frozenset(
         "Pump Type",
         "Detection Mode",
         "Delays",
+        "Delay List",
         "1D Average",
         "Domain",
         "Step Size (fs)",
+        "Final Delay (fs)",
         "Waiting Time Delays",
+        "Waiting Time Delay List",
         "Waiting Time (fs)",
     }
 )
@@ -4048,12 +4051,41 @@ def _resolve_quickcontrol_info_path(
     raise FileNotFoundError(f"QuickControl .info file not found for: {path}")
 
 
+def _expected_quickcontrol_scan_rows(info: dict[str, str], kind: str) -> int | None:
+    """Infer the expected number of body rows per ``.scan`` file from ``.info`` metadata."""
+    if kind == "1d":
+        raw_list = info.get("Delays") or info.get("Delay List") or ""
+        if raw_list.strip():
+            try:
+                vals = [float(x.strip()) for x in raw_list.split(",") if x.strip()]
+                if vals:
+                    return len(vals)
+            except ValueError:
+                pass
+        return None
+
+    if kind == "2d":
+        domain = info.get("Domain", "Time").strip().lower()
+        if domain.startswith("time"):
+            try:
+                step_fs = float(info.get("Step Size (fs)", "0") or 0.0)
+                final_fs = float(info.get("Final Delay (fs)", "-1") or -1.0)
+            except ValueError:
+                return None
+            if step_fs > 0.0 and final_fs >= 0.0:
+                n_steps = int(round(final_fs / step_fs)) + 1
+                if n_steps >= 1:
+                    return n_steps
+    return None
+
+
 def _resolve_quickcontrol_probe_axis(
     info: dict[str, str],
     n_pix: int,
     info_path: Path,
     *,
     check_csv_override: bool = True,
+    force_wavenumbers: bool = False,
 ) -> tuple[np.ndarray, str, str, str, str | None]:
     """Compute the QuickControl probe axis from ``CalibratedProbe.csv`` or monochromator metadata.
 
@@ -4083,6 +4115,8 @@ def _resolve_quickcontrol_probe_axis(
                         p_mean = float(np.nanmean(cal_arr)) if cal_arr.size > 0 else 0.0
                         if p_mean > 1200.0 or cwl_nm > 1200.0:
                             return cal_arr, "cm^{-1}", "cm-1", f"CalibratedProbe.csv ({loc})", level
+                        if force_wavenumbers and np.all(np.isfinite(cal_arr)) and np.all(cal_arr > 0.0):
+                            return 1.0e7 / cal_arr, "cm^{-1}", "cm-1", f"CalibratedProbe.csv ({loc})", level
                         return cal_arr, "nm", "nm", f"CalibratedProbe.csv ({loc})", level
                 except Exception:
                     pass
@@ -4141,7 +4175,7 @@ def _resolve_quickcontrol_probe_axis(
             cal_desc = f"QuickControl linear grating ({grooves:g} g/mm, {cwl_nm:.1f} nm)"
 
         if wl_nm is not None and np.all(np.isfinite(wl_nm)) and np.all(wl_nm > 0.0):
-            if cwl_nm > 1200.0:
+            if cwl_nm > 1200.0 or force_wavenumbers:
                 return 1.0e7 / wl_nm, "cm^{-1}", "cm-1", cal_desc, None
             return wl_nm, "nm", "nm", cal_desc, None
 
@@ -4149,15 +4183,77 @@ def _resolve_quickcontrol_probe_axis(
     return probe_px, "px", "px", "Uncalibrated (pixel index)", None
 
 
+def _has_quickcontrol_single_beam_jump(body_sig: np.ndarray, footer_sig: np.ndarray) -> bool:
+    """Return True when ``footer_sig`` looks like a single-beam spectrum rather than OD data."""
+    if body_sig.size == 0 or footer_sig.size == 0:
+        return False
+    p95 = float(np.nanpercentile(np.abs(body_sig), 95))
+    bmax = float(np.nanmax(np.abs(body_sig)))
+    fmax = float(np.nanmax(footer_sig))
+    fmin = float(np.nanmin(footer_sig))
+    return (
+        p95 < 0.5
+        and fmin >= -0.05 * max(1.0, fmax)
+        and fmax > max(1.0, 10.0 * bmax)
+    )
+
+
+def _has_quickcontrol_trailing_footer_row(raw: np.ndarray) -> bool:
+    """Structural fallback to detect a QuickControl trailing summary/footer row."""
+    n_total = int(raw.shape[0])
+    if n_total < 2:
+        return False
+
+    col0 = raw[:, 0]
+    last0 = float(col0[-1])
+
+    if np.isclose(last0, 0.0, atol=1e-6):
+        is_uniform_neg_to_zero = False
+        if n_total >= 4:
+            d_body = np.diff(col0[:-1])
+            if np.all(d_body > 0.0) and col0[-2] < 0.0:
+                step_med = float(np.median(d_body))
+                if (
+                    step_med > 0.0
+                    and np.max(np.abs(d_body - step_med)) <= 0.02 * step_med
+                    and abs((last0 - float(col0[-2])) - step_med) <= 0.05 * step_med
+                ):
+                    is_uniform_neg_to_zero = True
+        if not is_uniform_neg_to_zero:
+            return True
+
+    if n_total >= 3:
+        d_body = np.diff(col0[:-1])
+        if np.all(d_body > 0.0) and last0 <= float(col0[-2]):
+            return True
+        if np.all(d_body < 0.0) and last0 >= float(col0[-2]):
+            return True
+
+    if n_total >= 4:
+        d_body = np.diff(col0[:-1])
+        step_med = float(np.median(d_body))
+        if abs(step_med) > 1e-9 and np.max(np.abs(d_body - step_med)) <= 0.02 * abs(step_med):
+            last_step = last0 - float(col0[-2])
+            if abs(last_step - step_med) > 0.10 * abs(step_med):
+                return True
+
+    if n_total >= 4 and _has_quickcontrol_single_beam_jump(raw[:-1, 1:], raw[-1, 1:]):
+        return True
+
+    return False
+
+
 def _read_quickcontrol_scan_matrix(
     scan_path: Path,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Read a QuickControl ``.scan`` file into ``(axis0, signal_mOD, stationary_mOD)``.
+    *,
+    expected_n_rows: int | None = None,
+) -> tuple[np.ndarray, np.ndarray, float, np.ndarray | None, bool]:
+    """Read a QuickControl ``.scan`` file into ``(axis0, signal_mOD, footer_col0, footer_raw, is_partial)``.
 
-    QuickControl stores differential absorbance in OD with an extra trailing
-    row whose first column is ``0.000000`` (zeros in 1D; stationary-frame
-    pump-probe in 4-frame 2D). The trailing row is stripped and OD is converted
-    to mOD.
+    Completed QuickControl ``.scan`` files store ``N_steps + 1`` rows: the body
+    rows contain differential absorbance in OD, followed by a trailing summary
+    row (``0.0`` in older builds, or ``[T2_encoder_fs, I_probe_px...]`` in newer
+    builds). The trailing row is stripped and body OD values are scaled to mOD.
     """
     raw = np.loadtxt(scan_path, dtype=np.float64)
     if raw.ndim == 1:
@@ -4165,34 +4261,88 @@ def _read_quickcontrol_scan_matrix(
     if raw.shape[1] < 2:
         raise ValueError(f"Invalid QuickControl scan matrix shape {raw.shape} in {scan_path.name}.")
 
-    if raw.shape[0] >= 2 and np.isclose(raw[-1, 0], 0.0):
-        stationary_mOD = raw[-1, 1:].astype(np.float64) * 1000.0
-        body = raw[:-1, :]
+    footer_col0 = float("nan")
+    footer_raw: np.ndarray | None = None
+    is_partial = False
+
+    if expected_n_rows is not None and expected_n_rows >= 1:
+        if raw.shape[0] > expected_n_rows:
+            body = raw[:expected_n_rows, :]
+            footer_row = raw[expected_n_rows, :]
+            footer_col0 = float(footer_row[0])
+            footer_raw = footer_row[1:].astype(np.float64)
+        else:
+            strip_partial_footer = False
+            if raw.shape[0] >= 3:
+                d_body = np.diff(raw[:-1, 0])
+                last0 = float(raw[-1, 0])
+                if (np.all(d_body > 0.0) and last0 <= float(raw[-2, 0])) or (
+                    np.all(d_body < 0.0) and last0 >= float(raw[-2, 0])
+                ):
+                    strip_partial_footer = True
+                elif _has_quickcontrol_single_beam_jump(raw[:-1, 1:], raw[-1, 1:]):
+                    strip_partial_footer = True
+            if strip_partial_footer:
+                body = raw[:-1, :]
+                footer_col0 = float(raw[-1, 0])
+                footer_raw = raw[-1, 1:].astype(np.float64)
+            else:
+                body = raw
+            is_partial = body.shape[0] < expected_n_rows
     else:
-        stationary_mOD = np.zeros(raw.shape[1] - 1, dtype=np.float64)
-        body = raw
+        if _has_quickcontrol_trailing_footer_row(raw):
+            body = raw[:-1, :]
+            footer_col0 = float(raw[-1, 0])
+            footer_raw = raw[-1, 1:].astype(np.float64)
+        else:
+            body = raw
 
     axis0 = body[:, 0].astype(np.float64)
     signal_mOD = body[:, 1:].astype(np.float64) * 1000.0
-    return axis0, signal_mOD, stationary_mOD
+    return axis0, signal_mOD, footer_col0, footer_raw, is_partial
+
+
+def _extract_quickcontrol_footer_probe_spectrum(
+    footer_raw_2d: np.ndarray | None,
+) -> np.ndarray | None:
+    """Return the averaged single-beam probe spectrum from ``footer_raw_2d`` when present."""
+    if footer_raw_2d is None or footer_raw_2d.size == 0:
+        return None
+    with np.errstate(invalid="ignore"):
+        avg = np.nanmean(footer_raw_2d, axis=-1)
+    if not np.any(np.isfinite(avg)):
+        return None
+    peak = float(np.nanmax(avg))
+    vmin = float(np.nanmin(avg))
+    if peak > 0.1 and vmin >= -0.05 * peak:
+        return np.nan_to_num(avg, nan=0.0)
+    return None
 
 
 def _stack_quickcontrol_scans(
     scan_files: list[Path],
     n_rows_ref: int | None = None,
     n_pix_ref: int | None = None,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Stack ``scan_files`` into ``(axis0, stack_3d, stationary_2d)``.
+    *,
+    expected_n_rows: int | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray | None, bool]:
+    """Stack ``scan_files`` into ``(axis0, stack_3d, footer_col0_1d, footer_raw_2d, has_partial_scan)``.
 
     ``stack_3d`` has shape ``(n_rows, n_pix, n_scans)`` in mOD. Incomplete
     trailing scans (e.g. from an interrupted acquisition) are padded with NaN.
     """
     axis0_ref: np.ndarray | None = None
     mats: list[np.ndarray] = []
-    stats: list[np.ndarray] = []
+    footer_cols: list[float] = []
+    footer_rows: list[np.ndarray] = []
+    has_partial_scan = False
 
     for idx, sf in enumerate(scan_files):
-        ax0, sig, stat = _read_quickcontrol_scan_matrix(sf)
+        ax0, sig, f_col0, f_raw, is_partial = _read_quickcontrol_scan_matrix(
+            sf, expected_n_rows=expected_n_rows
+        )
+        if is_partial:
+            has_partial_scan = True
         if idx == 0:
             axis0_ref = ax0 if n_rows_ref is None else ax0[:n_rows_ref]
             if n_rows_ref is None:
@@ -4207,15 +4357,25 @@ def _stack_quickcontrol_scans(
         if sig.shape[0] == n_rows_ref:
             mats.append(sig)
         elif sig.shape[0] < n_rows_ref:
+            has_partial_scan = True
             padded = np.full((n_rows_ref, n_pix_ref), np.nan, dtype=np.float64)
             padded[: sig.shape[0], :] = sig
             mats.append(padded)
         else:
             mats.append(sig[:n_rows_ref, :])
-        stats.append(stat)
+        footer_cols.append(f_col0)
+        if f_raw is not None and f_raw.size == n_pix_ref:
+            footer_rows.append(f_raw)
 
     assert axis0_ref is not None
-    return axis0_ref, np.stack(mats, axis=-1), np.stack(stats, axis=-1)
+    footer_raw_2d = np.stack(footer_rows, axis=-1) if footer_rows else None
+    return (
+        axis0_ref,
+        np.stack(mats, axis=-1),
+        np.asarray(footer_cols, dtype=np.float64),
+        footer_raw_2d,
+        has_partial_scan,
+    )
 
 
 def _format_quickcontrol_sample_info(
@@ -4341,12 +4501,24 @@ def read_QuickControl_PP(
     if not (has_par or has_per or has_unpol):
         raise ValueError(f"No 1D .scan files found for QuickControl dataset {info_path.stem!r}.")
 
+    expected_rows = _expected_quickcontrol_scan_rows(info, "1d")
+    footer_spec_parts: list[np.ndarray] = []
+
     if has_par and has_per:
-        raw_delays, par_stack, _ = _stack_quickcontrol_scans(scans["par"])
-        n_delays, n_pix, n_par = par_stack.shape
-        _, per_stack, _ = _stack_quickcontrol_scans(
-            scans["per"], n_rows_ref=n_delays, n_pix_ref=n_pix
+        raw_delays, par_stack, _, par_f_raw, _ = _stack_quickcontrol_scans(
+            scans["par"], expected_n_rows=expected_rows
         )
+        n_delays, n_pix, n_par = par_stack.shape
+        _, per_stack, _, per_f_raw, _ = _stack_quickcontrol_scans(
+            scans["per"],
+            n_rows_ref=n_delays,
+            n_pix_ref=n_pix,
+            expected_n_rows=expected_rows,
+        )
+        if par_f_raw is not None:
+            footer_spec_parts.append(par_f_raw)
+        if per_f_raw is not None:
+            footer_spec_parts.append(per_f_raw)
         n_per = per_stack.shape[-1]
         n_common = min(n_par, n_per)
 
@@ -4389,7 +4561,11 @@ def read_QuickControl_PP(
             chan_files = scans["unpol"]
             detectors = ["Signal"]
 
-        raw_delays, ch_stack, _ = _stack_quickcontrol_scans(chan_files)
+        raw_delays, ch_stack, _, ch_f_raw, _ = _stack_quickcontrol_scans(
+            chan_files, expected_n_rows=expected_rows
+        )
+        if ch_f_raw is not None:
+            footer_spec_parts.append(ch_f_raw)
         n_delays, n_pix, n_ch = ch_stack.shape
         with np.errstate(invalid="ignore"):
             avg_ch = np.nanmean(ch_stack, axis=-1)
@@ -4426,6 +4602,10 @@ def read_QuickControl_PP(
                 spec_arr = cand_spec
         except Exception:
             spec_arr = None
+    if spec_arr is None and footer_spec_parts:
+        spec_arr = _extract_quickcontrol_footer_probe_spectrum(
+            np.concatenate(footer_spec_parts, axis=-1)
+        )
 
     if probe.size > 1 and not np.all(np.diff(probe) >= 0):
         p_order = np.argsort(probe)

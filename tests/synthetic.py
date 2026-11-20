@@ -705,8 +705,9 @@ def _write_qc_scan_file(
     axis0: np.ndarray,
     signal_od: np.ndarray,
     trailing_row_od: np.ndarray | None = None,
+    footer_col0: float = 0.0,
 ) -> None:
-    """Write a synthetic QuickControl ``.scan`` ASCII matrix with trailing zero-axis row."""
+    """Write a synthetic QuickControl ``.scan`` ASCII matrix with trailing footer row."""
     n_pix = signal_od.shape[1]
     if trailing_row_od is None:
         trailing_row_od = np.zeros(n_pix, dtype=float)
@@ -715,7 +716,7 @@ def _write_qc_scan_file(
         vals = "\t".join(f"{v:.8e}" for v in signal_od[i])
         lines.append(f"{axis0[i]:.6f}\t{vals}")
     tail_vals = "\t".join(f"{v:.8e}" for v in trailing_row_od)
-    lines.append(f"{0.0:.6f}\t{tail_vals}")
+    lines.append(f"{footer_col0:.6f}\t{tail_vals}")
     scan_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -855,6 +856,8 @@ def make_synthetic_quickcontrol_2d(
     peak_cm1: float = 2080.0,
     cwl_nm: float = 4800.0,
     write_wts: bool = True,
+    qc_v094_footer: bool = False,
+    include_wt_list: bool = True,
     seed: int = 11,
 ) -> dict:
     """Write a synthetic PhaseTech QuickControl 2D dataset and return ground truth."""
@@ -886,6 +889,8 @@ def make_synthetic_quickcontrol_2d(
     )
     base_2d_mOD = 8.0 * np.outer(pump_prof, probe_prof)
 
+    wt_key = "Waiting Time Delay List" if qc_v094_footer else "Waiting Time Delays"
+    avg_onboard = 50 if qc_v094_footer else n_scans
     info_lines = [
         "Experiment Type\t2D",
         f"Domain\t{'Frequency' if is_freq else 'Time'}",
@@ -902,9 +907,8 @@ def make_synthetic_quickcontrol_2d(
         f"Rotating Frame (Scanned)\t{w0_scanned_cm1:.6f}",
         f"Rotating Frame (Fixed)\t{w0_fixed_cm1:.6f}",
         "Frames\t4",
-        "Waiting Time Delays\t" + ",".join(f"{v:.3f}" for v in t2_arr_fs),
         "Waiting Time Delay Units\tfs",
-        f"2D Average\t{n_scans}",
+        f"2D Average\t{avg_onboard}",
         f"MONO1 Wavelength\t{cwl_nm:.6f}",
         'MONO1 Grating\t1, "1: 75 g/mm"',
         "MONO Calibration Type\tADVANCED",
@@ -915,8 +919,10 @@ def make_synthetic_quickcontrol_2d(
         f"Detector Pixels\t{n_pixels}x{n_pixels}",
         "Detector Binning\t1",
         "Flip Detector Columns?\tFALSE",
-        "QC Version\t4.0.0",
+        f"QC Version\t{'0.9.4.2' if qc_v094_footer else '4.0.0'}",
     ]
+    if include_wt_list:
+        info_lines.insert(10, f"{wt_key}\t" + ",".join(f"{v:.3f}" for v in t2_arr_fs))
 
     info_path = folder / f"{prefix}.info"
     info_path.write_text("\n".join(info_lines) + "\n", encoding="utf-8")
@@ -926,16 +932,22 @@ def make_synthetic_quickcontrol_2d(
             "\n".join(f"{v:.3f}" for v in t2_arr_fs) + "\n", encoding="utf-8"
         )
 
+    single_beam = 40.0 + 30.0 * np.exp(-(((probe_cm1 - float(np.mean(probe_cm1))) / 40.0) ** 2))
     par_cube = np.zeros((n_t1, n_pixels, n_t2_disk), dtype=float)
     per_cube = np.zeros((n_t1, n_pixels, n_t2_disk), dtype=float)
 
     for m in range(n_t2_disk):
-        decay_m = float(np.exp(-t2_arr_fs[m] / 4000.0))
+        decay_m = (
+            float(np.exp(-max(0.0, t2_arr_fs[m]) / 4000.0))
+            if t2_arr_fs[m] >= 0.0
+            else 0.05
+        )
         par_list = []
         per_list = []
+        f_col0 = float(t2_arr_fs[m]) if qc_v094_footer else 0.0
         for s in range(1, n_scans + 1):
             jit = rng.normal(0.0, 0.04, size=(n_t1, n_pixels))
-            stat_tail = 0.002 * probe_prof * decay_m
+            stat_tail = single_beam if qc_v094_footer else (0.002 * probe_prof * decay_m)
             if polarised:
                 p_mOD = 1.8 * decay_m * base_2d_mOD + jit
                 s_mOD = 0.6 * decay_m * base_2d_mOD - 0.5 * jit
@@ -946,12 +958,14 @@ def make_synthetic_quickcontrol_2d(
                     axis0,
                     p_mOD / 1000.0,
                     trailing_row_od=stat_tail,
+                    footer_col0=f_col0,
                 )
                 _write_qc_scan_file(
                     folder / f"{prefix}_T{m + 1:02d}_PER#{s:03d}.scan",
                     axis0,
                     s_mOD / 1000.0,
-                    trailing_row_od=stat_tail * 0.5,
+                    trailing_row_od=stat_tail if qc_v094_footer else stat_tail * 0.5,
+                    footer_col0=f_col0,
                 )
             else:
                 u_mOD = decay_m * base_2d_mOD + jit
@@ -961,6 +975,7 @@ def make_synthetic_quickcontrol_2d(
                     axis0,
                     u_mOD / 1000.0,
                     trailing_row_od=stat_tail,
+                    footer_col0=f_col0,
                 )
         par_cube[:, :, m] = np.mean(par_list, axis=0)
         if polarised:
@@ -969,6 +984,7 @@ def make_synthetic_quickcontrol_2d(
     ma_cube = (par_cube + 2.0 * per_cube) / 3.0 if polarised else par_cube
     p_order = np.argsort(probe_cm1)
     probe_out = probe_cm1[p_order]
+    spec_out = single_beam[p_order]
     par_cube = par_cube[:, p_order, :]
     if polarised:
         per_cube = per_cube[:, p_order, :]
@@ -979,6 +995,7 @@ def make_synthetic_quickcontrol_2d(
         "prefix": prefix,
         "t2_ps": t2_arr_fs[:n_t2_disk] / 1000.0,
         "probe_cm1": probe_out,
+        "single_beam": spec_out,
         "axis0": axis0,
         "peak_cm1": peak_cm1,
         "w0_cm1": w0_eff,
@@ -986,6 +1003,121 @@ def make_synthetic_quickcontrol_2d(
         "par_cube_mOD": par_cube,
         "per_cube_mOD": per_cube if polarised else None,
         "ma_cube_mOD": ma_cube,
+    }
+
+
+def make_synthetic_quickcontrol_2des(
+    folder: str | Path,
+    prefix: str = "synthetic_vis2d_01",
+    *,
+    n_t1: int = 107,
+    dt1_fs: float = 12.0,
+    n_pixels: int = 128,
+    t2_fs: tuple[float, ...] = (250.0, 1500.0),
+    n_scans: int = 2,
+    w0_scanned_cm1: float = 880.0,
+    peak_cm1: float = 20800.0,
+    cwl_nm: float = 550.0,
+    seed: int = 23,
+) -> dict:
+    """Write a synthetic visible 2D-ES QuickControl v0.9.4 dataset with undersampled shaper."""
+    folder = Path(folder)
+    folder.mkdir(parents=True, exist_ok=True)
+    rng = np.random.default_rng(seed)
+
+    wl_nm = _czerny_turner_wavelengths_nm(
+        n_pixels,
+        cwl_nm=cwl_nm,
+        grooves_per_mm=300.0,
+        focal_mm=150.0,
+        dev_angle_deg=25.0,
+        pitch_um=100.0,
+    )
+    probe_cm1 = 1.0e7 / wl_nm
+    t2_arr_fs = np.asarray(t2_fs, dtype=float)
+    axis0 = np.arange(n_t1, dtype=float) * dt1_fs
+    c_cm_fs = 2.99792458e-5
+
+    # True carrier oscillates at (peak_cm1 - w0_scanned_cm1), which aliases by m * f_s
+    pump_prof = np.cos(2.0 * np.pi * (peak_cm1 - w0_scanned_cm1) * c_cm_fs * axis0) * np.exp(
+        -axis0 / 180.0
+    )
+    probe_prof = -np.exp(-(((probe_cm1 - peak_cm1) / 320.0) ** 2)) + 0.45 * np.exp(
+        -(((probe_cm1 - (peak_cm1 - 950.0)) / 420.0) ** 2)
+    )
+    base_2d_mOD = 5.0 * np.outer(pump_prof, probe_prof)
+
+    # White-light continuum active between 455 nm and 720 nm, dead at camera UV edge (< 445 nm)
+    wl_active = np.where(
+        (wl_nm >= 455.0) & (wl_nm <= 725.0),
+        60.0 * np.exp(-(((wl_nm - 560.0) / 110.0) ** 2)),
+        0.02,
+    )
+
+    # Shaper calibration centred near 480 nm (~624.6 THz) across 640 pixels
+    sh_p1 = 605.0  # THz at shaper pixel 0
+    sh_p2 = 0.062  # THz / px -> spans ~605..645 THz (~465..496 nm)
+    sh_p3 = 0.0
+
+    info_lines = [
+        "Experiment Type\t2D",
+        "Domain\tTime",
+        "Comment\tSynthetic visible 2D-ES test run",
+        "Date and Time\t2026-02-10 14:00:00",
+        "Pump Type\tUV-Vis Pulse Shaper",
+        "Detection Mode\tProbe & Reference",
+        f"Step Size (fs)\t{dt1_fs:.6f}",
+        f"Final Delay (fs)\t{(n_t1 - 1) * dt1_fs:.6f}",
+        f"Rotating Frame (Scanned)\t{w0_scanned_cm1:.6f}",
+        "Rotating Frame (Fixed)\t0.000000",
+        "Frames\t4",
+        "Waiting Time Delay List\t" + ",".join(f"{v:.3f}" for v in t2_arr_fs),
+        "Waiting Time Delay Units\tfs",
+        "2D Average\t100",
+        f"Shaper Calibration P1\t{sh_p1:.6f}",
+        f"Shaper Calibration P2\t{sh_p2:.6f}",
+        f"Shaper Calibration P3\t{sh_p3:.6f}",
+        f"MONO1 Wavelength\t{cwl_nm:.6f}",
+        'MONO1 Grating\t1, "1: 300 g/mm"',
+        "MONO Calibration Type\tADVANCED",
+        "MONO Focal Length\t150.000000",
+        "MONO Deviation Angle\t25.000000",
+        "MONO Pixel Pitch\t100.000000",
+        "MONO Grating Grooves\t300.000000",
+        f"Detector Pixels\t{n_pixels}x1",
+        "Detector Binning\t1",
+        "Flip Detector Columns?\tFALSE",
+        "QC Version\t0.9.4.2",
+    ]
+    info_path = folder / f"{prefix}.info"
+    info_path.write_text("\n".join(info_lines) + "\n", encoding="utf-8")
+
+    cube = np.zeros((n_t1, n_pixels, len(t2_arr_fs)), dtype=float)
+    for m, t2_v in enumerate(t2_arr_fs):
+        decay_m = float(np.exp(-max(0.0, t2_v) / 5000.0))
+        scans_m = []
+        for s in range(1, n_scans + 1):
+            jit = rng.normal(0.0, 0.02, size=(n_t1, n_pixels))
+            u_mOD = decay_m * base_2d_mOD + jit
+            scans_m.append(u_mOD)
+            _write_qc_scan_file(
+                folder / f"{prefix}_T{m + 1:02d}#{s:03d}.scan",
+                axis0,
+                u_mOD / 1000.0,
+                trailing_row_od=wl_active,
+                footer_col0=float(t2_v),
+            )
+        cube[:, :, m] = np.mean(scans_m, axis=0)
+
+    p_order = np.argsort(probe_cm1)
+    return {
+        "info_path": info_path,
+        "probe_cm1": probe_cm1[p_order],
+        "wl_nm": wl_nm[p_order],
+        "peak_cm1": peak_cm1,
+        "t2_ps": t2_arr_fs / 1000.0,
+        "cube_mOD": cube[:, p_order, :],
+        "single_beam": wl_active[p_order],
     }
 
 

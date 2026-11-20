@@ -1382,8 +1382,11 @@ class MainWindow(
         if selectors_layout is not None:
             selectors_layout.setSpacing(15)
 
-        # Wire "Apply and reprocess" button in Phasing/FT sub-tab
-        self._connect("twoD_apply_reprocess_btn", self.twoD_reload_data)
+        # Wire "Apply and reprocess" button and live shot-rotation spinner in Phasing/FT sub-tab
+        self._connect("twoD_apply_reprocess_btn", self.twoD_reprocess_data)
+        _shot_rot = getattr(self, "twoD_shot_rotation", None)
+        if _shot_rot is not None:
+            _shot_rot.valueChanged.connect(lambda _v: self.twoD_reprocess_data(silent=True))
 
         self._twoD_delay_model = QStandardItemModel(self)
         lst_delays = getattr(self, "twoD_t2delay_lst", None)
@@ -1425,7 +1428,7 @@ class MainWindow(
         self._connect("twoD_timedomain_fit_btn", self._on_twoD_timedomain_fit_clicked)
         self._connect("twoD_make_gif_btn", self._on_twoD_make_gif_clicked)
         self._connect("twoD_save_probe_cal_btn", self._twoD_save_probe_cal)
-        self._connect("twoD_apply_changes_btn", self.twoD_reload_data)
+        self._connect("twoD_apply_changes_btn", self.twoD_reprocess_data)
         self._connect("twoD_PC_sync", self._on_twoD_sync_limits)
 
         # Wire up subtabs currentChanged
