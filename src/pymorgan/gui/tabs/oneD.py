@@ -181,6 +181,8 @@ class OneDTabMixin:
             self._configure_state_controls(None)
             self._set_dataset_widgets_visible(False)
             self._update_sample_info()
+            if hasattr(self, "_update_embed_cal_h5_action_state"):
+                self._update_embed_cal_h5_action_state()
             return
         self._configure_state_controls(meta)
         name = Path(path).stem if dt == "QuickControl_PP" else Path(path).name
@@ -240,6 +242,9 @@ class OneDTabMixin:
             if btn_counts is not None:
                 btn_counts.setVisible(False)
                 btn_counts.setEnabled(False)
+
+        if hasattr(self, "_update_embed_cal_h5_action_state"):
+            self._update_embed_cal_h5_action_state()
 
     def _update_sample_info(self):
         """Refresh the sample-info box from the active dataset (clear if none)."""
@@ -2034,3 +2039,130 @@ class OneDTabMixin:
         if pc is not None:
             vals = pc.probe_from_native(vals)  # show defaults in the displayed unit
         return [round(float(v)) for v in vals]  # rounded suggestions
+
+    def _embed_calibrated_probe_in_h5(self):
+        """Embed CalibratedProbe.csv spectral calibration permanently inside an .h5 dataset."""
+        import h5py
+
+        from pymorgan.oneD.load import (
+            _infer_pymess_h5_npixels,
+            embed_calibrated_probe_h5,
+            find_pymess_calibrated_probe_csv,
+        )
+
+        tabs = getattr(self, "MainTabs", None)
+        tab_idx = tabs.currentIndex() if tabs is not None else 0
+        h5_path: Path | None = None
+        active_mode: str | None = None
+
+        if tab_idx == 0 and getattr(self, "dataset", None) is not None and self._current_path:
+            cand = Path(self._current_path)
+            if cand.suffix.lower() in (".h5", ".hdf5"):
+                h5_path = cand
+                active_mode = "1D"
+        elif tab_idx == 1 and getattr(self, "twoD_dataset", None) is not None and self._twoD_current_path:
+            cand = Path(self._twoD_current_path)
+            if cand.suffix.lower() in (".h5", ".hdf5"):
+                h5_path = cand
+                active_mode = "2D"
+
+        if h5_path is None:
+            start_dir = self._rootdir_text() or ""
+            chosen_h5, _ = QFileDialog.getOpenFileName(
+                self,
+                "Select .h5 Dataset to Embed Probe Calibration",
+                start_dir,
+                "HDF5 Files (*.h5 *.hdf5);;All files (*)",
+            )
+            if not chosen_h5:
+                return
+            h5_path = Path(chosen_h5)
+
+        try:
+            with h5py.File(h5_path, "r") as f:
+                n_pix = _infer_pymess_h5_npixels(f)
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Invalid HDF5 File",
+                f"Could not inspect '{h5_path.name}':\n{exc}",
+            )
+            return
+
+        csv_match = find_pymess_calibrated_probe_csv(h5_path, n_pix)
+        if csv_match is not None:
+            csv_path = csv_match[1]
+        else:
+            chosen_csv, _ = QFileDialog.getOpenFileName(
+                self,
+                f"Select CalibratedProbe.csv ({n_pix} pixels)",
+                str(h5_path.parent),
+                "Calibration CSV (CalibratedProbe*.csv *.csv);;All files (*)",
+            )
+            if not chosen_csv:
+                return
+            csv_path = Path(chosen_csv)
+
+        try:
+            if active_mode == "1D" and self.dataset is not None:
+                res = self.dataset.embed_calibrated_probe(csv_path)
+                if len(self.dataset.probe) == len(res["probe"]):
+                    if getattr(self, "plot_controls", None) is not None:
+                        self.plot_controls.set_dataset(self.dataset)
+                    self._preview_contour()
+                    self._update_sample_info()
+                else:
+                    self.reload_data()
+            elif active_mode == "2D" and self.twoD_dataset is not None:
+                res = self.twoD_dataset.embed_calibrated_probe(csv_path)
+                if len(self.twoD_dataset.probe) == len(res["probe"]):
+                    if getattr(self, "twoD_plot_controls", None) is not None:
+                        lst_delays = getattr(self, "twoD_t2delay_lst", None)
+                        active_idx = lst_delays.currentIndex().row() if lst_delays is not None else 0
+                        if active_idx < 0 or active_idx >= len(self.twoD_dataset.delays):
+                            active_idx = max(0, len(self.twoD_dataset.delays) - 1)
+                        self.twoD_plot_controls.set_dataset(self.twoD_dataset, active_idx)
+                    self._twoD_preview_contour()
+                    self._update_twoD_sample_info()
+                    if hasattr(self, "_twoD_update_other_plot"):
+                        self._twoD_update_other_plot()
+                else:
+                    self.twoD_reload_data()
+            else:
+                res = embed_calibrated_probe_h5(h5_path, csv_path)
+                if (
+                    self._current_path
+                    and Path(self._current_path).resolve() == h5_path.resolve()
+                    and self.dataset is not None
+                ):
+                    self.reload_data()
+                elif (
+                    self._twoD_current_path
+                    and Path(self._twoD_current_path).resolve() == h5_path.resolve()
+                    and self.twoD_dataset is not None
+                ):
+                    self.twoD_reload_data()
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Embed Calibration Failed",
+                f"Could not embed calibration into '{h5_path.name}':\n{exc}",
+            )
+            return
+
+        probe_arr = res["probe"]
+        p_min = float(np.nanmin(probe_arr))
+        p_max = float(np.nanmax(probe_arr))
+        disp_unit = res["display_unit"]
+        keys_str = ", ".join(res["datasets_updated"])
+        self.statusBar().showMessage(
+            f"Embedded probe calibration from {csv_path.name} into {h5_path.name} ({len(probe_arr)} px, {disp_unit})"
+        )
+        QMessageBox.information(
+            self,
+            "Probe Calibration Embedded",
+            f"Successfully embedded probe calibration inside:\n{h5_path}\n\n"
+            f"Source CSV: {csv_path}\n"
+            f"Pixels: {len(probe_arr)} ({p_min:.2f} .. {p_max:.2f} {disp_unit})\n"
+            f"Updated HDF5 dataset(s): {keys_str}",
+        )

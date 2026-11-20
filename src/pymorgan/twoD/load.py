@@ -1201,8 +1201,10 @@ def read_PyMESS_2D(path: str, progress_tracker=None):
     import h5py
 
     from ..oneD.load import (
+        _detect_pymess_probe_units,
+        _format_pymess_cal_source,
         _pymess_attr_str,
-        _resolve_pymess_omega3_axis,
+        _resolve_pymess_probe_axis,
         classify_pymess_h5,
     )
 
@@ -1512,15 +1514,12 @@ def read_PyMESS_2D(path: str, progress_tracker=None):
                             break
 
         # Resolve probe axis (omega3)
-        probe, cal_kind = _resolve_pymess_omega3_axis(f, p, n_pix)
-        if cal_kind == "dataset":
-            cal_source = "PyMESS spectral calibration (cm-1)"
-        elif cal_kind == "sibling":
-            cal_source = "PyMESS sibling HDF5 calibration (cm-1)"
-        elif cal_kind == "csv":
-            cal_source = "CalibratedProbe.csv (cm-1)"
-        else:
-            cal_source = "Uncalibrated pixel indices"
+        probe, cal_kind, cal_loc, cal_level = _resolve_pymess_probe_axis(
+            f, p, n_pix, prefer_omega3=True, default_zero_based=False
+        )
+        _unitsL, display_L = _detect_pymess_probe_units(probe, meta_dict)
+        freq_units = display_L if display_L in ("cm-1", "nm") else "cm-1"
+        cal_source = _format_pymess_cal_source(cal_kind, cal_loc, display_L, _unitsL)
 
         # Resolve t2 waiting times in ps
         t2delays_ps = _extract_pymess_2d_t2_ps(f, p, meta_dict, n_t2)
@@ -1776,8 +1775,13 @@ def read_PyMESS_2D(path: str, progress_tracker=None):
                 Z = raw_signal.copy()
                 pump = t1.copy()
 
-        units = _units_2d("ps", "cm-1")
+        units = _units_2d("ps", freq_units)
+        if freq_units == "nm":
+            units["unitsL_lbl"] = "Wavelength"
+            units["unitsL_ltx"] = "nm"
         units["cal_source"] = cal_source
+        if cal_level is not None:
+            units["cal_level"] = cal_level
         units["is_frequency_domain"] = is_freq_domain
         units["w0_cm1"] = w0_cm1
         units["dt1_fs"] = dt1_fs
@@ -1821,7 +1825,7 @@ def read_PyMESS_2D(path: str, progress_tracker=None):
         probe,
         t2delays_ps,
         units,
-        "cm-1",
+        freq_units,
         datatype_str,
         in_progress,
         raw_signal,

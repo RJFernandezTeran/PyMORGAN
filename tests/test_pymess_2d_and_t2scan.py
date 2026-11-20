@@ -660,3 +660,184 @@ def test_latest_pymess_slowmod_2d_and_t2_without_root_interferograms_raw(tmp_pat
     np.testing.assert_allclose(ds2d.raw_signal[:, :, 0], expected_ma_scan01)
 
 
+def _write_probe_csv_2d(path: Path, values: np.ndarray) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(f"{v:.6f}" for v in values) + "\n", encoding="utf-8")
+    return path
+
+
+def _write_pymess_2d_h5(
+    path: Path,
+    omega3: np.ndarray,
+    *,
+    domain_mode: str = "time_domain",
+    n_t2: int = 2,
+    n_t1: int = 12,
+    n_w1: int = 16,
+) -> Path:
+    """Create a minimal PyMESS 2D (time_domain or freq_domain) HDF5 file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    n_w3 = len(omega3)
+    t2_delays = np.linspace(100.0, 500.0, n_t2)
+    t1_delays = np.linspace(0.0, 1100.0, n_t1)
+    omega1 = np.linspace(1950.0, 2100.0, n_w1)
+
+    with h5py.File(path, "w") as f:
+        meta = f.create_group("metadata")
+        meta.attrs["measurement_type"] = "2d_spectra"
+        meta.attrs["domain_mode"] = domain_mode
+        meta.attrs["sample_id"] = f"2D_{domain_mode}"
+        shaper = meta.create_group("shaper")
+        shaper.attrs["mode"] = "Time" if domain_mode == "time_domain" else "Frequency"
+        shaper.attrs["form"] = 1 if domain_mode == "time_domain" else 0
+        shaper.attrs["effective_rotating_frame_cm1"] = 1800.0
+
+        grp = f.create_group("data")
+        grp.create_dataset("t2_delays_fs", data=t2_delays)
+        grp.create_dataset("omega3_axis", data=omega3)
+        grp.create_dataset("omega1_axis", data=omega1)
+
+        if domain_mode == "time_domain":
+            grp.create_dataset("t1_delays_fs", data=t1_delays)
+            interf = np.ones((n_t2, n_t1, n_w3), dtype=np.float64) * 0.5
+            grp.create_dataset("interferograms_raw", data=interf)
+            grp.create_dataset("surface_absorptive", data=np.ones((n_t2, n_w1, n_w3), dtype=np.float64))
+        else:
+            surf = np.ones((n_t2, n_w1, n_w3), dtype=np.float64) * 1.2
+            grp.create_dataset("surface_absorptive", data=surf)
+
+    return path
+
+
+def test_shaper_t2_prefers_calibrated_probe_csv_and_embeds(shaper_t2_scan_file: Path, tmp_path: Path):
+    """shaper_t2_scan prefers Cal+Chirp/CalibratedProbe.csv and embeds cleanly into .h5."""
+    with h5py.File(shaper_t2_scan_file, "r") as f:
+        orig_omega3 = f["data/omega3_axis"][:]
+
+    cal_omega3 = np.linspace(1920.0, 2080.0, len(orig_omega3))
+    _write_probe_csv_2d(shaper_t2_scan_file.parent / "Cal+Chirp" / "CalibratedProbe.csv", cal_omega3)
+
+    ds_pp = pm.load_1D(shaper_t2_scan_file, data_type="PyMESS_PP")
+    ds_h5 = pm.load_1D(shaper_t2_scan_file, data_type="HDF5")
+    for ds in (ds_pp, ds_h5):
+        np.testing.assert_allclose(ds.probe, cal_omega3)
+        assert ds.units["unitsL_ltx"] == "cm$^{-1}$"
+        assert "Cal+Chirp folder" in ds.cal_source
+
+    res = ds_pp.embed_calibrated_probe()
+    assert res["unitsL"] == "cm^{-1}"
+    assert res["display_unit"] == "cm-1"
+    np.testing.assert_allclose(ds_pp.probe, cal_omega3)
+    with h5py.File(shaper_t2_scan_file, "r") as f:
+        np.testing.assert_allclose(f["data/omega3_axis"][:], cal_omega3)
+        np.testing.assert_allclose(f["calibration/original_probe_axis"][:], orig_omega3)
+
+    # Isolated copy still uses embedded calibration
+    iso_dir = tmp_path / "isolated_t2" / "sub"
+    iso_dir.mkdir(parents=True)
+    iso_h5 = iso_dir / "t2_copy.h5"
+    iso_h5.write_bytes(shaper_t2_scan_file.read_bytes())
+
+    ds_iso = pm.load_1D(iso_h5, data_type="PyMESS_PP")
+    np.testing.assert_allclose(ds_iso.probe, cal_omega3)
+    assert "Embedded CalibratedProbe.csv" in ds_iso.cal_source
+
+
+def test_stopped_shaper_t2_with_scalar_nan_omega3_uses_csv_and_embeds(tmp_path: Path):
+    """Stopped shaper_t2_scan with scalar-NaN omega3_axis loads and embeds CalibratedProbe.csv."""
+    scan_dir = tmp_path / "t2scan"
+    scan_dir.mkdir()
+    p = scan_dir / "stopped_t2.h5"
+    n_delays, n_pix = 6, 24
+    t2_fs = np.linspace(-100.0, 500.0, n_delays)
+    surf = np.ones((n_delays, n_pix), dtype=np.float64) * 3.0
+
+    with h5py.File(p, "w") as f:
+        meta = f.create_group("metadata")
+        meta.attrs["measurement_type"] = "2d_spectra"
+        meta.attrs["domain_mode"] = "time_domain"
+        shaper = meta.create_group("shaper")
+        shaper.attrs["mode"] = "Time"
+        shaper.attrs["form"] = 0
+
+        grp = f.create_group("data")
+        grp.create_dataset("t1_delays_fs", data=t2_fs)
+        grp.create_dataset("omega3_axis", data=np.nan)
+        grp.create_dataset("interferograms_raw", data=surf)
+        grp.create_dataset("surface_absorptive", data=surf)
+
+    cal_axis = np.linspace(1885.0, 2045.0, n_pix)
+    _write_probe_csv_2d(tmp_path / "Cal+Chirp" / "CalibratedProbe.csv", cal_axis)
+
+    ds = pm.load_1D(p, data_type="PyMESS_PP")
+    np.testing.assert_allclose(ds.probe, cal_axis)
+    assert ds.units["unitsL_ltx"] == "cm$^{-1}$"
+    assert "CalibratedProbe.csv" in ds.cal_source
+
+    pm.embed_calibrated_probe_h5(p)
+    with h5py.File(p, "r") as f:
+        assert f["data/omega3_axis"].shape == (n_pix,)
+        np.testing.assert_allclose(f["data/omega3_axis"][:], cal_axis)
+
+    iso_h5 = tmp_path / "isolated_root" / "sub" / "stopped_copy.h5"
+    iso_h5.parent.mkdir(parents=True)
+    iso_h5.write_bytes(p.read_bytes())
+    ds_iso = pm.load_1D(iso_h5, data_type="PyMESS_PP")
+    np.testing.assert_allclose(ds_iso.probe, cal_axis)
+    assert "Embedded CalibratedProbe.csv" in ds_iso.cal_source
+
+
+def test_pymess_2d_time_and_freq_domain_prefer_calibrated_probe_csv_and_embed(tmp_path: Path):
+    """PyMESS_2D time-domain (cm-1) and freq-domain (nm) prefer CalibratedProbe.csv and embed cleanly."""
+    from pymorgan.twoD.load import read_PyMESS_2D
+
+    # 1. Time-domain mid-IR 2D
+    td_dir = tmp_path / "td_2d"
+    orig_cm1 = np.linspace(1950.0, 2150.0, 24)
+    cal_cm1 = np.linspace(1960.0, 2140.0, 24)
+    p_td = _write_pymess_2d_h5(td_dir / "td_scan.h5", orig_cm1, domain_mode="time_domain")
+    _write_probe_csv_2d(td_dir / "Cal+Chirp" / "CalibratedProbe.csv", cal_cm1)
+
+    _, _, raw_probe, _, raw_units, raw_freq_units, *_ = read_PyMESS_2D(p_td)
+    np.testing.assert_allclose(raw_probe, cal_cm1)
+    assert raw_freq_units == "cm-1"
+    assert "Cal+Chirp folder" in raw_units["cal_source"]
+
+    ds_td = pm.load_2D(p_td, data_type="PyMESS_2D")
+    np.testing.assert_allclose(ds_td.probe, cal_cm1)
+    assert ds_td.freq_units == "cm-1"
+    assert "Cal+Chirp folder" in ds_td.cal_source
+
+    ds_td.embed_calibrated_probe()
+    with h5py.File(p_td, "r") as f:
+        np.testing.assert_allclose(f["data/omega3_axis"][:], cal_cm1)
+        np.testing.assert_allclose(f["calibration/original_probe_axis"][:], orig_cm1)
+
+    iso_td = tmp_path / "isolated_2d" / "td_copy.h5"
+    iso_td.parent.mkdir()
+    iso_td.write_bytes(p_td.read_bytes())
+    ds_td_iso = pm.load_2D(iso_td, data_type="PyMESS_2D")
+    np.testing.assert_allclose(ds_td_iso.probe, cal_cm1)
+    assert "Embedded CalibratedProbe.csv" in ds_td_iso.cal_source
+
+    # 2. Frequency-domain UV-Vis 2D (nm)
+    fd_dir = tmp_path / "fd_uv"
+    orig_nm = np.linspace(350.0, 650.0, 24)
+    cal_nm = np.linspace(330.0, 640.0, 24)
+    p_fd = _write_pymess_2d_h5(fd_dir / "fd_scan.h5", orig_nm, domain_mode="freq_domain")
+    _write_probe_csv_2d(fd_dir / "CalibratedProbe.csv", cal_nm)
+
+    ds_fd = pm.load_2D(p_fd, data_type="PyMESS_2D")
+    np.testing.assert_allclose(ds_fd.probe, cal_nm)
+    assert ds_fd.freq_units == "nm"
+    assert ds_fd.units["unitsL_lbl"] == "Wavelength"
+    assert ds_fd.units["unitsL_ltx"] == "nm"
+    assert "CalibratedProbe.csv" in ds_fd.cal_source
+
+    pm.embed_calibrated_probe_h5(p_fd)
+    with h5py.File(p_fd, "r") as f:
+        np.testing.assert_allclose(f["data/omega3_axis"][:], cal_nm)
+        np.testing.assert_allclose(f["calibration/original_probe_axis"][:], orig_nm)
+
+
+

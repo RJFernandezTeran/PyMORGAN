@@ -14,7 +14,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from os import PathLike
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import numpy as np
 
@@ -1863,6 +1863,36 @@ class Dataset1D:
                 self.Zss_C = self.Zss_C[valid_indices, :, :, :]
 
         self.chirp_fit = fit
+
+    def embed_calibrated_probe(
+        self,
+        csv_path: str | PathLike | None = None,
+        *,
+        backup_original: bool = True,
+    ) -> dict[str, Any]:
+        """Embed a ``CalibratedProbe.csv`` probe axis directly inside the source ``.h5`` file."""
+        from .. import helpers as hlp
+        from .load import embed_calibrated_probe_h5
+
+        if not self.source:
+            raise ValueError(
+                "Dataset source path is not set; cannot embed calibration into HDF5."
+            )
+        src = Path(self.source)
+        if src.suffix.lower() not in (".h5", ".hdf5"):
+            raise ValueError(f"Dataset source is not an HDF5 (.h5) file: {src.name}")
+
+        res = embed_calibrated_probe_h5(src, csv_path, backup_original=backup_original)
+        if len(self.probe) == len(res["probe"]):
+            self.probe = res["probe"].copy()
+            cur_T = self.units.get("T") or self.units.get("unitsT_ltx", "ps")
+            cur_Z = self.units.get("Z") or self.units.get("unitsZ", "x1E3")
+            self.units.update(hlp.units2dic(res["unitsL"], cur_T, cur_Z))
+            self.cal_source = res["cal_source"]
+            self.units["cal_source"] = res["cal_source"]
+            self.cal_level = None
+            self.units.pop("cal_level", None)
+        return res
 
 
 def load_1D(path: str | PathLike, data_type: str = "PDAT", **loader_kwargs) -> Dataset1D:

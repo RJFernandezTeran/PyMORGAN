@@ -1080,3 +1080,109 @@ def test_uncalibrated_probe_disables_xunit_and_uses_pixel_index_label(qapp, tmp_
     finally:
         win.close()
 
+
+def test_embed_calibrated_probe_h5_menu_action_and_workflow(qapp, tmp_path, monkeypatch):
+    """actionEmbedProbeCalH5 gating, 1D auto-embed preserving shift_t0, CSV dialog fallback, and 2D tab state."""
+    import h5py
+    from PyQt6.QtWidgets import QFileDialog, QMessageBox
+
+    info_messages = []
+    monkeypatch.setattr(QMessageBox, "information", lambda *args, **kwargs: info_messages.append(args))
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: QMessageBox.StandardButton.Ok)
+    monkeypatch.setattr(QMessageBox, "critical", lambda *args, **kwargs: QMessageBox.StandardButton.Ok)
+
+    n_delays, n_pix = 10, 32
+    delays_fs = np.linspace(-200.0, 1000.0, n_delays)
+    orig_wl = np.arange(n_pix, dtype=np.float64)
+    cal1 = np.linspace(410.0, 710.0, n_pix)
+    cal2 = np.linspace(425.0, 725.0, n_pix)
+
+    data_dir = tmp_path / "pymess_1d"
+    data_dir.mkdir()
+    h5_1d = data_dir / "pp_scan.h5"
+    with h5py.File(h5_1d, "w") as f:
+        grp = f.create_group("data")
+        grp.create_dataset("delta_A", data=np.ones((n_delays, n_pix), dtype=np.float64))
+        grp.create_dataset("delays_fs", data=delays_fs)
+        grp.create_dataset("wavelengths", data=orig_wl)
+        meta = f.create_group("metadata")
+        meta.attrs["measurement_type"] = "pump_probe"
+
+    csv_auto = data_dir / "CalibratedProbe.csv"
+    csv_auto.write_text("\n".join(f"{v:.6f}" for v in cal1) + "\n", encoding="utf-8")
+
+    # 2D PyMESS file (freq_domain) for 2D tab gating test
+    dir_2d = tmp_path / "pymess_2d"
+    dir_2d.mkdir()
+    h5_2d = dir_2d / "scan_2d.h5"
+    with h5py.File(h5_2d, "w") as f:
+        meta = f.create_group("metadata")
+        meta.attrs["measurement_type"] = "2d_spectra"
+        meta.attrs["domain_mode"] = "freq_domain"
+        shaper = meta.create_group("shaper")
+        shaper.attrs["mode"] = "Frequency"
+        shaper.attrs["form"] = 0
+        grp = f.create_group("data")
+        grp.create_dataset("t2_delays_fs", data=np.array([100.0, 300.0]))
+        grp.create_dataset("omega3_axis", data=np.linspace(1900.0, 2100.0, 16))
+        grp.create_dataset("omega1_axis", data=np.linspace(1920.0, 2080.0, 12))
+        grp.create_dataset("surface_absorptive", data=np.ones((2, 12, 16), dtype=np.float64))
+
+    pdat_info = synthetic.make_synthetic_pdat(tmp_path / "plain.pdat")
+
+    win = MainWindow()
+    try:
+        # Action lives in menuPreProcessing and starts disabled
+        assert win.actionEmbedProbeCalH5 in win.menuPreProcessing.actions()
+        assert win.actionEmbedProbeCalH5.isEnabled() is False
+
+        # Non-HDF5 1D dataset (PDAT) keeps action disabled
+        win.load_path(pdat_info["path"], "PDAT")
+        assert win.actionEmbedProbeCalH5.isEnabled() is False
+
+        # 2D PyMESS HDF5 enables action when on 2D tab, respects 1D PDAT when switching back
+        win.twoD_load_path(h5_2d, "PyMESS_2D")
+        win.MainTabs.setCurrentIndex(1)
+        assert win.actionEmbedProbeCalH5.isEnabled() is True
+        win.MainTabs.setCurrentIndex(0)
+        assert win.actionEmbedProbeCalH5.isEnabled() is False
+
+        # Load 1D PyMESS_PP .h5 -> enabled, shift t0, then trigger auto-embed
+        win.load_path(h5_1d, "PyMESS_PP")
+        assert win.actionEmbedProbeCalH5.isEnabled() is True
+
+        win.dataset.shift_t0(80.0)
+        shifted_delays = win.dataset.delays.copy()
+
+        win.actionEmbedProbeCalH5.trigger()
+        assert len(info_messages) >= 1
+        np.testing.assert_allclose(win.dataset.delays, shifted_delays)
+        np.testing.assert_allclose(win.dataset.probe, cal1)
+        cal_text = win.dataset.calibration_status()
+        assert "CalibratedProbe.csv" in cal_text
+        assert win.PC_xUnit.isEnabled() is True
+
+        # Remove external CalibratedProbe.csv and reload -> embedded axis persists
+        csv_auto.unlink()
+        win.load_path(h5_1d, "PyMESS_PP")
+        np.testing.assert_allclose(win.dataset.probe, cal1)
+        assert "Embedded CalibratedProbe.csv" in win.dataset.cal_source
+
+        # Manual QFileDialog fallback when no CalibratedProbe.csv is auto-found
+        custom_csv = tmp_path / "elsewhere" / "MyProbeCal.csv"
+        custom_csv.parent.mkdir()
+        custom_csv.write_text("\n".join(f"{v:.6f}" for v in cal2) + "\n", encoding="utf-8")
+        monkeypatch.setattr(
+            QFileDialog,
+            "getOpenFileName",
+            lambda *args, **kwargs: (str(custom_csv), "CSV files (*.csv)"),
+        )
+        win.actionEmbedProbeCalH5.trigger()
+        np.testing.assert_allclose(win.dataset.probe, cal2)
+        with h5py.File(h5_1d, "r") as f:
+            np.testing.assert_allclose(f["data/wavelengths"][:], cal2)
+            np.testing.assert_allclose(f["calibration/original_probe_axis"][:], orig_wl)
+    finally:
+        win.close()
+
+

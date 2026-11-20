@@ -251,49 +251,51 @@ class Dataset2D:
             except Exception:
                 pass
 
-        # Check for CalibratedProbe.csv override (only in data folder for PyMESS_2D unless probe is uncalibrated)
+        # Check for CalibratedProbe.csv override (PyMESS_2D and QuickControl_2D resolve it inside their loaders)
         from pathlib import Path
 
         folder = Path(path)
-        cal_path = None
-        if folder.is_dir():
-            cand_data = folder / "CalibratedProbe.csv"
-            if cand_data.is_file():
-                cal_path = cand_data
-            else:
-                cand_root = folder.parent / "CalibratedProbe.csv"
-                if cand_root.is_file():
-                    cal_path = cand_root
-        else:
-            cand_data = folder.parent / "CalibratedProbe.csv"
-            if cand_data.is_file():
-                cal_path = cand_data
-            else:
-                cand_root = folder.parent.parent / "CalibratedProbe.csv"
-                if cand_root.is_file():
-                    cal_path = cand_root
-
-        cal_level = None
+        cal_level = units.get("cal_level")
         cal_source = units.get("cal_source")
-        if cal_path is not None:
-            try:
-                # Load calibrated probe axis
-                calibrated_probe = np.loadtxt(cal_path, delimiter=",").ravel().astype(float)
-                # Check that its length matches the probe shape
-                if len(calibrated_probe) == len(probe):
-                    probe = calibrated_probe
-                    is_datadir = (folder.is_dir() and cal_path.parent == folder) or (
-                        not folder.is_dir() and cal_path.parent == folder.parent
+
+        if data_type not in ("PyMESS_2D", "QuickControl_2D"):
+            cal_path = None
+            if folder.is_dir():
+                cand_data = folder / "CalibratedProbe.csv"
+                if cand_data.is_file():
+                    cal_path = cand_data
+                else:
+                    cand_root = folder.parent / "CalibratedProbe.csv"
+                    if cand_root.is_file():
+                        cal_path = cand_root
+            else:
+                cand_data = folder.parent / "CalibratedProbe.csv"
+                if cand_data.is_file():
+                    cal_path = cand_data
+                else:
+                    cand_root = folder.parent.parent / "CalibratedProbe.csv"
+                    if cand_root.is_file():
+                        cal_path = cand_root
+
+            if cal_path is not None:
+                try:
+                    # Load calibrated probe axis
+                    calibrated_probe = np.loadtxt(cal_path, delimiter=",").ravel().astype(float)
+                    # Check that its length matches the probe shape
+                    if len(calibrated_probe) == len(probe):
+                        probe = calibrated_probe
+                        is_datadir = (folder.is_dir() and cal_path.parent == folder) or (
+                            not folder.is_dir() and cal_path.parent == folder.parent
+                        )
+                        cal_level = "datadir" if is_datadir else "rootdir"
+                        cal_source = f"CalibratedProbe.csv ({'data folder' if is_datadir else 'root folder'})"
+                except Exception:
+                    logger.warning(
+                        "Could not read the probe calibration file %s; "
+                        "using the uncalibrated probe axis.",
+                        cal_path,
+                        exc_info=True,
                     )
-                    cal_level = "datadir" if is_datadir else "rootdir"
-                    cal_source = f"CalibratedProbe.csv ({'data folder' if is_datadir else 'root folder'})"
-            except Exception:
-                logger.warning(
-                    "Could not read the probe calibration file %s; "
-                    "using the uncalibrated probe axis.",
-                    cal_path,
-                    exc_info=True,
-                )
 
         if cal_source is None:
             if data_type == "MESS_2DIR":
@@ -476,7 +478,7 @@ class Dataset2D:
         elif cal == "autocalibrated":
             cal_str = "Auto-calibrated from data"
         else:
-            cal_str = "Dataset probe calibration"
+            cal_str = getattr(self, "cal_source", None) or "Dataset probe calibration"
         line_cal = f"<b>Calibration:</b> {cal_str}"
 
         # --- Data type line (last) ---
@@ -548,7 +550,7 @@ class Dataset2D:
         elif cal == "autocalibrated":
             cal_str = "Auto-calibrated from data"
         else:
-            cal_str = "Dataset probe calibration"
+            cal_str = getattr(self, "cal_source", None) or "Dataset probe calibration"
         line_cal = f"Calibration: {cal_str}"
 
         # --- Data type line (last) ---
@@ -1231,6 +1233,44 @@ class Dataset2D:
 
         Z_data = self.Z if use_corrected else self.Z_R
         write_P2DAT(path, self.pump, self.probe, self.delays, Z_data)
+
+    def embed_calibrated_probe(
+        self,
+        csv_path: str | PathLike | None = None,
+        *,
+        backup_original: bool = True,
+    ) -> dict:
+        """Embed a ``CalibratedProbe.csv`` probe axis directly inside the source ``.h5`` file."""
+        from pathlib import Path
+
+        from ..oneD.load import embed_calibrated_probe_h5
+
+        if not self.source:
+            raise ValueError(
+                "Dataset source path is not set; cannot embed calibration into HDF5."
+            )
+        src = Path(self.source)
+        if src.suffix.lower() not in (".h5", ".hdf5"):
+            raise ValueError(f"Dataset source is not an HDF5 (.h5) file: {src.name}")
+
+        res = embed_calibrated_probe_h5(src, csv_path, backup_original=backup_original)
+        if len(self.probe) == len(res["probe"]):
+            self.probe = res["probe"].copy()
+            disp_unit = res["display_unit"]
+            if disp_unit in ("cm-1", "nm"):
+                self.freq_units = disp_unit
+                self.units["unitsL"] = disp_unit
+                if disp_unit == "nm":
+                    self.units["unitsL_lbl"] = "Wavelength"
+                    self.units["unitsL_ltx"] = "nm"
+                else:
+                    self.units["unitsL_lbl"] = "Wavenumber"
+                    self.units["unitsL_ltx"] = r"cm$^{-1}$"
+            self.cal_source = res["cal_source"]
+            self.units["cal_source"] = res["cal_source"]
+            self.cal_level = None
+            self.units.pop("cal_level", None)
+        return res
 
 
 def load_2D(path: str | PathLike, data_type: str = "P2DAT", progress_tracker=None) -> Dataset2D:

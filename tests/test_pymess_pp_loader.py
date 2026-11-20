@@ -389,5 +389,197 @@ def test_new_schema_slow_mod_state_00_and_intensity_mode(tmp_path: Path):
     np.testing.assert_allclose(ds_sig.Zavg_R[:, :, 1], -2.0)
 
 
+def _write_basic_pp_h5(path: Path, wavelengths: np.ndarray, n_delays: int = 8) -> Path:
+    """Create a minimal PyMESS pump-probe .h5 file at ``path``."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    n_pix = len(wavelengths)
+    delays_fs = np.linspace(-200.0, 1000.0, n_delays)
+    delta_A = np.ones((n_delays, n_pix), dtype=np.float64) * 2.5
+    with h5py.File(path, "w") as f:
+        grp = f.create_group("data")
+        grp.create_dataset("delta_A", data=delta_A)
+        grp.create_dataset("delays_fs", data=delays_fs)
+        grp.create_dataset("wavelengths", data=wavelengths)
+        meta = f.create_group("metadata")
+        meta.attrs["measurement_type"] = "pump_probe"
+        meta.attrs["sample_id"] = "CSV_Test"
+    return path
+
+
+def _write_probe_csv(path: Path, values: np.ndarray, header: bool = False) -> Path:
+    """Write 1D probe calibration values to ``path``."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = ["Wavelength"] if header else []
+    lines.extend(f"{val:.6f}" for val in values)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
+def test_pymess_pp_calibrated_probe_csv_precedence_and_mismatch(tmp_path: Path):
+    """CalibratedProbe.csv overrides internal .h5 wavelengths with data-folder priority and ignores length mismatches."""
+    n_pix = 32
+    orig_wl = np.linspace(400.0, 700.0, n_pix)
+    csv_root = np.linspace(405.0, 705.0, n_pix)
+    csv_cal_chirp = np.linspace(410.0, 710.0, n_pix)
+    csv_calib = np.linspace(415.0, 715.0, n_pix)
+    csv_data = np.linspace(420.0, 720.0, n_pix)
+
+    # 1. Separate search locations in subtree
+    root = tmp_path / "proj_loc"
+    data_dir = root / "day1"
+    h5_path = _write_basic_pp_h5(data_dir / "scan.h5", orig_wl)
+
+    # Root folder fallback
+    _write_probe_csv(root / "CalibratedProbe.csv", csv_root)
+    ds = load_1D(h5_path, data_type="PyMESS_PP")
+    np.testing.assert_allclose(ds.probe, csv_root)
+    assert ds.units["unitsL_ltx"] == "nm"
+    assert "root folder" in ds.cal_source
+
+    # Also auto-delegates via generic HDF5 data_type
+    ds_h5 = load_1D(h5_path, data_type="HDF5")
+    np.testing.assert_allclose(ds_h5.probe, csv_root)
+
+    # Cal+Chirp subfolder beats root folder
+    _write_probe_csv(data_dir / "Cal+Chirp" / "CalibratedProbe.csv", csv_cal_chirp, header=True)
+    ds = load_1D(h5_path, data_type="PyMESS_PP")
+    np.testing.assert_allclose(ds.probe, csv_cal_chirp)
+    assert "Cal+Chirp folder" in ds.cal_source
+
+    # calib/ subfolder beats Cal+Chirp/
+    _write_probe_csv(data_dir / "calib" / "CalibratedProbe.csv", csv_calib)
+    ds = load_1D(h5_path, data_type="PyMESS_PP")
+    np.testing.assert_allclose(ds.probe, csv_calib)
+    assert "calib folder" in ds.cal_source
+
+    # data folder beats calib/ and everything else
+    _write_probe_csv(data_dir / "CalibratedProbe.csv", csv_data)
+    ds = load_1D(h5_path, data_type="PyMESS_PP")
+    np.testing.assert_allclose(ds.probe, csv_data)
+    assert ds.cal_source == "CalibratedProbe.csv (data folder)"
+
+    # Mismatched length CSV in data folder is ignored, falling back to calib/
+    _write_probe_csv(data_dir / "CalibratedProbe.csv", np.linspace(1.0, 10.0, 16))
+    ds_mismatch = load_1D(h5_path, data_type="PyMESS_PP")
+    np.testing.assert_allclose(ds_mismatch.probe, csv_calib)
+    assert "calib folder" in ds_mismatch.cal_source
+
+
+def test_pymess_pp_slowmod_and_anisotropy_prefer_calibrated_probe_csv(slow_mod_anisotropy_file: Path):
+    """Slow-modulated PyMESS_PP and load_pymess_anisotropy use CalibratedProbe.csv for all channels."""
+    csv_cm1 = np.linspace(1912.0, 2088.0, 16)
+    _write_probe_csv(slow_mod_anisotropy_file.parent / "CalibratedProbe.csv", csv_cm1)
+
+    ds_pp = load_1D(slow_mod_anisotropy_file, data_type="PyMESS_PP")
+    np.testing.assert_allclose(ds_pp.probe, csv_cm1)
+    assert ds_pp.units["unitsL_ltx"] == "cm$^{-1}$"
+    assert "CalibratedProbe.csv" in ds_pp.cal_source
+    assert ds_pp.n_detectors == 2
+    assert ds_pp.Zavg_R.shape[2] == 2
+
+    # Pre-calculated anisotropy (G_factor == 1.0)
+    res_1 = load_pymess_anisotropy(slow_mod_anisotropy_file, G_factor=1.0)
+    assert set(res_1.keys()) == {"parallel", "perpendicular", "isotropic", "anisotropy"}
+    for sub_ds in res_1.values():
+        np.testing.assert_allclose(sub_ds.probe, csv_cm1)
+        assert sub_ds.units["unitsL_ltx"] == "cm$^{-1}$"
+        assert "CalibratedProbe.csv" in sub_ds.cal_source
+
+    # On-the-fly anisotropy (G_factor != 1.0)
+    res_g = load_pymess_anisotropy(slow_mod_anisotropy_file, G_factor=1.2)
+    assert set(res_g.keys()) == {"parallel", "perpendicular", "isotropic", "anisotropy"}
+    for sub_ds in res_g.values():
+        np.testing.assert_allclose(sub_ds.probe, csv_cm1)
+        assert sub_ds.units["unitsL_ltx"] == "cm$^{-1}$"
+        assert "CalibratedProbe.csv" in sub_ds.cal_source
+
+
+def test_pymess_pp_uncalibrated_512_pixel_axis_with_and_without_csv(tmp_path: Path):
+    """512-px 0..511 array reads as uncalibrated px without CSV and calibrated nm with CSV."""
+    px_axis = np.arange(512, dtype=np.float64)
+    p = _write_basic_pp_h5(tmp_path / "uncal_512.h5", px_axis)
+
+    ds_uncal = load_1D(p, data_type="PyMESS_PP")
+    assert ds_uncal.units["unitsL_ltx"] == "px"
+    assert ds_uncal.cal_source == "Uncalibrated pixel indices"
+    np.testing.assert_allclose(ds_uncal.probe, px_axis)
+
+    nm_axis = np.linspace(323.0, 745.0, 512)
+    _write_probe_csv(tmp_path / "CalibratedProbe.csv", nm_axis)
+    ds_cal = load_1D(p, data_type="PyMESS_PP")
+    assert ds_cal.units["unitsL_ltx"] == "nm"
+    assert ds_cal.cal_source == "CalibratedProbe.csv (data folder)"
+    np.testing.assert_allclose(ds_cal.probe, nm_axis)
+
+
+def test_embed_calibrated_probe_h5_and_dataset_roundtrip(tmp_path: Path):
+    """Embedding CalibratedProbe.csv sticks the axis inside .h5 and preserves original backup."""
+    orig_wl = np.linspace(400.0, 700.0, 32)
+    cal1 = np.linspace(410.0, 710.0, 32)
+    cal2 = np.linspace(415.0, 715.0, 32)
+    cal3 = np.linspace(420.0, 720.0, 32)
+
+    folder_a = tmp_path / "folder_a"
+    p = _write_basic_pp_h5(folder_a / "scan.h5", orig_wl)
+    _write_probe_csv(folder_a / "CalibratedProbe.csv", cal1)
+
+    # Length-mismatched CSV raises ValueError and leaves .h5 untouched
+    bad_csv = tmp_path / "bad_len.csv"
+    _write_probe_csv(bad_csv, np.linspace(400.0, 500.0, 12))
+    with pytest.raises(ValueError):
+        pm.embed_calibrated_probe_h5(p, bad_csv)
+    with h5py.File(p, "r") as f:
+        np.testing.assert_allclose(f["data/wavelengths"][:], orig_wl)
+
+    # Embed via Dataset1D method while preserving shifted t0 in memory
+    ds = load_1D(p, data_type="PyMESS_PP")
+    ds.shift_t0(50.0)
+    delays_shifted = ds.delays.copy()
+
+    res = ds.embed_calibrated_probe()
+    assert res["unitsL"] == "nm"
+    assert any("wavelengths" in item for item in res["datasets_updated"])
+    np.testing.assert_allclose(ds.probe, cal1)
+    np.testing.assert_allclose(ds.delays, delays_shifted)
+    assert ds.units["unitsL_ltx"] == "nm"
+    assert ds.cal_level is None
+
+    with h5py.File(p, "r") as f:
+        np.testing.assert_allclose(f["data/wavelengths"][:], cal1)
+        np.testing.assert_allclose(f["calibration/original_probe_axis"][:], orig_wl)
+
+    # Re-embed with a different CSV; original backup must remain orig_wl
+    cal2_csv = tmp_path / "cal2.csv"
+    _write_probe_csv(cal2_csv, cal2)
+    pm.embed_calibrated_probe_h5(p, cal2_csv)
+    with h5py.File(p, "r") as f:
+        np.testing.assert_allclose(f["data/wavelengths"][:], cal2)
+        np.testing.assert_allclose(f["calibration/original_probe_axis"][:], orig_wl)
+
+    # Copy .h5 to isolated folder (no CSV): embedded calibration persists
+    isolated = tmp_path / "isolated"
+    isolated.mkdir()
+    iso_h5 = isolated / "scan_copy.h5"
+    iso_h5.write_bytes(p.read_bytes())
+
+    ds_iso = load_1D(iso_h5, data_type="PyMESS_PP")
+    np.testing.assert_allclose(ds_iso.probe, cal2)
+    assert "Embedded CalibratedProbe.csv" in ds_iso.cal_source
+
+    # Adding a newer CalibratedProbe.csv next to scan_copy.h5 still overrides the embedded one
+    _write_probe_csv(isolated / "CalibratedProbe.csv", cal3)
+    ds_ext = load_1D(iso_h5, data_type="PyMESS_PP")
+    np.testing.assert_allclose(ds_ext.probe, cal3)
+    assert ds_ext.cal_source == "CalibratedProbe.csv (data folder)"
+
+    # Also test native PyMORGAN HDF5 embedding
+    native_h5 = tmp_path / "native.h5"
+    ds_iso.save_hdf5(native_h5)
+    pm.embed_calibrated_probe_h5(native_h5, cal2_csv)
+    ds_native_reloaded = load_1D(native_h5, data_type="HDF5")
+    np.testing.assert_allclose(ds_native_reloaded.probe, cal2)
+
+
+
 
 

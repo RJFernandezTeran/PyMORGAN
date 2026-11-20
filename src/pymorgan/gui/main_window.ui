@@ -4107,6 +4107,7 @@ The magnitude sets the smoothing window width.</string>
     </widget>
     <addaction name="actionShiftT0" />
     <addaction name="menuChirp" />
+    <addaction name="actionEmbedProbeCalH5" />
     <addaction name="separator" />
     <addaction name="actionSubtractShockwave" />
     <addaction name="actionTimeDerivative" />
@@ -4369,6 +4370,14 @@ The magnitude sets the smoothing window width.</string>
    </property>
    <property name="toolTip">
     <string>Load a saved chirp correction curve from file</string>
+   </property>
+  </action>
+  <action name="actionEmbedProbeCalH5">
+   <property name="text">
+    <string>Include &amp;CalibratedProbe.csv in .h5 Dataset...</string>
+   </property>
+   <property name="toolTip">
+    <string>Embed CalibratedProbe.csv spectral calibration permanently inside the active .h5 dataset file</string>
    </property>
   </action>
   <action name="actionTwoDGaussianFit">

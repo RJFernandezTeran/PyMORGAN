@@ -92,6 +92,7 @@ _ACTION_ICONS = {
     "actionAbout": "gui.png",
     "actionSendToPyRATE": "pyrate_ta.ico",
     "actionLaunchPyRATE": "pyrate_ta.ico",
+    "actionEmbedProbeCalH5": "save_md.png",
 }
 _ACTION_ICONS_DARK = {
     "actionOpen": "upload_md_dark.png",
@@ -107,6 +108,7 @@ _ACTION_ICONS_DARK = {
     "actionAbout": "gui.png",
     "actionSendToPyRATE": "pyrate_ta.ico",
     "actionLaunchPyRATE": "pyrate_ta.ico",
+    "actionEmbedProbeCalH5": "save_md_dark.png",
 }
 
 
@@ -1533,6 +1535,7 @@ class MainWindow(
             "actionShiftT0": self._shift_t0,
             "actionFitChirp": self._fit_chirp,
             "actionLoadChirpCorr": self._load_chirp_corr,
+            "actionEmbedProbeCalH5": self._embed_calibrated_probe_in_h5,
             "actionSubtractShockwave": self._subtract_shockwave,
             "actionTimeDerivative": self._calculate_time_derivative,
             "actionStitchWavelength": self._stitch_wavelength,
@@ -1831,6 +1834,28 @@ class MainWindow(
         except Exception as exc:
             QMessageBox.warning(self, "Export failed", str(exc))
 
+    def _update_embed_cal_h5_action_state(self):
+        """Enable the embed-calibration action only when an .h5 dataset is active."""
+        act = getattr(self, "actionEmbedProbeCalH5", None)
+        if act is None:
+            return
+        tabs = getattr(self, "MainTabs", None)
+        index = tabs.currentIndex() if tabs is not None else 0
+        if index == 0:
+            path = getattr(self, "_current_path", None) or ""
+            enabled = getattr(self, "dataset", None) is not None and Path(path).suffix.lower() in (
+                ".h5",
+                ".hdf5",
+            )
+        elif index == 1:
+            path = getattr(self, "_twoD_current_path", None) or ""
+            enabled = getattr(self, "twoD_dataset", None) is not None and Path(
+                path
+            ).suffix.lower() in (".h5", ".hdf5")
+        else:
+            enabled = False
+        act.setEnabled(bool(enabled))
+
     def _on_main_tabs_changed(self, index: int):
         """Enable / disable actions and menus based on current tab index."""
         act_1d = getattr(self, "actionExportPDAT", None)
@@ -1856,6 +1881,8 @@ class MainWindow(
             act = getattr(self, act_name, None)
             if act is not None:
                 act.setEnabled(has_1d_ds)
+
+        self._update_embed_cal_h5_action_state()
 
         menu_aniso = getattr(self, "_aniso_menu", None)
         if menu_aniso is not None:

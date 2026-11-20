@@ -138,6 +138,8 @@ class TwoDTabMixin:
             # Clear other plot
             if hasattr(self, "_twoD_update_other_plot"):
                 self._twoD_update_other_plot()
+            if hasattr(self, "_update_embed_cal_h5_action_state"):
+                self._update_embed_cal_h5_action_state()
             return
         finally:
             if progress is not None:
@@ -202,6 +204,8 @@ class TwoDTabMixin:
 
         self._set_twoD_dataset_widgets_visible(True)
         self._update_twoD_single_scan_controls()
+        if hasattr(self, "_update_embed_cal_h5_action_state"):
+            self._update_embed_cal_h5_action_state()
 
     def _update_twoD_single_scan_controls(self):
         """Show/hide and configure the 2D single-scan exploration controls."""

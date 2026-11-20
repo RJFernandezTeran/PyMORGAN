@@ -404,6 +404,36 @@ def export_pdat(
     return exported
 
 
+def _json_safe_value(val: Any) -> tuple[bool, Any]:
+    """Recursively convert JSON-safe values and drop non-serializable arrays."""
+    if val is None or isinstance(val, (str, int, float, bool)):
+        return True, val
+    if isinstance(val, np.generic):
+        return True, val.item()
+    if isinstance(val, (list, tuple)):
+        items = []
+        for item in val:
+            ok, clean = _json_safe_value(item)
+            if not ok:
+                return False, None
+            items.append(clean)
+        return True, items
+    if isinstance(val, dict):
+        out: dict[str, Any] = {}
+        for dk, dv in val.items():
+            ok, clean = _json_safe_value(dv)
+            if ok:
+                out[str(dk)] = clean
+        return True, out
+    return False, None
+
+
+def _json_safe_units(mapping: dict[str, Any]) -> dict[str, Any]:
+    """Filter a units dictionary so nested dicts containing ndarrays never break json.dumps."""
+    _, cleaned = _json_safe_value(dict(mapping))
+    return cleaned if isinstance(cleaned, dict) else {}
+
+
 def save_1D_hdf5(dataset, path: str | PathLike) -> Path:
     """Save a :class:`pymorgan.oneD.Dataset1D` instance to a self-contained HDF5 file."""
     import json
@@ -436,11 +466,7 @@ def save_1D_hdf5(dataset, path: str | PathLike) -> Path:
         f.attrs["source"] = str(dataset.source or "")
         f.attrs["format_version"] = "1.0"
 
-        units_serializable = {
-            k: v
-            for k, v in dataset.units.items()
-            if isinstance(v, (str, int, float, bool, list, dict))
-        }
+        units_serializable = _json_safe_units(dataset.units)
         f.attrs["units_json"] = json.dumps(units_serializable)
         if getattr(dataset, "mask_ranges", None):
             f.attrs["mask_ranges_json"] = json.dumps(dataset.mask_ranges)
@@ -458,7 +484,9 @@ def read_1D_hdf5(path: str | PathLike) -> LoaderResult:
     p = Path(path)
     with h5py.File(p, "r") as f:
         # Auto-delegate if this is a PyMESS acquisition file opened via HDF5 loader
-        if "delays" not in f and "data" in f and "data/delays_fs" in f:
+        if "delays" not in f and "data" in f and (
+            "data/delays_fs" in f or classify_pymess_h5(p) in ("pump_probe", "shaper_t2_scan")
+        ):
             return read_PyMESS_PP(str(p))
 
         delays = np.asarray(f["delays"][:], dtype=float)
@@ -2099,22 +2127,180 @@ def classify_pymess_h5(filepath: str | Path) -> str:
         return "other"
 
 
-def _resolve_pymess_omega3_axis(
-    f: h5py.File, path: Path, n_pix: int
-) -> tuple[np.ndarray, str]:
-    """Resolve the probe spectral axis (omega3 / wavelengths) for a PyMESS HDF5 file.
+def _load_calibrated_probe_csv_array(
+    csv_path: Path, n_pix: int | None = None
+) -> np.ndarray | None:
+    """Parse a ``CalibratedProbe.csv`` vector (1D or 2-column ``[pixel, value]``).
 
-    Returns ``(probe_axis, source_kind)`` where ``source_kind`` is one of
-    ``'dataset'``, ``'sibling'``, ``'csv'``, or ``'pixel'``.
+    Returns a finite 1D ``float64`` array (matching ``n_pix`` when given), or
+    ``None`` if parsing fails or the length mismatches.
     """
-    for ds_key in ("data/omega3_axis", "data/wavelengths", "2D_Spectra/scan_001/omega3_axis_cm1"):
-        if ds_key in f:
-            arr = np.asarray(f[ds_key], dtype=np.float64).squeeze()
-            if arr.ndim == 1 and arr.size == n_pix and not np.all(np.isnan(arr)):
-                return arr, "dataset"
+    raw: np.ndarray | None = None
+    for skip in (0, 1):
+        for delim in (",", None):
+            try:
+                raw = np.loadtxt(csv_path, delimiter=delim, dtype=np.float64, skiprows=skip)
+                break
+            except Exception:
+                continue
+        if raw is not None:
+            break
+    if raw is None:
+        return None
 
-    # Fallback 1: check sibling .h5 files in the same folder (useful when a scan was stopped early
-    # before PyMESS wrote omega3_axis)
+    arr = np.asarray(raw, dtype=np.float64)
+    if arr.ndim == 2 and arr.shape[1] == 2:
+        if (n_pix is not None and arr.shape[0] == n_pix) or (n_pix is None and arr.shape[0] > 2):
+            arr = arr[:, 1]
+    arr = arr.ravel()
+    if arr.size == 0 or not bool(np.all(np.isfinite(arr))):
+        return None
+    if n_pix is not None and arr.size != n_pix:
+        return None
+    return arr
+
+
+def find_pymess_calibrated_probe_csv(
+    path: str | PathLike, n_pix: int
+) -> tuple[np.ndarray, Path, str, str] | None:
+    """Locate a matching ``CalibratedProbe.csv`` for a PyMESS dataset file or folder.
+
+    Returns ``(probe_array, csv_path, location_label, cal_level)`` in priority
+    order (data folder -> calib -> Cal+Chirp -> root folder -> parent calib ->
+    parent Cal+Chirp), or ``None`` if no matching file exists.
+    """
+    p = Path(path)
+    folder = p.parent if (p.is_file() or p.suffix.lower() in (".h5", ".hdf5")) else p
+    if not folder.is_dir():
+        return None
+
+    csv_candidates = [
+        (folder / "CalibratedProbe.csv", "data folder", "datadir"),
+        (folder / "calib" / "CalibratedProbe.csv", "calib folder", "datadir"),
+        (folder / "Cal+Chirp" / "CalibratedProbe.csv", "Cal+Chirp folder", "datadir"),
+        (folder.parent / "CalibratedProbe.csv", "root folder", "rootdir"),
+        (folder.parent / "calib" / "CalibratedProbe.csv", "parent calib folder", "rootdir"),
+        (folder.parent / "Cal+Chirp" / "CalibratedProbe.csv", "Cal+Chirp folder", "rootdir"),
+    ]
+    for cand, loc_label, cal_level in csv_candidates:
+        if cand.is_file():
+            arr = _load_calibrated_probe_csv_array(cand, n_pix=n_pix)
+            if arr is not None:
+                return arr, cand, loc_label, cal_level
+    return None
+
+
+def _is_physical_probe_axis(axis: np.ndarray | None) -> bool:
+    """Return True when ``axis`` holds physical nm/cm-1 values rather than pixel indices."""
+    if axis is None:
+        return False
+    arr = np.asarray(axis, dtype=np.float64).ravel()
+    if arr.size < 2 or not bool(np.all(np.isfinite(arr))):
+        return False
+    diffs = np.diff(arr)
+    if float(np.min(arr)) <= 2.0 and np.allclose(np.abs(diffs), 1.0, atol=5e-2):
+        return False
+    if float(np.min(arr)) < 100.0:
+        return False
+    return True
+
+
+def _detect_pymess_probe_units(
+    probe: np.ndarray, meta_dict: dict[str, str] | None = None
+) -> tuple[str, str]:
+    """Detect ``(unitsL, display_L)`` for a PyMESS probe axis."""
+    arr = np.asarray(probe, dtype=np.float64).ravel()
+    if arr.size == 0 or not _is_physical_probe_axis(arr):
+        return "px", "px"
+
+    probe_mean = float(np.nanmean(arr))
+    if meta_dict and probe_mean <= 2000.0:
+        cwn_str = str(meta_dict.get("spectrometer_cwn_cm1", "")).strip()
+        cwl_str = str(meta_dict.get("spectrometer_cwl_nm", "")).strip()
+        try:
+            cwl_nm = float(cwl_str) if cwl_str else 0.0
+        except (ValueError, TypeError):
+            cwl_nm = 0.0
+        if 850.0 <= cwl_nm <= 2000.0 and not cwn_str:
+            return "nm", "nm"
+        setup_str = f"{meta_dict.get('setup_id', '')} {meta_dict.get('setup_name', '')}".lower()
+        if "nir" in setup_str:
+            return "nm", "nm"
+
+    if probe_mean > 1200.0:
+        return "cm^{-1}", "cm-1"
+    return "nm", "nm"
+
+
+def _format_pymess_cal_source(
+    cal_kind: str, cal_loc: str | None, display_L: str, unitsL: str
+) -> str:
+    """Build a human-readable calibration source string for PyMESS datasets."""
+    if cal_kind == "csv":
+        return f"CalibratedProbe.csv ({cal_loc})"
+    if unitsL == "px" or cal_kind == "pixel":
+        return "Uncalibrated pixel indices"
+    if cal_kind == "embedded_csv":
+        return f"Embedded CalibratedProbe.csv ({display_L})"
+    if cal_kind == "dataset":
+        return f"PyMESS spectral calibration ({display_L})"
+    if cal_kind == "sibling":
+        return f"PyMESS sibling HDF5 calibration ({display_L})"
+    return "Uncalibrated pixel indices"
+
+
+def _resolve_pymess_probe_axis(
+    f: h5py.File,
+    path: Path,
+    n_pix: int,
+    *,
+    prefer_omega3: bool = False,
+    default_zero_based: bool = False,
+) -> tuple[np.ndarray, str, str | None, str | None]:
+    """Resolve the probe spectral axis for any PyMESS HDF5 file.
+
+    Priority order:
+    1. External ``CalibratedProbe.csv`` (data folder -> calib -> Cal+Chirp -> parent dirs).
+    2. Internal physical spectral axis dataset inside the ``.h5`` file.
+    3. Sibling ``.h5`` file in the same directory with a valid physical axis.
+    4. Uncalibrated pixel indices fallback.
+
+    Returns ``(probe_axis, source_kind, cal_loc, cal_level)`` where ``source_kind``
+    is one of ``'csv'``, ``'embedded_csv'``, ``'dataset'``, ``'sibling'``, or ``'pixel'``.
+    """
+    csv_match = find_pymess_calibrated_probe_csv(path, n_pix)
+    if csv_match is not None:
+        arr, _csv_path, loc_label, cal_level = csv_match
+        return arr, "csv", loc_label, cal_level
+
+    keys = (
+        ("data/omega3_axis", "data/wavelengths", "2D_Spectra/scan_001/omega3_axis_cm1")
+        if prefer_omega3
+        else ("data/wavelengths", "data/omega3_axis", "2D_Spectra/scan_001/omega3_axis_cm1")
+    )
+    raw_uncal: np.ndarray | None = None
+    meta_cal_src = (
+        _pymess_attr_str(f["metadata"].attrs.get("probe_calibration_source", ""))
+        if "metadata" in f
+        else ""
+    )
+    for ds_key in keys:
+        if ds_key in f:
+            try:
+                arr = np.asarray(f[ds_key], dtype=np.float64).squeeze()
+                if arr.ndim == 1 and arr.size == n_pix and not np.all(np.isnan(arr)):
+                    if _is_physical_probe_axis(arr):
+                        ds_cal_src = _pymess_attr_str(f[ds_key].attrs.get("calibration_source", ""))
+                        is_embedded = (
+                            meta_cal_src == "CalibratedProbe.csv"
+                            or ds_cal_src == "CalibratedProbe.csv"
+                        )
+                        return arr, ("embedded_csv" if is_embedded else "dataset"), None, None
+                    if raw_uncal is None:
+                        raw_uncal = arr
+            except Exception:
+                continue
+
     if path.parent.is_dir():
         try:
             for sib in sorted(path.parent.glob("*.h5")):
@@ -2125,30 +2311,279 @@ def _resolve_pymess_omega3_axis(
                         for ds_key in ("data/omega3_axis", "data/wavelengths"):
                             if ds_key in sf:
                                 arr = np.asarray(sf[ds_key], dtype=np.float64).squeeze()
-                                if arr.ndim == 1 and arr.size == n_pix and not np.all(np.isnan(arr)):
-                                    return arr, "sibling"
+                                if (
+                                    arr.ndim == 1
+                                    and arr.size == n_pix
+                                    and not np.all(np.isnan(arr))
+                                    and _is_physical_probe_axis(arr)
+                                ):
+                                    return arr, "sibling", None, None
                 except Exception:
                     continue
         except Exception:
             pass
 
-    # Fallback 2: check CalibratedProbe.csv in current, parent, or Cal+Chirp directory
-    if path.parent.is_dir():
-        csv_candidates = [
-            path.parent / "CalibratedProbe.csv",
-            path.parent.parent / "CalibratedProbe.csv",
-            path.parent.parent / "Cal+Chirp" / "CalibratedProbe.csv",
-        ]
-        for cand in csv_candidates:
-            if cand.is_file():
-                try:
-                    arr = np.loadtxt(cand, delimiter=",").ravel().astype(np.float64)
-                    if arr.size == n_pix and not np.all(np.isnan(arr)):
-                        return arr, "csv"
-                except Exception:
-                    continue
+    if raw_uncal is not None:
+        return raw_uncal, "pixel", None, None
+    start = 0 if default_zero_based else 1
+    return np.arange(start, start + n_pix, dtype=np.float64), "pixel", None, None
 
-    return np.arange(1, n_pix + 1, dtype=np.float64), "pixel"
+
+def _resolve_pymess_omega3_axis(
+    f: h5py.File, path: Path, n_pix: int
+) -> tuple[np.ndarray, str]:
+    """Resolve the probe spectral axis (omega3 / wavelengths) for a PyMESS HDF5 file.
+
+    Returns ``(probe_axis, source_kind)`` where ``source_kind`` is one of
+    ``'csv'``, ``'dataset'``, ``'sibling'``, or ``'pixel'``.
+    """
+    probe, kind, _loc, _lvl = _resolve_pymess_probe_axis(
+        f, path, n_pix, prefer_omega3=True, default_zero_based=False
+    )
+    return probe, ("dataset" if kind == "embedded_csv" else kind)
+
+
+def _infer_pymess_h5_npixels(f: h5py.File) -> int:
+    """Infer the probe detector pixel count from an open PyMESS or PyMORGAN HDF5 file."""
+    if "delays" in f and "probe" in f and "data" not in f:
+        if "Zavg_R" in f and isinstance(f["Zavg_R"], h5py.Dataset) and f["Zavg_R"].ndim >= 2:
+            return int(f["Zavg_R"].shape[1])
+        return int(f["probe"].size)
+
+    if "data" in f and isinstance(f["data"], h5py.Group):
+        dgrp = f["data"]
+        for key in (
+            "delta_A",
+            "intensity",
+            "interferograms_raw",
+            "surface_absorptive",
+            "interferograms_cube",
+            "surface_absorptive_cube",
+            "individual_scans",
+            "probe_shots",
+            "probe_spectrum",
+        ):
+            if key in dgrp and isinstance(dgrp[key], h5py.Dataset):
+                ds = dgrp[key]
+                if ds.ndim >= 2 and ds.shape[-1] > 1:
+                    return int(ds.shape[-1])
+                if ds.ndim == 1 and ds.size > 1:
+                    return int(ds.size)
+
+        if "slow_modulation" in dgrp and isinstance(dgrp["slow_modulation"], h5py.Group):
+            sm_grp = dgrp["slow_modulation"]
+            for key in sorted(sm_grp.keys()):
+                ds = sm_grp[key]
+                if isinstance(ds, h5py.Dataset) and ds.ndim >= 2 and ds.shape[-1] > 1:
+                    return int(ds.shape[-1])
+
+        if "signals" in dgrp and isinstance(dgrp["signals"], h5py.Group):
+            sig_grp = dgrp["signals"]
+            for key in sorted(sig_grp.keys()):
+                ds = sig_grp[key]
+                if isinstance(ds, h5py.Dataset) and ds.ndim >= 2 and ds.shape[-1] > 1:
+                    return int(ds.shape[-1])
+
+    for grp_name in ("scans", "2D_Spectra"):
+        if grp_name in f and isinstance(f[grp_name], h5py.Group):
+            grp = f[grp_name]
+            for sk in sorted(grp.keys()):
+                sgrp = grp[sk]
+                if isinstance(sgrp, h5py.Group):
+                    for key in ("interferograms_raw", "interferogram", "surface_absorptive"):
+                        if key in sgrp and isinstance(sgrp[key], h5py.Dataset):
+                            ds = sgrp[key]
+                            if ds.ndim >= 2 and ds.shape[-1] > 1:
+                                return int(ds.shape[-1])
+
+    for axis_key in ("data/wavelengths", "data/omega3_axis", "2D_Spectra/scan_001/omega3_axis_cm1"):
+        if axis_key in f and isinstance(f[axis_key], h5py.Dataset):
+            ds = f[axis_key]
+            if ds.ndim >= 1 and ds.size > 1:
+                return int(ds.size)
+
+    raise ValueError("Could not determine the probe pixel count from the HDF5 file.")
+
+
+def embed_calibrated_probe_h5(
+    h5_path: str | PathLike,
+    csv_path: str | PathLike | None = None,
+    *,
+    backup_original: bool = True,
+) -> dict[str, Any]:
+    """Permanently embed a ``CalibratedProbe.csv`` probe axis inside an ``.h5`` dataset file.
+
+    Supports PyMESS 1D (``pump_probe``, ``shaper_t2_scan``), PyMESS 2D (time-domain
+    and frequency-domain), PyMESS calibration HDF5 files, and PyMORGAN native 1D
+    HDF5 archives.
+    """
+    import json
+    from datetime import datetime
+
+    p = Path(h5_path)
+    if not p.is_file():
+        raise FileNotFoundError(f"HDF5 file not found: {h5_path}")
+    if not h5py.is_hdf5(p):
+        raise ValueError(f"File is not a valid HDF5 archive: {p.name}")
+
+    subtype = classify_pymess_h5(p)
+    with h5py.File(p, "r") as f_ro:
+        is_native_pymorgan = "delays" in f_ro and "probe" in f_ro and "data" not in f_ro
+        n_pix = _infer_pymess_h5_npixels(f_ro)
+        meta_dict = (
+            {str(k): _pymess_attr_str(v) for k, v in f_ro["metadata"].attrs.items()}
+            if "metadata" in f_ro
+            else {}
+        )
+
+    if csv_path is not None:
+        resolved_csv = Path(csv_path)
+        if not resolved_csv.is_file():
+            raise FileNotFoundError(f"Calibration CSV file not found: {csv_path}")
+        probe_arr = _load_calibrated_probe_csv_array(resolved_csv, n_pix=n_pix)
+        if probe_arr is None:
+            raw_arr = _load_calibrated_probe_csv_array(resolved_csv, n_pix=None)
+            if raw_arr is None:
+                raise ValueError(
+                    f"Could not parse numeric calibration values from {resolved_csv.name}."
+                )
+            raise ValueError(
+                f"Calibration length mismatch: {resolved_csv.name} has {raw_arr.size} values, "
+                f"expected {n_pix} pixels for {p.name}."
+            )
+    else:
+        csv_match = find_pymess_calibrated_probe_csv(p, n_pix)
+        if csv_match is None:
+            folder = p.parent
+            cand_paths = [
+                folder / "CalibratedProbe.csv",
+                folder / "calib" / "CalibratedProbe.csv",
+                folder / "Cal+Chirp" / "CalibratedProbe.csv",
+                folder.parent / "CalibratedProbe.csv",
+                folder.parent / "calib" / "CalibratedProbe.csv",
+                folder.parent / "Cal+Chirp" / "CalibratedProbe.csv",
+            ]
+            for cand in cand_paths:
+                if cand.is_file():
+                    raw_arr = _load_calibrated_probe_csv_array(cand, n_pix=None)
+                    if raw_arr is not None:
+                        raise ValueError(
+                            f"Found {cand} with {raw_arr.size} values, "
+                            f"but {p.name} has {n_pix} pixels."
+                        )
+            raise FileNotFoundError(
+                f"No CalibratedProbe.csv found for {p.name} (expected {n_pix} pixels)."
+            )
+        probe_arr, resolved_csv, _loc_label, _cal_level = csv_match
+
+    unitsL, display_L = _detect_pymess_probe_units(probe_arr, meta_dict)
+    cal_source = f"Embedded CalibratedProbe.csv ({display_L})"
+    updated_keys: list[str] = []
+
+    with h5py.File(p, "r+") as f:
+        if is_native_pymorgan:
+            if backup_original and "original_probe" not in f and "probe" in f:
+                orig = np.asarray(f["probe"][:], dtype=np.float64)
+                f.create_dataset("original_probe", data=orig, dtype=np.float64)
+
+            if "probe" in f and isinstance(f["probe"], h5py.Dataset):
+                if f["probe"].shape == probe_arr.shape and f["probe"].dtype == np.float64:
+                    f["probe"][:] = probe_arr
+                else:
+                    del f["probe"]
+                    f.create_dataset("probe", data=probe_arr, dtype=np.float64)
+            else:
+                f.create_dataset("probe", data=probe_arr, dtype=np.float64)
+            updated_keys.append("probe")
+
+            try:
+                cur_units = json.loads(f.attrs.get("units_json", "{}"))
+            except Exception:
+                cur_units = {}
+            cur_T = cur_units.get("T") or cur_units.get("unitsT_ltx", "ps")
+            cur_Z = cur_units.get("Z") or cur_units.get("unitsZ", "x1E3")
+            cur_units.update(hlp.units2dic(unitsL, cur_T, cur_Z))
+            cur_units["cal_source"] = cal_source
+            cur_units.pop("cal_level", None)
+            serializable = _json_safe_units(cur_units)
+            f.attrs["units_json"] = json.dumps(serializable)
+            f.flush()
+        else:
+            is_2d_or_shaper_t2 = (
+                subtype in ("shaper_t2_scan", "2d_time_domain", "2d_freq_domain")
+                or ("data/omega3_axis" in f and "data/delays_fs" not in f)
+                or "2D_Spectra" in f
+            )
+            target_keys: list[str] = []
+            if is_2d_or_shaper_t2:
+                target_keys.append("data/omega3_axis")
+                if "data/wavelengths" in f:
+                    target_keys.append("data/wavelengths")
+                if "2D_Spectra" in f and isinstance(f["2D_Spectra"], h5py.Group):
+                    for sk in sorted(f["2D_Spectra"].keys()):
+                        sub_k = f"2D_Spectra/{sk}/omega3_axis_cm1"
+                        if sub_k in f:
+                            target_keys.append(sub_k)
+            else:
+                target_keys.append("data/wavelengths")
+                if "data/omega3_axis" in f:
+                    target_keys.append("data/omega3_axis")
+
+            if backup_original:
+                cal_grp = f.require_group("calibration")
+                if "original_probe_axis" not in cal_grp:
+                    for cand_k in target_keys:
+                        if cand_k in f and isinstance(f[cand_k], h5py.Dataset):
+                            orig = np.asarray(f[cand_k][()], dtype=np.float64).squeeze()
+                            if orig.ndim == 1 and orig.size == n_pix and not np.all(np.isnan(orig)):
+                                cal_grp.create_dataset(
+                                    "original_probe_axis", data=orig, dtype=np.float64
+                                )
+                                break
+
+            f.require_group("data")
+            for key in target_keys:
+                if key in f and isinstance(f[key], h5py.Dataset):
+                    ds = f[key]
+                    if ds.shape == probe_arr.shape and ds.dtype == np.float64:
+                        ds[:] = probe_arr
+                    else:
+                        old_attrs = dict(ds.attrs)
+                        del f[key]
+                        ds = f.create_dataset(key, data=probe_arr, dtype=np.float64)
+                        for ak, av in old_attrs.items():
+                            try:
+                                ds.attrs[ak] = av
+                            except Exception:
+                                pass
+                else:
+                    if key in f:
+                        del f[key]
+                    ds = f.create_dataset(key, data=probe_arr, dtype=np.float64)
+
+                ds.attrs["units"] = display_L
+                ds.attrs["calibration_source"] = "CalibratedProbe.csv"
+                ds.attrs["calibration_file"] = resolved_csv.name
+                updated_keys.append(key)
+
+            meta_grp = f.require_group("metadata")
+            meta_grp.attrs["probe_calibration_source"] = "CalibratedProbe.csv"
+            meta_grp.attrs["probe_calibration_file"] = resolved_csv.name
+            meta_grp.attrs["probe_calibration_unit"] = display_L
+            meta_grp.attrs["probe_calibration_embedded_at"] = datetime.now().isoformat(
+                timespec="seconds"
+            )
+            f.flush()
+
+    return {
+        "h5_path": p,
+        "csv_path": resolved_csv,
+        "probe": probe_arr,
+        "unitsL": unitsL,
+        "display_unit": display_L,
+        "cal_source": cal_source,
+        "datasets_updated": updated_keys,
+    }
 
 
 @register_dataset_file_filter("PyMESS_PP")
@@ -2514,28 +2949,15 @@ def _read_pymess_shaper_t2_scan(
             Zstdv = np.zeros_like(Zavg_R)
 
     n_pix = Zavg_R.shape[1]
-    probe, cal_kind = _resolve_pymess_omega3_axis(f, path, n_pix)
-
-    probe_mean = float(np.nanmean(probe)) if probe.size > 0 else 0.0
-    if probe_mean > 1200.0:
-        unitsL = "cm^{-1}"
-        display_L = "cm-1"
-    elif probe_mean > 100.0:
-        unitsL = "nm"
-        display_L = "nm"
-    else:
-        unitsL = "px"
-        display_L = "px"
+    probe, cal_kind, cal_loc, cal_level = _resolve_pymess_probe_axis(
+        f, path, n_pix, prefer_omega3=True, default_zero_based=False
+    )
+    unitsL, display_L = _detect_pymess_probe_units(probe, meta_dict)
 
     Units = hlp.units2dic(unitsL, unitsT, "x1E3")
-    if cal_kind == "dataset" and unitsL != "px":
-        Units["cal_source"] = f"PyMESS spectral calibration ({display_L})"
-    elif cal_kind == "sibling":
-        Units["cal_source"] = f"PyMESS sibling HDF5 calibration ({display_L})"
-    elif cal_kind == "csv":
-        Units["cal_source"] = f"CalibratedProbe.csv ({display_L})"
-    else:
-        Units["cal_source"] = "Uncalibrated pixel indices"
+    Units["cal_source"] = _format_pymess_cal_source(cal_kind, cal_loc, display_L, unitsL)
+    if cal_level is not None:
+        Units["cal_level"] = cal_level
 
     if is_slow_mod and k_slow > 1:
         if state_names and len(state_names) == k_slow:
@@ -2573,7 +2995,11 @@ def _read_pymess_shaper_t2_scan(
     if "calibration" in f:
         calib_dict = {}
         for k in f["calibration"].keys():
-            calib_dict[k] = np.asarray(f["calibration"][k][:], dtype=np.float64)
+            if isinstance(f["calibration"][k], h5py.Dataset):
+                try:
+                    calib_dict[k] = np.asarray(f["calibration"][k][:], dtype=np.float64)
+                except Exception:
+                    pass
         Units["pymess_calibration"] = calib_dict
 
     info_lines = ["Mode: Shaper t2 Scan (2D tab)"]
@@ -2672,33 +3098,7 @@ def read_PyMESS_PP(
         delays = raw_delays / 1000.0
         unitsT = "ps"
 
-        # 2. Probe / Spectral Axis
-        if "data/wavelengths" in f:
-            probe = np.asarray(f["data/wavelengths"][:], dtype=np.float64)
-        else:
-            if "data/delta_A" in f:
-                n_pix = f["data/delta_A"].shape[1]
-            elif "data/intensity" in f:
-                n_pix = f["data/intensity"].shape[1]
-            elif "data/individual_scans" in f:
-                n_pix = f["data/individual_scans"].shape[2]
-            else:
-                n_pix = 0
-            probe = np.arange(n_pix, dtype=np.float64)
-
-        # Detect wavelength vs wavenumber units
-        probe_mean = float(np.nanmean(probe)) if probe.size > 0 else 0.0
-        if probe_mean > 1200.0:
-            unitsL = "cm^{-1}"
-            display_L = "cm-1"
-        elif probe_mean > 100.0:
-            unitsL = "nm"
-            display_L = "nm"
-        else:
-            unitsL = "px"
-            display_L = "px"
-
-        # 3. Check for Slow Modulation
+        # 2. Check for Slow Modulation & extract signal matrices
         meta_dict = {}
         if "metadata" in f:
             for k, v in f["metadata"].attrs.items():
@@ -2904,13 +3304,17 @@ def read_PyMESS_PP(
                 Nscans = 1
                 Zss_R = Zavg_R[:, :, :, np.newaxis]
 
-        # 4. Units Dictionary
-        Units = hlp.units2dic(unitsL, unitsT, "x1E3")
-        Units["cal_source"] = (
-            f"PyMESS spectral calibration ({display_L})"
-            if unitsL != "px"
-            else "Uncalibrated pixel indices"
+        # 3. Resolve Probe / Spectral Axis & Units Dictionary
+        n_pix = int(Zavg_R.shape[1])
+        probe, cal_kind, cal_loc, cal_level = _resolve_pymess_probe_axis(
+            f, path, n_pix, prefer_omega3=False, default_zero_based=True
         )
+        unitsL, display_L = _detect_pymess_probe_units(probe, meta_dict)
+
+        Units = hlp.units2dic(unitsL, unitsT, "x1E3")
+        Units["cal_source"] = _format_pymess_cal_source(cal_kind, cal_loc, display_L, unitsL)
+        if cal_level is not None:
+            Units["cal_level"] = cal_level
         if is_slow_mod and k_slow > 1:
             if state_names and len(state_names) == k_slow:
                 Units["detectors"] = state_names
@@ -2943,7 +3347,11 @@ def read_PyMESS_PP(
         if "calibration" in f:
             calib_dict = {}
             for k in f["calibration"].keys():
-                calib_dict[k] = np.asarray(f["calibration"][k][:], dtype=np.float64)
+                if isinstance(f["calibration"][k], h5py.Dataset):
+                    try:
+                        calib_dict[k] = np.asarray(f["calibration"][k][()], dtype=np.float64)
+                    except Exception:
+                        pass
             Units["pymess_calibration"] = calib_dict
 
         # 7. Format a human-readable sample info summary
@@ -3025,6 +3433,8 @@ def load_pymess_anisotropy(
             par_idx, perp_idx = 0, 1
 
         # Check if pre-calculated surfaces exist in data/slow_modulation
+        cal_source_resolved: str | None = None
+        cal_level_resolved: str | None = None
         if (
             "data/slow_modulation/delta_A_parallel" in f
             and "data/slow_modulation/delta_A_perpendicular" in f
@@ -3034,18 +3444,11 @@ def load_pymess_anisotropy(
             d_perp = np.asarray(f["data/slow_modulation/delta_A_perpendicular"][:], dtype=np.float64)
             raw_delays = np.asarray(f["data/delays_fs"][:], dtype=np.float64)
             delays = raw_delays / 1000.0
-            probe = (
-                np.asarray(f["data/wavelengths"][:], dtype=np.float64)
-                if "data/wavelengths" in f
-                else np.arange(d_par.shape[1], dtype=np.float64)
+            probe, cal_kind, cal_loc, cal_level_resolved = _resolve_pymess_probe_axis(
+                f, path, d_par.shape[1], prefer_omega3=False, default_zero_based=True
             )
-            probe_mean = float(np.nanmean(probe)) if probe.size > 0 else 0.0
-            if probe_mean > 1200.0:
-                unitsL = "cm^{-1}"
-            elif probe_mean > 100.0:
-                unitsL = "nm"
-            else:
-                unitsL = "px"
+            unitsL, display_L = _detect_pymess_probe_units(probe, meta)
+            cal_source_resolved = _format_pymess_cal_source(cal_kind, cal_loc, display_L, unitsL)
 
             d_iso = np.asarray(f["data/slow_modulation/isotropic"][:], dtype=np.float64)
             aniso = np.asarray(f["data/slow_modulation/anisotropy"][:], dtype=np.float64)
@@ -3068,6 +3471,8 @@ def load_pymess_anisotropy(
                 unitsL = "nm"
             elif unitsL == "Pixel":
                 unitsL = "px"
+            cal_source_resolved = Units.get("cal_source")
+            cal_level_resolved = Units.get("cal_level")
 
             # Calculate Isotropic: (Par + 2 * G * Perp) / 3
             d_iso = (d_par + 2.0 * G_factor * d_perp) / 3.0
@@ -3083,7 +3488,9 @@ def load_pymess_anisotropy(
 
     def _make_ds(data_2d: np.ndarray, name: str, unit_z: str = "x1E3") -> Dataset1D:
         u = hlp.units2dic(unitsL, "ps", unit_z)
-        u["cal_source"] = f"PyMESS {name}"
+        u["cal_source"] = cal_source_resolved or f"PyMESS {name}"
+        if cal_level_resolved is not None:
+            u["cal_level"] = cal_level_resolved
         u["sample"] = str(meta.get("sample_id", "Unknown"))
         z_3d = data_2d[:, :, np.newaxis]
         z_ss = z_3d[:, :, :, np.newaxis]
