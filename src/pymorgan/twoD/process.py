@@ -203,21 +203,26 @@ def process(
             if dataset.raw_signal is not None
             else np.asarray(dataset.Z_R, dtype=float).copy()
         )
-        if dataset.raw_t1delays is not None and len(dataset.raw_t1delays) == proc_2d.shape[0]:
-            dataset.pump = np.asarray(dataset.raw_t1delays, dtype=float).copy()
+        new_pump = (
+            np.asarray(dataset.raw_t1delays, dtype=float).copy()
+            if dataset.raw_t1delays is not None and len(dataset.raw_t1delays) == proc_2d.shape[0]
+            else np.asarray(dataset.pump, dtype=float)
+        )
 
         Npump, Nprobe, Ndelays = proc_2d.shape
+        new_probe = None
+        new_cal_level = None
         if autocalibrate_probe:
             if cal_probe_vector is not None and len(cal_probe_vector) == Nprobe:
-                dataset.probe = np.asarray(cal_probe_vector, dtype=float)
-                dataset.cal_level = "autocalibrated"
-            elif len(dataset.pump) > 2:
+                new_probe = np.asarray(cal_probe_vector, dtype=float)
+                new_cal_level = "autocalibrated"
+            elif len(new_pump) > 2:
                 max_indices = np.argmax(np.abs(proc_2d[:, :, 0]), axis=0)
-                scattering_maxima = dataset.pump[max_indices]
+                scattering_maxima = new_pump[max_indices]
                 pixels = np.arange(1, Nprobe + 1)
                 cal_coeff = robust_polyfit(pixels, scattering_maxima, 2)
-                dataset.probe = np.polyval(cal_coeff, pixels)
-                dataset.cal_level = "autocalibrated"
+                new_probe = np.polyval(cal_coeff, pixels)
+                new_cal_level = "autocalibrated"
 
         if bkg_sub and Ndelays > 1:
             ref = max(0, min(int(bkgIdx), Ndelays - 1))
@@ -226,6 +231,11 @@ def process(
                 if m != ref:
                     proc_2d[:, :, m] = proc_2d[:, :, m] - bkg_data
 
+        dataset.pump = new_pump
+        if new_probe is not None:
+            dataset.probe = new_probe
+        if new_cal_level is not None:
+            dataset.cal_level = new_cal_level
         dataset.Z_R = proc_2d
         dataset.Z_C = None
         dataset._is_corrected = False
@@ -234,356 +244,398 @@ def process(
     if dataset.raw_signal is None or dataset.raw_interferogram is None or dataset.raw_t1delays is None:
         return
 
-    # Snapshot unrotated time-domain arrays once so repeated shot_rotation changes
-    # always rotate relative to the original loaded data (never cumulatively).
+    # Snapshot unrotated time-domain base arrays only when needed so unrotated
+    # datasets share one base copy in memory until shot rotation is requested.
+    prev_rot = int(getattr(dataset, "shot_rotation", 0) or 0)
+    cur_sig = np.asarray(dataset.raw_signal, dtype=float)
+    cur_int = np.asarray(dataset.raw_interferogram, dtype=float)
     base_sig = getattr(dataset, "_base_raw_signal", None)
-    if base_sig is None or base_sig.shape != np.asarray(dataset.raw_signal).shape:
-        base_sig = np.asarray(dataset.raw_signal, dtype=float).copy()
-        dataset._base_raw_signal = base_sig
+    if (
+        base_sig is None
+        or base_sig.shape != cur_sig.shape
+        or (
+            prev_rot == 0
+            and base_sig is not dataset.raw_signal
+            and not np.array_equal(base_sig, cur_sig, equal_nan=True)
+        )
+    ):
+        base_sig = cur_sig
     base_int = getattr(dataset, "_base_raw_interferogram", None)
-    if base_int is None or base_int.shape != np.asarray(dataset.raw_interferogram).shape:
-        base_int = np.asarray(dataset.raw_interferogram, dtype=float).copy()
-        dataset._base_raw_interferogram = base_int
+    if (
+        base_int is None
+        or base_int.shape != cur_int.shape
+        or (
+            prev_rot == 0
+            and base_int is not dataset.raw_interferogram
+            and not np.array_equal(base_int, cur_int, equal_nan=True)
+        )
+    ):
+        base_int = cur_int
 
     rot = int(shot_rotation or 0)
-    dataset.shot_rotation = rot
     if rot != 0:
-        dataset.raw_signal = np.roll(base_sig, rot, axis=0)
-        dataset.raw_interferogram = np.roll(base_int, rot, axis=0)
+        rot_sig = np.roll(base_sig, rot, axis=0)
+        rot_int = np.roll(base_int, rot, axis=0)
     else:
-        dataset.raw_signal = base_sig.copy()
-        dataset.raw_interferogram = base_int.copy()
+        rot_sig = base_sig
+        rot_int = base_int
 
     close_tracker = False
     if progress_tracker is None:
         progress_tracker = ProgressTracker(1, title="Processing 2D Dataset", label="Initializing...")
         close_tracker = True
 
-    raw_signal = np.asarray(dataset.raw_signal, dtype=float)
-    raw_interferogram = np.asarray(dataset.raw_interferogram, dtype=float)
-    raw_t1delays = np.asarray(dataset.raw_t1delays, dtype=float)
+    try:
+        raw_signal = np.asarray(rot_sig, dtype=float)
+        raw_interferogram = np.asarray(rot_int, dtype=float)
+        raw_t1delays = np.asarray(dataset.raw_t1delays, dtype=float)
 
-    Nbins, Nprobe, Ndelays = raw_signal.shape
+        Nbins, Nprobe, Ndelays = raw_signal.shape
 
-    total_steps = Ndelays * 2
-    progress_tracker.set_total(total_steps)
+        total_steps = Ndelays * 2
+        progress_tracker.set_total(total_steps)
 
-    # 1. Baseline Correction / Preprocessing
-    proc_interf = np.zeros((Nbins, Ndelays))
-    proc_signal = np.zeros((Nbins, Nprobe, Ndelays))
+        # 1. Baseline Correction / Preprocessing
+        proc_interf = np.zeros((Nbins, Ndelays))
+        proc_signal = np.zeros((Nbins, Nprobe, Ndelays))
 
-    for m in range(Ndelays):
-        step = m + 1
-        if hasattr(progress_tracker, "update_split"):
-            progress_tracker.update_split(step, total_steps, "processing")
-        else:
-            progress_tracker.update(step, label=f"Processing ({step} of {total_steps})")
-        interf = raw_interferogram[:, m].copy()
-        sig = raw_signal[:, :, m].copy()
-
-        if dataset.datatype == "interferometer":
-            # Median filter
-            interf = -(interf - np.mean(interf))
-            k_size = 101  # filter_points = 10 -> odd 11
-            interf = interf - medfilt(interf, kernel_size=k_size)
-
-            sig = sig - np.mean(sig, axis=0)
-            for w in range(Nprobe):
-                sig[:, w] = sig[:, w] - medfilt(sig[:, w], kernel_size=k_size)
-        else: # shaper
-            # Mean filter
-            sig = sig - np.mean(sig, axis=0)
-
-        proc_interf[:, m] = interf
-        proc_signal[:, :, m] = sig
-
-    # 2. Determine rotating frame parameters w0 and dt1 for shaper
-    if dataset.datatype == "shaper":
-        if w0 is None or dt1 is None:
-            w0_csv = None
-            if dataset.source:
-                folder_path = Path(dataset.source)
-                cands = (
-                    [folder_path / "w0.csv", folder_path.parent / "w0.csv"]
-                    if folder_path.is_dir()
-                    else [folder_path.parent / "w0.csv"]
-                )
-                for path in cands:
-                    if path.exists():
-                        try:
-                            vals = np.loadtxt(path)
-                            if vals.size >= 2:
-                                w0_csv = (float(vals[0]), float(vals[1]))
-                                break
-                        except Exception:
-                            logger.debug(
-                                "Could not read the rotating-frame frequency from %s.",
-                                path, exc_info=True
-                            )
-            if w0_csv is not None:
-                w0_val, dt1_val = w0_csv
-            else:
-                w0_val = float(getattr(dataset, "w0_cm1", 0.0) or 0.0)
-                dt1_val = float(getattr(dataset, "dt1_fs", 0.0) or 0.0)
-                if dt1_val <= 0.0:
-                    dt1_val = float(np.nanmean(np.abs(np.diff(raw_t1delays)))) if len(raw_t1delays) > 1 else 1.0
-
-            w0 = w0_val if w0 is None else w0
-            dt1 = dt1_val if dt1 is None else dt1
-    else:
-        w0 = 0.0
-        dt1 = 2.11079 # HeNe period in fs
-
-    # 3. Determine FFT points
-    if not zeropad_enable:
-        n_ft = Nbins
-    else:
-        n_ft = zeropad_factor * Nbins
-        if zeropad_next2k:
-            n_ft = 2 ** int(np.ceil(np.log2(n_ft))) if n_ft > 0 else Nbins
-
-    # Store intermediate datasets for TD/PH subplots
-    dataset.proc_absFFT_ZPint = np.zeros((n_ft, Ndelays))
-    dataset.proc_ZP_phase = np.zeros((n_ft, Ndelays))
-    dataset.proc_fittedPhase = np.zeros((n_ft, Ndelays))
-    dataset.proc_apod_func = np.zeros((Nbins, Ndelays))
-    dataset.proc_binspecmax = np.zeros(Ndelays, dtype=int)
-    dataset.proc_phase_points = phase_points
-    dataset.proc_phase_coeffs = [None] * Ndelays  # fitted polynomial coefficients per delay
-    c_0 = 2.99792458e-5 # cm/fs
-    res_m = 1.0 / (n_ft * dt1 * c_0)
-    dataset.proc_pump_full = np.arange(n_ft) * res_m + w0
-
-    # 4. Apodization, Zero-Padding, FFT, and Phasing
-    phased_FFTZPsig = np.zeros((n_ft, Nprobe, Ndelays))
-    phased_FFTZPint = np.zeros((n_ft, Ndelays), dtype=complex)
-
-    for m in range(Ndelays):
-        step = Ndelays + m + 1
-        if hasattr(progress_tracker, "update_split"):
-            progress_tracker.update_split(step, total_steps, "processing")
-        else:
-            progress_tracker.update(step, label=f"Processing ({step} of {total_steps})")
-        interf = proc_interf[:, m]
-        sig = proc_signal[:, :, m]
-
-        # Find binzero
-        if dataset.datatype == "interferometer":
-            bininterfmax = np.argmax(interf)
-            fft_interf = np.fft.fft(interf)
-            if Nbins >= 40:
-                binspecmax = int(np.argmax(np.abs(fft_interf[19:Nbins//2])) + 19)
-                # Rapid analytical binzero determination using the Fourier shift theorem:
-                # A time shift roll(x, -b) corresponds to a linear phase ramp in frequency:
-                # phase_b[k] = phase_0[k] + (2*pi*k/Nbins) * b
-                # The phase slope zero-crossing is obtained directly in closed form (0 extra FFTs).
-                k1 = max(0, binspecmax - 10)
-                k2 = min(Nbins - 1, binspecmax + 10)
-                delta_k = k2 - k1
-                if delta_k > 0:
-                    phase0 = np.unwrap(np.angle(fft_interf))
-                    dphi0 = phase0[k2] - phase0[k1]
-                    slope = 2 * np.pi * delta_k / Nbins
-                    m_target = np.round((dphi0 + slope * bininterfmax) / (2 * np.pi))
-                    b0_exact = (2 * np.pi * m_target - dphi0) / slope
-                    binzero = int(np.round(b0_exact))
-                else:
-                    binzero = bininterfmax
-            else:
-                binspecmax = 0
-                binzero = bininterfmax
-            dataset.proc_binspecmax[m] = binspecmax
-        else:
-            binzero = 0
-            binspecmax = 0
-
-        q = np.arange(1, Nbins + 1)
-        V = q - (binzero + 1)
-        box = np.zeros(Nbins)
-        box[V > 0] = 1.0
-        box[V == 0] = 0.5
-
-        M = Nbins - binzero - 1
-        denom = float(M) if M > 0 else 1.0
-
-        if apodise_method in ("Box", "Cos", "Cos^2", "Cos^3", "Hanning", "Hamming"):
-            v_vals = np.abs(q - (binzero + 1))
-            mask = v_vals <= M
-            cosine_sym = np.zeros(Nbins)
-            if apodise_method == "Box":
-                cosine_sym[mask] = 1.0
-            elif apodise_method == "Cos":
-                cosine_sym[mask] = np.cos(np.pi * v_vals[mask] / (2.0 * denom))
-            elif apodise_method == "Cos^2":
-                cosine_sym[mask] = (np.cos(np.pi * v_vals[mask] / (2.0 * denom))) ** 2
-            elif apodise_method == "Cos^3":
-                cosine_sym[mask] = (np.cos(np.pi * v_vals[mask] / (2.0 * denom))) ** 3
-            elif apodise_method == "Hanning":
-                cosine_sym[mask] = 0.5 + 0.5 * np.cos(np.pi * v_vals[mask] / denom)
-            elif apodise_method == "Hamming":
-                cosine_sym[mask] = 0.54 + 0.46 * np.cos(np.pi * v_vals[mask] / denom)
-
-            cosine_onesided = cosine_sym * box
-        else:
-            # If "None" or not specified, do not apply any window/Heaviside (keep as ones)
-            box = np.ones(Nbins)
-            cosine_onesided = np.ones(Nbins)
-            cosine_sym = np.ones(Nbins)
-
-        dataset.proc_apod_func[:, m] = cosine_onesided
-        apo_interferogram = interf * cosine_sym
-        apo_signal = sig * cosine_onesided[:, np.newaxis]
-
-        if apodise_method == "Box":
-            mean_interf = np.mean(interf[-10:])
-            mean_sig = np.mean(sig[-10:, :], axis=0)
-        else:
-            mean_interf = 0.0
-            mean_sig = np.zeros(Nprobe)
-
-        n_pad = n_ft - Nbins
-        if n_pad > 0:
-            pad_interf = np.ones(n_pad) * mean_interf
-            pad_sig = np.ones((n_pad, Nprobe)) * mean_sig
-            zeropad_interf = np.concatenate([apo_interferogram, pad_interf])
-            zeropad_sig = np.concatenate([apo_signal, pad_sig], axis=0)
-        else:
-            zeropad_interf = apo_interferogram
-            zeropad_sig = apo_signal
-
-        if dataset.datatype == "interferometer":
-            phased_ZPint = np.roll(zeropad_interf, -binzero)
-            phased_ZPsig = np.roll(zeropad_sig, -binzero, axis=0)
-
-            absFFT_ZPint = np.abs(np.fft.fft(phased_ZPint))
-            binspecmax = np.argmax(absFFT_ZPint[99:n_ft//2]) + 99
-            dataset.proc_binspecmax[m] = binspecmax
-
-            FFT_ZPint = np.fft.fft(phased_ZPint)
-            FFT_ZPsig = np.fft.fft(phased_ZPsig, axis=0)
-
-            ZP_phase = np.unwrap(np.angle(FFT_ZPint))
-            center_freq = dataset.proc_pump_full[binspecmax]
-            in_range_indices = np.where((dataset.proc_pump_full >= center_freq - phase_points) &
-                                        (dataset.proc_pump_full <= center_freq + phase_points))[0]
-            if len(in_range_indices) > 0:
-                start_pt = in_range_indices[0]
-                end_pt = in_range_indices[-1]
-            else:
-                start_pt = max(0, binspecmax - 10)
-                end_pt = min(n_ft - 1, binspecmax + 10)
-            points = np.arange(start_pt, end_pt + 1)
-
-            if len(points) > 0:
-                if phase_method == "Constant":
-                    coeff = robust_polyfit(points, ZP_phase[points], 0)
-                    fittedPhase = np.polyval(coeff, np.arange(n_ft))
-                elif phase_method == "Linear":
-                    coeff = robust_polyfit(points, ZP_phase[points], 1)
-                    fittedPhase = np.polyval(coeff, np.arange(n_ft))
-                elif phase_method == "Quadratic":
-                    coeff = robust_polyfit(points, ZP_phase[points], 2)
-                    fittedPhase = np.polyval(coeff, np.arange(n_ft))
-                elif phase_method == "Cubic":
-                    coeff = robust_polyfit(points, ZP_phase[points], 3)
-                    fittedPhase = np.polyval(coeff, np.arange(n_ft))
-                else:
-                    coeff = None
-                    fittedPhase = ZP_phase
-                dataset.proc_phase_coeffs[m] = coeff
-            else:
-                fittedPhase = ZP_phase
-                dataset.proc_phase_coeffs[m] = None
-
-            phasingterm = np.exp(-1j * fittedPhase)
-            phased_FFTZPint[:, m] = FFT_ZPint * phasingterm
-
-            dataset.proc_absFFT_ZPint[:, m] = absFFT_ZPint
-            dataset.proc_ZP_phase[:, m] = ZP_phase
-            dataset.proc_fittedPhase[:, m] = fittedPhase
-
-            if pumpcorrection:
-                p_int = FFT_ZPint * phasingterm / np.max(np.abs(FFT_ZPint))
-                denom = np.abs(p_int)[:, np.newaxis]
-                denom[denom == 0] = 1.0
-                phased_FFTZPsig[:, :, m] = np.real(FFT_ZPsig * phasingterm[:, np.newaxis]) / denom
-            else:
-                phased_FFTZPsig[:, :, m] = np.real(FFT_ZPsig * phasingterm[:, np.newaxis])
-        else: # shaper
-            FFT_ZPint = np.fft.fft(zeropad_interf)
-            FFT_ZPsig = np.fft.fft(apo_signal, n=n_ft, axis=0)
-
-            fittedPhase = np.zeros(n_ft)
-            phasingterm = np.exp(-1j * fittedPhase)
-            phased_FFTZPint[:, m] = FFT_ZPint * phasingterm
-
-            dataset.proc_absFFT_ZPint[:, m] = np.abs(FFT_ZPint)
-            dataset.proc_ZP_phase[:, m] = 0.0
-            dataset.proc_fittedPhase[:, m] = 0.0
-
-            if pumpcorrection:
-                p_int = FFT_ZPint * phasingterm
-                denom = np.abs(p_int)[:, np.newaxis]
-                denom[denom == 0] = 1.0
-                phased_FFTZPsig[:, :, m] = np.real(FFT_ZPsig * phasingterm[:, np.newaxis]) / denom
-            else:
-                phased_FFTZPsig[:, :, m] = np.real(FFT_ZPsig)
-
-    # 5. Probe Axis Autocalibration (if requested)
-    if autocalibrate_probe:
-        if cal_probe_vector is not None and len(cal_probe_vector) == Nprobe:
-            dataset.probe = np.asarray(cal_probe_vector, dtype=float)
-            dataset.cal_level = "autocalibrated"
-        elif dataset.datatype in ("shaper", "interferometer") and getattr(dataset, "proc_pump_full", None) is not None:
-            # We locate search range fitrange = binspecmax +/- P
-            if dataset.datatype == "interferometer":
-                bin_spec = binspecmax
-            else:
-                # Find maximum of first delay spectrum of shaper
-                bin_spec = np.argmax(np.mean(np.abs(phased_FFTZPsig[:, :, 0]), axis=1))
-
-            P = max(1, n_ft // 50)
-            fit_start = max(0, bin_spec - P)
-            fit_end = min(n_ft - 1, bin_spec + P)
-
-            # Find maximum index along pump axis for each probe pixel
-            max_indices = np.argmax(np.abs(phased_FFTZPsig[fit_start:fit_end+1, :, 0]), axis=0) + fit_start
-            scattering_maxima = dataset.proc_pump_full[max_indices]
-
-            pixels = np.arange(1, Nprobe + 1)
-            # Perform robust quadratic fit
-            cal_coeff = robust_polyfit(pixels, scattering_maxima, 2)
-            dataset.probe = np.polyval(cal_coeff, pixels)
-            dataset.cal_level = "autocalibrated"
-
-    # 6. Background Subtraction (Scattering)
-    proc_2d = phased_FFTZPsig
-    if bkg_sub:
-        bkg_data = phased_FFTZPsig[:, :, bkgIdx]
-        proc_2d = phased_FFTZPsig.copy()
         for m in range(Ndelays):
-            if m != bkgIdx:
-                proc_2d[:, :, m] = phased_FFTZPsig[:, :, m] - bkg_data
+            step = m + 1
+            if hasattr(progress_tracker, "update_split"):
+                progress_tracker.update_split(step, total_steps, "processing")
+            else:
+                progress_tracker.update(step, label=f"Processing ({step} of {total_steps})")
+            interf = raw_interferogram[:, m].copy()
+            sig = raw_signal[:, :, m].copy()
 
-    # 7. Scaling
-    scale_factor = np.sqrt(c_0 * dt1 / n_ft) * 2.0
-    proc_2d = proc_2d * scale_factor
+            if dataset.datatype == "interferometer":
+                # Median filter
+                interf = -(interf - np.mean(interf))
+                k_size = 101  # filter_points = 10 -> odd 11
+                interf = interf - medfilt(interf, kernel_size=k_size)
 
-    # 8. Slicing to Positive Half (or inverted upper Nyquist half when aliased)
-    n_pos = n_ft // 2
-    nyquist_invert = bool(
-        isinstance(getattr(dataset, "units", None), dict)
-        and dataset.units.get("nyquist_invert", False)
-    )
-    if nyquist_invert and n_ft - n_pos >= 1:
-        dataset.Z_R = proc_2d[n_ft - n_pos :, :, :]
-        dataset.pump = dataset.proc_pump_full[n_ft - n_pos :]
-    else:
-        dataset.Z_R = proc_2d[:n_pos, :, :]
-        dataset.pump = dataset.proc_pump_full[:n_pos]
+                sig = sig - np.mean(sig, axis=0)
+                for w in range(Nprobe):
+                    sig[:, w] = sig[:, w] - medfilt(sig[:, w], kernel_size=k_size)
+            else:  # shaper
+                # Mean filter
+                sig = sig - np.mean(sig, axis=0)
 
-    dataset.Z_C = None
-    dataset._is_corrected = False
+            proc_interf[:, m] = interf
+            proc_signal[:, :, m] = sig
 
-    if close_tracker:
-        progress_tracker.close()
+        # 2. Determine rotating frame parameters w0 and dt1 for shaper
+        if dataset.datatype == "shaper":
+            if w0 is None or dt1 is None:
+                w0_csv = None
+                if dataset.source:
+                    folder_path = Path(dataset.source)
+                    cands = (
+                        [folder_path / "w0.csv", folder_path.parent / "w0.csv"]
+                        if folder_path.is_dir()
+                        else [folder_path.parent / "w0.csv"]
+                    )
+                    for path in cands:
+                        if path.exists():
+                            try:
+                                vals = np.loadtxt(path)
+                                if vals.size >= 2:
+                                    w0_csv = (float(vals[0]), float(vals[1]))
+                                    break
+                            except Exception:
+                                logger.debug(
+                                    "Could not read the rotating-frame frequency from %s.",
+                                    path,
+                                    exc_info=True,
+                                )
+                if w0_csv is not None:
+                    w0_val, dt1_val = w0_csv
+                else:
+                    w0_val = float(getattr(dataset, "w0_cm1", 0.0) or 0.0)
+                    dt1_val = float(getattr(dataset, "dt1_fs", 0.0) or 0.0)
+                    if dt1_val <= 0.0:
+                        dt1_val = float(np.nanmean(np.abs(np.diff(raw_t1delays)))) if len(raw_t1delays) > 1 else 1.0
+
+                w0 = w0_val if w0 is None else w0
+                dt1 = dt1_val if dt1 is None else dt1
+        else:
+            w0 = 0.0
+            dt1 = 2.11079  # HeNe period in fs
+
+        # 3. Determine FFT points
+        if not zeropad_enable:
+            n_ft = Nbins
+        else:
+            n_ft = zeropad_factor * Nbins
+            if zeropad_next2k:
+                n_ft = 2 ** int(np.ceil(np.log2(n_ft))) if n_ft > 0 else Nbins
+
+        # Compute intermediate arrays for TD/PH subplots locally before committing
+        proc_absFFT_ZPint = np.zeros((n_ft, Ndelays))
+        proc_ZP_phase = np.zeros((n_ft, Ndelays))
+        proc_fittedPhase = np.zeros((n_ft, Ndelays))
+        proc_apod_func = np.zeros((Nbins, Ndelays))
+        proc_binspecmax = np.zeros(Ndelays, dtype=int)
+        proc_phase_coeffs = [None] * Ndelays  # fitted polynomial coefficients per delay
+        c_0 = 2.99792458e-5  # cm/fs
+        res_m = 1.0 / (n_ft * dt1 * c_0)
+        proc_pump_full = np.arange(n_ft) * res_m + w0
+
+        # 4. Apodization, Zero-Padding, FFT, and Phasing
+        phased_FFTZPsig = np.zeros((n_ft, Nprobe, Ndelays))
+        phased_FFTZPint = np.zeros((n_ft, Ndelays), dtype=complex)
+
+        binspecmax = 0
+        for m in range(Ndelays):
+            step = Ndelays + m + 1
+            if hasattr(progress_tracker, "update_split"):
+                progress_tracker.update_split(step, total_steps, "processing")
+            else:
+                progress_tracker.update(step, label=f"Processing ({step} of {total_steps})")
+            interf = proc_interf[:, m]
+            sig = proc_signal[:, :, m]
+
+            # Find binzero
+            if dataset.datatype == "interferometer":
+                bininterfmax = np.argmax(interf)
+                fft_interf = np.fft.fft(interf)
+                if Nbins >= 40:
+                    binspecmax = int(np.argmax(np.abs(fft_interf[19:Nbins // 2])) + 19)
+                    # Rapid analytical binzero determination using the Fourier shift theorem:
+                    # A time shift roll(x, -b) corresponds to a linear phase ramp in frequency:
+                    # phase_b[k] = phase_0[k] + (2*pi*k/Nbins) * b
+                    # The phase slope zero-crossing is obtained directly in closed form (0 extra FFTs).
+                    k1 = max(0, binspecmax - 10)
+                    k2 = min(Nbins - 1, binspecmax + 10)
+                    delta_k = k2 - k1
+                    if delta_k > 0:
+                        phase0 = np.unwrap(np.angle(fft_interf))
+                        dphi0 = phase0[k2] - phase0[k1]
+                        slope = 2 * np.pi * delta_k / Nbins
+                        m_target = np.round((dphi0 + slope * bininterfmax) / (2 * np.pi))
+                        b0_exact = (2 * np.pi * m_target - dphi0) / slope
+                        binzero = int(np.round(b0_exact))
+                    else:
+                        binzero = bininterfmax
+                else:
+                    binspecmax = 0
+                    binzero = bininterfmax
+                proc_binspecmax[m] = binspecmax
+            else:
+                binzero = 0
+                binspecmax = 0
+
+            q = np.arange(1, Nbins + 1)
+            V = q - (binzero + 1)
+            box = np.zeros(Nbins)
+            box[V > 0] = 1.0
+            box[V == 0] = 0.5
+
+            M = Nbins - binzero - 1
+            denom = float(M) if M > 0 else 1.0
+
+            if apodise_method in ("Box", "Cos", "Cos^2", "Cos^3", "Hanning", "Hamming"):
+                v_vals = np.abs(q - (binzero + 1))
+                mask = v_vals <= M
+                cosine_sym = np.zeros(Nbins)
+                if apodise_method == "Box":
+                    cosine_sym[mask] = 1.0
+                elif apodise_method == "Cos":
+                    cosine_sym[mask] = np.cos(np.pi * v_vals[mask] / (2.0 * denom))
+                elif apodise_method == "Cos^2":
+                    cosine_sym[mask] = (np.cos(np.pi * v_vals[mask] / (2.0 * denom))) ** 2
+                elif apodise_method == "Cos^3":
+                    cosine_sym[mask] = (np.cos(np.pi * v_vals[mask] / (2.0 * denom))) ** 3
+                elif apodise_method == "Hanning":
+                    cosine_sym[mask] = 0.5 + 0.5 * np.cos(np.pi * v_vals[mask] / denom)
+                elif apodise_method == "Hamming":
+                    cosine_sym[mask] = 0.54 + 0.46 * np.cos(np.pi * v_vals[mask] / denom)
+
+                cosine_onesided = cosine_sym * box
+            else:
+                # If "None" or not specified, do not apply any window/Heaviside (keep as ones)
+                box = np.ones(Nbins)
+                cosine_onesided = np.ones(Nbins)
+                cosine_sym = np.ones(Nbins)
+
+            proc_apod_func[:, m] = cosine_onesided
+            apo_interferogram = interf * cosine_sym
+            apo_signal = sig * cosine_onesided[:, np.newaxis]
+
+            if apodise_method == "Box":
+                mean_interf = np.mean(interf[-10:])
+                mean_sig = np.mean(sig[-10:, :], axis=0)
+            else:
+                mean_interf = 0.0
+                mean_sig = np.zeros(Nprobe)
+
+            n_pad = n_ft - Nbins
+            if n_pad > 0:
+                pad_interf = np.ones(n_pad) * mean_interf
+                pad_sig = np.ones((n_pad, Nprobe)) * mean_sig
+                zeropad_interf = np.concatenate([apo_interferogram, pad_interf])
+                zeropad_sig = np.concatenate([apo_signal, pad_sig], axis=0)
+            else:
+                zeropad_interf = apo_interferogram
+                zeropad_sig = apo_signal
+
+            if dataset.datatype == "interferometer":
+                phased_ZPint = np.roll(zeropad_interf, -binzero)
+                phased_ZPsig = np.roll(zeropad_sig, -binzero, axis=0)
+
+                absFFT_ZPint = np.abs(np.fft.fft(phased_ZPint))
+                binspecmax = np.argmax(absFFT_ZPint[99:n_ft // 2]) + 99
+                proc_binspecmax[m] = binspecmax
+
+                FFT_ZPint = np.fft.fft(phased_ZPint)
+                FFT_ZPsig = np.fft.fft(phased_ZPsig, axis=0)
+
+                ZP_phase = np.unwrap(np.angle(FFT_ZPint))
+                center_freq = proc_pump_full[binspecmax]
+                in_range_indices = np.where(
+                    (proc_pump_full >= center_freq - phase_points)
+                    & (proc_pump_full <= center_freq + phase_points)
+                )[0]
+                if len(in_range_indices) > 0:
+                    start_pt = in_range_indices[0]
+                    end_pt = in_range_indices[-1]
+                else:
+                    start_pt = max(0, binspecmax - 10)
+                    end_pt = min(n_ft - 1, binspecmax + 10)
+                points = np.arange(start_pt, end_pt + 1)
+
+                if len(points) > 0:
+                    if phase_method == "Constant":
+                        coeff = robust_polyfit(points, ZP_phase[points], 0)
+                        fittedPhase = np.polyval(coeff, np.arange(n_ft))
+                    elif phase_method == "Linear":
+                        coeff = robust_polyfit(points, ZP_phase[points], 1)
+                        fittedPhase = np.polyval(coeff, np.arange(n_ft))
+                    elif phase_method == "Quadratic":
+                        coeff = robust_polyfit(points, ZP_phase[points], 2)
+                        fittedPhase = np.polyval(coeff, np.arange(n_ft))
+                    elif phase_method == "Cubic":
+                        coeff = robust_polyfit(points, ZP_phase[points], 3)
+                        fittedPhase = np.polyval(coeff, np.arange(n_ft))
+                    else:
+                        coeff = None
+                        fittedPhase = ZP_phase
+                    proc_phase_coeffs[m] = coeff
+                else:
+                    fittedPhase = ZP_phase
+                    proc_phase_coeffs[m] = None
+
+                phasingterm = np.exp(-1j * fittedPhase)
+                phased_FFTZPint[:, m] = FFT_ZPint * phasingterm
+
+                proc_absFFT_ZPint[:, m] = absFFT_ZPint
+                proc_ZP_phase[:, m] = ZP_phase
+                proc_fittedPhase[:, m] = fittedPhase
+
+                if pumpcorrection:
+                    p_int = FFT_ZPint * phasingterm / np.max(np.abs(FFT_ZPint))
+                    denom = np.abs(p_int)[:, np.newaxis]
+                    denom[denom == 0] = 1.0
+                    phased_FFTZPsig[:, :, m] = np.real(FFT_ZPsig * phasingterm[:, np.newaxis]) / denom
+                else:
+                    phased_FFTZPsig[:, :, m] = np.real(FFT_ZPsig * phasingterm[:, np.newaxis])
+            else:  # shaper
+                FFT_ZPint = np.fft.fft(zeropad_interf)
+                FFT_ZPsig = np.fft.fft(apo_signal, n=n_ft, axis=0)
+
+                fittedPhase = np.zeros(n_ft)
+                phasingterm = np.exp(-1j * fittedPhase)
+                phased_FFTZPint[:, m] = FFT_ZPint * phasingterm
+
+                proc_absFFT_ZPint[:, m] = np.abs(FFT_ZPint)
+                proc_ZP_phase[:, m] = 0.0
+                proc_fittedPhase[:, m] = 0.0
+
+                if pumpcorrection:
+                    p_int = FFT_ZPint * phasingterm
+                    denom = np.abs(p_int)[:, np.newaxis]
+                    denom[denom == 0] = 1.0
+                    phased_FFTZPsig[:, :, m] = np.real(FFT_ZPsig * phasingterm[:, np.newaxis]) / denom
+                else:
+                    phased_FFTZPsig[:, :, m] = np.real(FFT_ZPsig)
+
+        # 5. Probe Axis Autocalibration (if requested)
+        new_probe = None
+        new_cal_level = None
+        if autocalibrate_probe:
+            if cal_probe_vector is not None and len(cal_probe_vector) == Nprobe:
+                new_probe = np.asarray(cal_probe_vector, dtype=float)
+                new_cal_level = "autocalibrated"
+            elif dataset.datatype in ("shaper", "interferometer"):
+                # We locate search range fitrange = binspecmax +/- P
+                if dataset.datatype == "interferometer":
+                    bin_spec = binspecmax
+                else:
+                    # Find maximum of first delay spectrum of shaper
+                    bin_spec = np.argmax(np.mean(np.abs(phased_FFTZPsig[:, :, 0]), axis=1))
+
+                P = max(1, n_ft // 50)
+                fit_start = max(0, bin_spec - P)
+                fit_end = min(n_ft - 1, bin_spec + P)
+
+                # Find maximum index along pump axis for each probe pixel
+                max_indices = np.argmax(np.abs(phased_FFTZPsig[fit_start : fit_end + 1, :, 0]), axis=0) + fit_start
+                scattering_maxima = proc_pump_full[max_indices]
+
+                pixels = np.arange(1, Nprobe + 1)
+                # Perform robust quadratic fit
+                cal_coeff = robust_polyfit(pixels, scattering_maxima, 2)
+                new_probe = np.polyval(cal_coeff, pixels)
+                new_cal_level = "autocalibrated"
+
+        # 6. Background Subtraction (Scattering)
+        proc_2d = phased_FFTZPsig
+        if bkg_sub:
+            bkg_data = phased_FFTZPsig[:, :, bkgIdx]
+            proc_2d = phased_FFTZPsig.copy()
+            for m in range(Ndelays):
+                if m != bkgIdx:
+                    proc_2d[:, :, m] = phased_FFTZPsig[:, :, m] - bkg_data
+
+        # 7. Scaling
+        scale_factor = np.sqrt(c_0 * dt1 / n_ft) * 2.0
+        proc_2d = proc_2d * scale_factor
+
+        # 8. Slicing to Positive Half (or inverted upper Nyquist half when aliased)
+        n_pos = n_ft // 2
+        nyquist_invert = bool(
+            isinstance(getattr(dataset, "units", None), dict)
+            and dataset.units.get("nyquist_invert", False)
+        )
+        if nyquist_invert and n_ft - n_pos >= 1:
+            new_Z_R = proc_2d[n_ft - n_pos :, :, :]
+            new_pump = proc_pump_full[n_ft - n_pos :]
+        else:
+            new_Z_R = proc_2d[:n_pos, :, :]
+            new_pump = proc_pump_full[:n_pos]
+
+        # Commit all processed outputs atomically after every stage has succeeded
+        dataset._base_raw_signal = base_sig
+        dataset._base_raw_interferogram = base_int
+        dataset.shot_rotation = rot
+        dataset.raw_signal = rot_sig
+        dataset.raw_interferogram = rot_int
+        dataset.proc_absFFT_ZPint = proc_absFFT_ZPint
+        dataset.proc_ZP_phase = proc_ZP_phase
+        dataset.proc_fittedPhase = proc_fittedPhase
+        dataset.proc_apod_func = proc_apod_func
+        dataset.proc_binspecmax = proc_binspecmax
+        dataset.proc_phase_points = phase_points
+        dataset.proc_phase_coeffs = proc_phase_coeffs
+        dataset.proc_pump_full = proc_pump_full
+        if new_probe is not None:
+            dataset.probe = new_probe
+        if new_cal_level is not None:
+            dataset.cal_level = new_cal_level
+        dataset.Z_R = new_Z_R
+        dataset.pump = new_pump
+        dataset.Z_C = None
+        dataset._is_corrected = False
+    finally:
+        if close_tracker:
+            progress_tracker.close()

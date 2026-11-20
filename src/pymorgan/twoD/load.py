@@ -2032,7 +2032,11 @@ def _unfold_undersampled_shaper_w0(
         amp_sub = amp_half[:, in_band]
         diff = np.abs(pump_cand[:, np.newaxis] - pr_sub[np.newaxis, :])
         mask = diff <= diag_tol
-        diag_energy = float(np.sum(amp_sub[mask])) if np.any(mask) else 0.0
+        if np.any(mask):
+            diag_weights = 1.0 - 0.5 * (diff[mask] / diag_tol) ** 2
+            diag_energy = float(np.sum(amp_sub[mask] * diag_weights))
+        else:
+            diag_energy = 0.0
         centre_prox = 1.0 / (1.0 + abs(0.5 * (z_lo + z_hi) - band_centre) / max(1.0, f_nyq))
         return diag_energy * (0.5 + 0.5 * centre_prox) + 1e-6 * ov * centre_prox
 
@@ -2045,7 +2049,7 @@ def _unfold_undersampled_shaper_w0(
 
     f_pos = np.arange(n_pos, dtype=np.float64) * res_m
     amp_pos = ft_mag[:n_pos, :]
-    for m in range(m_min, m_max + 1):
+    for m in range(m_min, m_max + 2):
         w0_cand = w0_rf_cm1 + m * f_s
         sc = _score_zone(w0_cand + f_pos, amp_pos)
         if sc > best_score:
@@ -2053,10 +2057,10 @@ def _unfold_undersampled_shaper_w0(
             best_w0 = w0_cand
             best_inv = False
 
-    if best_score <= 0.0 and n_bins >= 4:
+    if n_bins >= 4:
         f_neg = np.arange(n_bins - n_pos, n_bins, dtype=np.float64) * res_m
         amp_neg = ft_mag[n_bins - n_pos :, :]
-        for m in range(m_min, m_max + 1):
+        for m in range(m_min, m_max + 2):
             w0_cand = w0_rf_cm1 + (m - 1) * f_s
             sc = _score_zone(w0_cand + f_neg, amp_neg)
             if sc > best_score:
@@ -2077,11 +2081,14 @@ def read_QuickControl_2D(path: str, progress_tracker=None):
     isotropic Magic Angle state ``(PAR + 2 * PER) / 3`` is listed first and
     selected as the active state by default.
     """
+    import warnings
+
     from ..oneD.load import (
-        _expected_quickcontrol_scan_rows,
+        _expected_quickcontrol_axis0,
         _extract_quickcontrol_footer_probe_spectrum,
         _find_quickcontrol_2d_scans,
         _format_quickcontrol_sample_info,
+        _pad_scan_stack_rows,
         _quickcontrol_exp_kind,
         _resolve_quickcontrol_info_path,
         _resolve_quickcontrol_probe_axis,
@@ -2104,19 +2111,47 @@ def read_QuickControl_2D(path: str, progress_tracker=None):
         raise ValueError(f"No 2D .scan files found for QuickControl dataset {info_path.stem!r}.")
 
     n_t2 = len(t_indices)
-    expected_rows = _expected_quickcontrol_scan_rows(info, "2d")
+    expected_axis0 = _expected_quickcontrol_axis0(info, "2d")
+    expected_rows = int(expected_axis0.size) if expected_axis0 is not None else None
 
     has_par_any = any(len(scans_by_t[t]["par"]) > 0 for t in t_indices)
     has_per_any = any(len(scans_by_t[t]["per"]) > 0 for t in t_indices)
     dual_pol = has_par_any and has_per_any
 
     axis0_ref: np.ndarray | None = None
+    axis0_candidates: list[tuple[np.ndarray, bool]] = []
+    n_rows_ref: int | None = expected_rows
     n_rows = 0
     n_pix = 0
     footer_t2_by_idx: dict[int, float] = {}
     footer_spec_parts: list[np.ndarray] = []
     has_partial_any = False
     in_progress = False
+
+    def _select_axis0_ref(target_rows: int) -> np.ndarray:
+        best_ax0: np.ndarray | None = None
+        for ax_cand, is_part in axis0_candidates:
+            if not is_part and len(ax_cand) >= target_rows:
+                return ax_cand[:target_rows].copy()
+        for ax_cand, _is_part in axis0_candidates:
+            if best_ax0 is None or len(ax_cand) > len(best_ax0):
+                best_ax0 = ax_cand
+            if len(ax_cand) >= target_rows:
+                return ax_cand[:target_rows].copy()
+        assert best_ax0 is not None
+        if expected_axis0 is not None and expected_axis0.size >= target_rows:
+            out = expected_axis0[:target_rows].astype(np.float64, copy=True)
+            n_cp = min(len(best_ax0), target_rows)
+            out[:n_cp] = best_ax0[:n_cp]
+            return out
+        out = np.empty(target_rows, dtype=np.float64)
+        n_cp = min(len(best_ax0), target_rows)
+        out[:n_cp] = best_ax0[:n_cp]
+        if n_cp < target_rows:
+            step = float(np.median(np.diff(best_ax0))) if len(best_ax0) >= 2 else 1.0
+            last = float(best_ax0[-1]) if len(best_ax0) > 0 else 0.0
+            out[n_cp:] = last + step * np.arange(1, target_rows - n_cp + 1, dtype=np.float64)
+        return out
 
     if dual_pol:
         par_stacks: list[np.ndarray | None] = []
@@ -2138,9 +2173,10 @@ def read_QuickControl_2D(path: str, progress_tracker=None):
             if p_files:
                 ax0, p_st, p_fc, p_fr, p_part = _stack_quickcontrol_scans(
                     p_files,
-                    n_rows_ref=n_rows or None,
+                    n_rows_ref=n_rows_ref,
                     n_pix_ref=n_pix or None,
                     expected_n_rows=expected_rows,
+                    expected_axis0=expected_axis0,
                 )
                 if p_part:
                     has_partial_any = True
@@ -2148,9 +2184,9 @@ def read_QuickControl_2D(path: str, progress_tracker=None):
                     t_fcols.append(p_fc[np.isfinite(p_fc)])
                 if not footer_spec_parts and p_fr is not None:
                     footer_spec_parts.append(p_fr)
-                if axis0_ref is None:
-                    axis0_ref = ax0
-                    n_rows, n_pix = p_st.shape[:2]
+                axis0_candidates.append((ax0, p_part))
+                if n_pix == 0:
+                    n_pix = int(p_st.shape[1])
                 par_stacks.append(p_st)
                 max_par = max(max_par, int(p_st.shape[-1]))
             else:
@@ -2159,9 +2195,10 @@ def read_QuickControl_2D(path: str, progress_tracker=None):
             if s_files:
                 ax0, s_st, s_fc, s_fr, s_part = _stack_quickcontrol_scans(
                     s_files,
-                    n_rows_ref=n_rows or None,
+                    n_rows_ref=n_rows_ref,
                     n_pix_ref=n_pix or None,
                     expected_n_rows=expected_rows,
+                    expected_axis0=expected_axis0,
                 )
                 if s_part:
                     has_partial_any = True
@@ -2169,9 +2206,9 @@ def read_QuickControl_2D(path: str, progress_tracker=None):
                     t_fcols.append(s_fc[np.isfinite(s_fc)])
                 if not footer_spec_parts and s_fr is not None:
                     footer_spec_parts.append(s_fr)
-                if axis0_ref is None:
-                    axis0_ref = ax0
-                    n_rows, n_pix = s_st.shape[:2]
+                axis0_candidates.append((ax0, s_part))
+                if n_pix == 0:
+                    n_pix = int(s_st.shape[1])
                 per_stacks.append(s_st)
                 max_per = max(max_per, int(s_st.shape[-1]))
             else:
@@ -2180,7 +2217,12 @@ def read_QuickControl_2D(path: str, progress_tracker=None):
             if t_fcols:
                 footer_t2_by_idx[t_idx] = float(np.mean(np.concatenate(t_fcols)))
 
-        assert axis0_ref is not None and n_rows > 0 and n_pix > 0
+        obs_rows = [int(st.shape[0]) for st in (*par_stacks, *per_stacks) if st is not None]
+        n_rows = max(obs_rows) if obs_rows else 0
+        if expected_rows is not None:
+            n_rows = max(n_rows, expected_rows)
+        assert n_rows > 0 and n_pix > 0 and axis0_candidates
+        axis0_ref = _select_axis0_ref(n_rows)
 
         cube_par = np.full((n_rows, n_pix, n_t2), np.nan, dtype=np.float64)
         cube_per = np.full((n_rows, n_pix, n_t2), np.nan, dtype=np.float64)
@@ -2191,7 +2233,11 @@ def read_QuickControl_2D(path: str, progress_tracker=None):
             pst = par_stacks[m]
             sst = per_stacks[m]
             if pst is not None:
-                with np.errstate(invalid="ignore"):
+                if pst.shape[0] < n_rows:
+                    pst = _pad_scan_stack_rows(pst, n_rows)
+                    has_partial_any = True
+                with warnings.catch_warnings(), np.errstate(invalid="ignore"):
+                    warnings.simplefilter("ignore", RuntimeWarning)
                     cube_par[:, :, m] = np.nanmean(pst, axis=-1)
                 ss_par_full[:, :, m, : pst.shape[-1]] = pst
                 if pst.shape[-1] < max_par:
@@ -2199,7 +2245,11 @@ def read_QuickControl_2D(path: str, progress_tracker=None):
             else:
                 in_progress = True
             if sst is not None:
-                with np.errstate(invalid="ignore"):
+                if sst.shape[0] < n_rows:
+                    sst = _pad_scan_stack_rows(sst, n_rows)
+                    has_partial_any = True
+                with warnings.catch_warnings(), np.errstate(invalid="ignore"):
+                    warnings.simplefilter("ignore", RuntimeWarning)
                     cube_per[:, :, m] = np.nanmean(sst, axis=-1)
                 ss_per_full[:, :, m, : sst.shape[-1]] = sst
                 if sst.shape[-1] < max_per:
@@ -2251,9 +2301,10 @@ def read_QuickControl_2D(path: str, progress_tracker=None):
             c_files = scans_by_t[t_idx][chan_key]
             ax0, c_st, c_fc, c_fr, c_part = _stack_quickcontrol_scans(
                 c_files,
-                n_rows_ref=n_rows or None,
+                n_rows_ref=n_rows_ref,
                 n_pix_ref=n_pix or None,
                 expected_n_rows=expected_rows,
+                expected_axis0=expected_axis0,
             )
             if c_part:
                 has_partial_any = True
@@ -2261,17 +2312,27 @@ def read_QuickControl_2D(path: str, progress_tracker=None):
                 footer_t2_by_idx[t_idx] = float(np.mean(c_fc[np.isfinite(c_fc)]))
             if not footer_spec_parts and c_fr is not None:
                 footer_spec_parts.append(c_fr)
-            if axis0_ref is None:
-                axis0_ref = ax0
-                n_rows, n_pix = c_st.shape[:2]
+            axis0_candidates.append((ax0, c_part))
+            if n_pix == 0:
+                n_pix = int(c_st.shape[1])
             ch_stacks.append(c_st)
             max_ch = max(max_ch, int(c_st.shape[-1]))
 
-        assert axis0_ref is not None and n_rows > 0 and n_pix > 0
+        obs_rows = [int(cst.shape[0]) for cst in ch_stacks]
+        n_rows = max(obs_rows) if obs_rows else 0
+        if expected_rows is not None:
+            n_rows = max(n_rows, expected_rows)
+        assert n_rows > 0 and n_pix > 0 and axis0_candidates
+        axis0_ref = _select_axis0_ref(n_rows)
+
         raw_cube = np.zeros((n_rows, n_pix, n_t2), dtype=np.float64)
         ss_ch_full = np.full((n_rows, n_pix, n_t2, max(1, max_ch)), np.nan, dtype=np.float64)
         for m, cst in enumerate(ch_stacks):
-            with np.errstate(invalid="ignore"):
+            if cst.shape[0] < n_rows:
+                cst = _pad_scan_stack_rows(cst, n_rows)
+                has_partial_any = True
+            with warnings.catch_warnings(), np.errstate(invalid="ignore"):
+                warnings.simplefilter("ignore", RuntimeWarning)
                 raw_cube[:, :, m] = np.nan_to_num(np.nanmean(cst, axis=-1), nan=0.0)
             ss_ch_full[:, :, m, : cst.shape[-1]] = cst
             if cst.shape[-1] < max_ch:
@@ -2298,7 +2359,7 @@ def read_QuickControl_2D(path: str, progress_tracker=None):
         for k_st in list(states_signal_ss.keys()):
             states_signal_ss[k_st] = states_signal_ss[k_st][:, :, sort_idx, :]
 
-    probe, _unitsL, display_L, cal_source, _cal_level = _resolve_quickcontrol_probe_axis(
+    probe, _unitsL, display_L, cal_source, cal_level = _resolve_quickcontrol_probe_axis(
         info, n_pix, info_path, check_csv_override=True, force_wavenumbers=True
     )
     freq_units = "cm-1" if display_L in ("cm-1", "px") else display_L
@@ -2329,7 +2390,7 @@ def read_QuickControl_2D(path: str, progress_tracker=None):
             states_data[k_st] = states_data[k_st][:, p_order, :]
         for k_st in list(states_signal_ss.keys()):
             states_signal_ss[k_st] = states_signal_ss[k_st][:, p_order, :, :]
-        if spec_arr is not None:
+        if spec_arr is not None and spec_arr.size == p_order.size:
             spec_arr = spec_arr[p_order]
 
     domain_str = info.get("Domain", "Time").strip().lower()
@@ -2418,6 +2479,8 @@ def read_QuickControl_2D(path: str, progress_tracker=None):
         units["unitsL_lbl"] = "Wavelength"
         units["unitsL_ltx"] = "nm"
     units["cal_source"] = cal_source
+    if cal_level is not None:
+        units["cal_level"] = cal_level
     units["is_frequency_domain"] = is_freq_domain
     units["w0_cm1"] = w0_cm1
     units["dt1_fs"] = dt1_fs

@@ -79,17 +79,17 @@ class Dataset2D:
         self.cal_level = cal_level
         self.cal_source = cal_source or self.units.get("cal_source")
 
-        self.raw_signal = raw_signal
-        self.raw_interferogram = raw_interferogram
-        self.raw_t1delays = raw_t1delays
-        self._base_raw_signal = (
-            np.asarray(raw_signal, dtype=float).copy() if raw_signal is not None else None
+        self.raw_signal = (
+            np.asarray(raw_signal, dtype=float) if raw_signal is not None else None
         )
-        self._base_raw_interferogram = (
-            np.asarray(raw_interferogram, dtype=float).copy()
+        self.raw_interferogram = (
+            np.asarray(raw_interferogram, dtype=float)
             if raw_interferogram is not None
             else None
         )
+        self.raw_t1delays = raw_t1delays
+        self._base_raw_signal = self.raw_signal
+        self._base_raw_interferogram = self.raw_interferogram
         self.shot_rotation: int = 0
 
         sig_ss = raw_signal_ss if raw_signal_ss is not None else self.units.get("raw_signal_ss")
@@ -189,11 +189,11 @@ class Dataset2D:
                 self.raw_signal = cube.copy()
         else:
             self.raw_signal = cube.copy()
-            self._base_raw_signal = cube.copy()
+            self._base_raw_signal = self.raw_signal
             if self.units.get("interferogram_from_signal"):
                 with np.errstate(invalid="ignore"):
                     self.raw_interferogram = np.nanmean(self.raw_signal, axis=1)
-                self._base_raw_interferogram = self.raw_interferogram.copy()
+                self._base_raw_interferogram = self.raw_interferogram
             self.shot_rotation = 0
         self.Z_C = None
         self._is_corrected = False
@@ -270,7 +270,11 @@ class Dataset2D:
         cal_level = units.get("cal_level")
         cal_source = units.get("cal_source")
 
-        if data_type not in ("PyMESS_2D", "QuickControl_2D"):
+        loader_name = getattr(loader, "__name__", None)
+        if data_type not in ("PyMESS_2D", "QuickControl_2D") and loader_name not in (
+            "read_PyMESS_2D",
+            "read_QuickControl_2D",
+        ):
             cal_path = None
             if folder.is_dir():
                 cand_data = folder / "CalibratedProbe.csv"
@@ -466,23 +470,42 @@ class Dataset2D:
         probe_unit = fmt_unit(self.units.get("unitsL", "cm-1"))
         delay_unit = self.units.get("unitsT_ltx", "ps")
 
-        def _nm_suffix(arr_wn: np.ndarray) -> str:
-            if not self.is_electronic or arr_wn.size == 0:
+        from .. import helpers as hlp
+
+        raw_unit = (
+            (self.units.get("unitsL") if isinstance(self.units, dict) else None)
+            or getattr(self, "freq_units", None)
+            or "cm-1"
+        )
+        u_str = str(raw_unit).strip()
+        u_norm = "cm-1" if u_str in ("cm-1", "cm^-1", "cm\u207b\u00b9", "cm^{-1}") else u_str
+
+        def _nm_suffix(arr: np.ndarray) -> str:
+            if not self.is_electronic or arr.size == 0 or u_norm not in hlp.SPECTRAL_UNITS:
                 return ""
-            lo_wn = float(np.nanmin(arr_wn))
-            hi_wn = float(np.nanmax(arr_wn))
-            if lo_wn > 0.0 and hi_wn > 0.0:
-                return f" ({1.0e7 / hi_wn:.1f}\u2013{1.0e7 / lo_wn:.1f} nm)"
-            return ""
+            finite = arr[np.isfinite(arr) & (arr > 0.0)]
+            if finite.size == 0:
+                return ""
+            if u_norm == "nm":
+                nm_vals = finite
+            else:
+                nm_vals = hlp.convert_spectral(finite, u_norm, "nm")
+                nm_vals = nm_vals[np.isfinite(nm_vals) & (nm_vals > 0.0)]
+                if nm_vals.size == 0:
+                    return ""
+            lo_nm = float(np.min(nm_vals))
+            hi_nm = float(np.max(nm_vals))
+            return f" ({lo_nm:.1f}\u2013{hi_nm:.1f} nm)"
 
         # --- Pump line ---
         if self.datatype in ("shaper", "interferometer") and self.raw_t1delays is not None:
             t1 = np.asarray(self.raw_t1delays, dtype=float)
             dt1 = float(np.nanmean(np.abs(np.diff(t1)))) if t1.size > 1 else 0.0
             pump_unit = fmt_unit(self.units.get("unitsL", "cm-1"))
+            pump_nm = "" if np.array_equal(pump, t1) else _nm_suffix(pump)
             line_pump = (
                 f"<b>Pump (t\u2081):</b> [{t1.min():.1f}, {t1.max():.1f}] fs, dt\u2081: {dt1:.2f} fs, Bins: {len(t1)}<br>"
-                f"<b>Pump (\u03c9\u2081):</b> [{pump.min():.1f}, {pump.max():.1f}] {pump_unit}{_nm_suffix(pump)}, Res: {pump_res:.2f} {pump_unit}, Bins: {len(pump)}"
+                f"<b>Pump (\u03c9\u2081):</b> [{pump.min():.1f}, {pump.max():.1f}] {pump_unit}{pump_nm}, Res: {pump_res:.2f} {pump_unit}, Bins: {len(pump)}"
             )
         else:
             pump_unit = fmt_unit(self.units.get("unitsL", "cm-1"))
@@ -686,9 +709,13 @@ class Dataset2D:
                 else None
             ),
         )
-        new_ds._base_raw_signal = _dup(getattr(self, "_base_raw_signal", self.raw_signal))
-        new_ds._base_raw_interferogram = _dup(
-            getattr(self, "_base_raw_interferogram", self.raw_interferogram)
+        base_sig = getattr(self, "_base_raw_signal", self.raw_signal)
+        new_ds._base_raw_signal = (
+            new_ds.raw_signal if base_sig is self.raw_signal else _dup(base_sig)
+        )
+        base_int = getattr(self, "_base_raw_interferogram", self.raw_interferogram)
+        new_ds._base_raw_interferogram = (
+            new_ds.raw_interferogram if base_int is self.raw_interferogram else _dup(base_int)
         )
         new_ds.shot_rotation = int(getattr(self, "shot_rotation", 0) or 0)
         new_ds.Z_C = _dup(self.Z_C)
@@ -885,7 +912,7 @@ class Dataset2D:
             sig_avg = np.nanmean(self.raw_signal_ss[:, :, :, indices], axis=-1)
             sig_avg = np.nan_to_num(sig_avg, nan=0.0)
             self.raw_signal = sig_avg
-            self._base_raw_signal = sig_avg.copy()
+            self._base_raw_signal = self.raw_signal
 
             if (
                 self.raw_interferogram_ss is not None
@@ -895,11 +922,11 @@ class Dataset2D:
                 int_avg = np.nanmean(self.raw_interferogram_ss[:, :, indices], axis=-1)
                 int_avg = np.nan_to_num(int_avg, nan=0.0)
                 self.raw_interferogram = int_avg
-                self._base_raw_interferogram = int_avg.copy()
+                self._base_raw_interferogram = self.raw_interferogram
             elif self.units.get("interferogram_from_signal"):
                 int_avg = np.nan_to_num(np.nanmean(sig_avg, axis=1), nan=0.0)
                 self.raw_interferogram = int_avg
-                self._base_raw_interferogram = int_avg.copy()
+                self._base_raw_interferogram = self.raw_interferogram
             self.shot_rotation = 0
 
         if self.is_frequency_domain or self.datatype in ("FreqDomain", "processed"):

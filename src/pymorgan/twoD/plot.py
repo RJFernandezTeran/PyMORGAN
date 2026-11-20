@@ -921,9 +921,15 @@ def plot_surface(
     if x_lim is not None and None not in x_lim:
         x_lo, x_hi = sorted(float(v) for v in x_lim)
         ax.set_xlim((x_hi, x_lo) if inv_axes else (x_lo, x_hi))
+    elif inv_axes:
+        x_lo, x_hi = sorted(float(v) for v in ax.get_xlim())
+        ax.set_xlim(x_hi, x_lo)
     if y_lim is not None and None not in y_lim:
         y_lo, y_hi = sorted(float(v) for v in y_lim)
         ax.set_ylim((y_hi, y_lo) if inv_axes else (y_lo, y_hi))
+    elif inv_axes:
+        y_lo, y_hi = sorted(float(v) for v in ax.get_ylim())
+        ax.set_ylim(y_hi, y_lo)
     if zlim is not None and None not in zlim:
         ax.set_zlim(sorted(float(v) for v in zlim))
 

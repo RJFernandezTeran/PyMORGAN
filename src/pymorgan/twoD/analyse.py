@@ -721,11 +721,25 @@ class SliceDataset1D(Dataset1D):
     def __init__(self, delays, probe, Z_matrix, units, source=None):
         Z_mat = np.asarray(Z_matrix, dtype=float)
         Z_3d = Z_mat[:, :, np.newaxis] if Z_mat.ndim == 2 else Z_mat
+        units_dict = dict(units) if isinstance(units, dict) else {}
+        if "unitsL_lbl" not in units_dict:
+            u_tok = str(units_dict.get("unitsL", "cm-1")).strip()
+            lbl_map = {
+                "cm-1": "Wavenumber",
+                "cm^{-1}": "Wavenumber",
+                "cm^-1": "Wavenumber",
+                "cm\u207b\u00b9": "Wavenumber",
+                "nm": "Wavelength",
+                "eV": "Energy",
+                "THz": "Frequency",
+            }
+            if u_tok in lbl_map:
+                units_dict["unitsL_lbl"] = lbl_map[u_tok]
         super().__init__(
             Zavg_R=Z_3d,
             delays=np.asarray(delays, dtype=float),
             probe=np.asarray(probe, dtype=float),
-            units=units if isinstance(units, dict) else {},
+            units=units_dict,
             source=source,
             data_type="2D_Slice",
         )

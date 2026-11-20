@@ -9,13 +9,14 @@ they run as ``MainWindow`` methods and bind to the widgets declared in
 from __future__ import annotations
 
 import os
+import threading
 
 os.environ.setdefault("QT_API", "pyqt6")
 
 from pathlib import Path
 
 import numpy as np
-from PyQt6.QtCore import QTimer
+from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 from PyQt6.QtGui import (
     QStandardItem,
 )
@@ -41,9 +42,108 @@ from ..mw_common import (
 
 logger = get_logger(__name__)
 
+_SHOT_ROT_ASYNC_THRESHOLD_DELAYS = 16
+_SHOT_ROT_DEBOUNCE_MS = 120
+
+
+class _QuietTracker:
+    """No-op progress tracker safe to pass to worker threads."""
+
+    def set_total(self, total):
+        pass
+
+    def update(self, step, label=""):
+        pass
+
+    def update_split(self, step, total, stage):
+        pass
+
+    def close(self):
+        pass
+
+
+class _TwoDShotRotBridge(QObject):
+    """Thread-safe signal bridge delivering background reprocessing results."""
+
+    finished = pyqtSignal(object)
+
 
 class TwoDTabMixin:
     """2D tab: dataset loading, contour preview, cuts, slices and spectral diffusion."""
+
+    def _next_twoD_op_seq(self) -> int:
+        seq = int(getattr(self, "_twoD_op_seq", 0)) + 1
+        self._twoD_op_seq = seq
+        return seq
+
+    def _cancel_pending_twoD_shot_rotation(self) -> None:
+        timer = getattr(self, "_twoD_shot_rot_timer", None)
+        if timer is not None and timer.isActive():
+            timer.stop()
+
+    @staticmethod
+    def _commit_twoD_processed_snapshot(target_ds, work_ds) -> None:
+        """Apply outputs computed on ``work_ds`` onto ``target_ds`` on the GUI thread."""
+        for cache_attr in (
+            "_cls_cache",
+            "_ivcls_cache",
+            "_nls_cache",
+            "_sd_results",
+            "_kubo_fit_dataset",
+        ):
+            if hasattr(target_ds, cache_attr):
+                delattr(target_ds, cache_attr)
+
+        for attr in (
+            "_base_raw_signal",
+            "_base_raw_interferogram",
+            "shot_rotation",
+            "raw_signal",
+            "raw_interferogram",
+            "proc_absFFT_ZPint",
+            "proc_ZP_phase",
+            "proc_fittedPhase",
+            "proc_apod_func",
+            "proc_binspecmax",
+            "proc_phase_points",
+            "proc_phase_coeffs",
+            "proc_pump_full",
+            "probe",
+            "cal_level",
+            "Z_R",
+            "pump",
+            "Z_C",
+            "_is_corrected",
+        ):
+            if hasattr(work_ds, attr):
+                setattr(target_ds, attr, getattr(work_ds, attr))
+
+    def _refresh_twoD_after_reprocess(self) -> None:
+        """Refresh plot controls, preview contour, info panel, and phase diagnostics."""
+        if self.twoD_dataset is None:
+            return
+        self._update_spectral_diffusion_controls_state()
+        if self.twoD_plot_controls is not None:
+            lst_delays = getattr(self, "twoD_t2delay_lst", None)
+            active_idx = lst_delays.currentIndex().row() if lst_delays is not None else 0
+            if active_idx < 0 or active_idx >= len(self.twoD_dataset.delays):
+                active_idx = max(0, len(self.twoD_dataset.delays) - 1)
+            pump_arr = np.asarray(self.twoD_dataset.pump, dtype=float)
+            cur_pu_lo, cur_pu_hi = sorted(self.twoD_plot_controls.pump_lim())
+            if (
+                pump_arr.size
+                and cur_pu_hi >= float(np.nanmin(pump_arr))
+                and cur_pu_lo <= float(np.nanmax(pump_arr))
+            ):
+                self.twoD_plot_controls.update_delay_index(active_idx, force_reset_pct=False)
+            else:
+                self.twoD_plot_controls.set_dataset(self.twoD_dataset, active_idx)
+
+        self._twoD_preview_contour()
+        self._update_twoD_sample_info()
+        if hasattr(self, "_twoD_update_other_plot"):
+            self._twoD_update_other_plot()
+        self._twoD_update_phase_coeffs_display()
 
     def _on_twoD_datatype_changed(self, text: str):
         self.twoD_refresh_dataset_list()
@@ -76,53 +176,154 @@ class TwoDTabMixin:
 
     def twoD_reprocess_data(self, _checked: bool = False, *, silent: bool = False):
         """Reprocess the active 2D dataset in memory using current Phasing/FT controls."""
-        if self.twoD_dataset is None:
+        self._cancel_pending_twoD_shot_rotation()
+        target_ds = self.twoD_dataset
+        if target_ds is None:
             if self._twoD_current_path:
                 self.twoD_reload_data()
             return
 
+        req_seq = self._next_twoD_op_seq()
         if (
-            self.twoD_dataset.datatype in ("shaper", "interferometer", "FreqDomain")
-            or getattr(self.twoD_dataset, "is_frequency_domain", False)
+            target_ds.datatype in ("shaper", "interferometer", "FreqDomain")
+            or getattr(target_ds, "is_frequency_domain", False)
         ):
-            for cache_attr in (
-                "_cls_cache",
-                "_ivcls_cache",
-                "_nls_cache",
-                "_sd_results",
-                "_kubo_fit_dataset",
-            ):
-                if hasattr(self.twoD_dataset, cache_attr):
-                    delattr(self.twoD_dataset, cache_attr)
-            self._update_spectral_diffusion_controls_state()
+            proc_kwargs = self._twoD_collect_process_kwargs()
+            auto_cal = getattr(self, "twoD_auto_cal_chk", None)
+            autocalibrate_probe = auto_cal.isChecked() if auto_cal is not None else False
+            cal_probe_vec = (
+                self._get_cal_tab_probe_curve(len(target_ds.probe))
+                if autocalibrate_probe
+                else None
+            )
+            raw_probe = getattr(self, "_twoD_raw_probe", None)
+            raw_cal_level = getattr(self, "_twoD_raw_cal_level", None)
+            work_ds = target_ds.copy(deep=False)
 
             tracker = None
-            if silent or len(self.twoD_dataset.delays) <= 60:
+            if silent or len(target_ds.delays) <= 60:
                 try:
                     from ...twoD.progress import ProgressTracker
 
                     tracker = ProgressTracker(1, is_gui=False)
                 except Exception:
                     tracker = None
-            self._run_twoD_dataset_process(progress_tracker=tracker)
+            self._run_twoD_dataset_process(
+                progress_tracker=tracker,
+                dataset=work_ds,
+                raw_probe=raw_probe,
+                raw_cal_level=raw_cal_level,
+                proc_kwargs_override=proc_kwargs,
+                autocalibrate_override=autocalibrate_probe,
+                cal_probe_override=cal_probe_vec,
+            )
+            if req_seq != getattr(self, "_twoD_op_seq", 0) or self.twoD_dataset is not target_ds:
+                return
+            self._commit_twoD_processed_snapshot(target_ds, work_ds)
 
-        if self.twoD_plot_controls is not None:
-            lst_delays = getattr(self, "twoD_t2delay_lst", None)
-            active_idx = lst_delays.currentIndex().row() if lst_delays is not None else 0
-            if active_idx < 0 or active_idx >= len(self.twoD_dataset.delays):
-                active_idx = max(0, len(self.twoD_dataset.delays) - 1)
-            pump_arr = np.asarray(self.twoD_dataset.pump, dtype=float)
-            cur_pu_lo, cur_pu_hi = sorted(self.twoD_plot_controls.pump_lim())
-            if pump_arr.size and cur_pu_hi >= float(np.nanmin(pump_arr)) and cur_pu_lo <= float(np.nanmax(pump_arr)):
-                self.twoD_plot_controls.update_delay_index(active_idx, force_reset_pct=False)
-            else:
-                self.twoD_plot_controls.set_dataset(self.twoD_dataset, active_idx)
+        if req_seq != getattr(self, "_twoD_op_seq", 0) or self.twoD_dataset is not target_ds:
+            return
+        self._refresh_twoD_after_reprocess()
 
-        self._twoD_preview_contour()
-        self._update_twoD_sample_info()
-        if hasattr(self, "_twoD_update_other_plot"):
-            self._twoD_update_other_plot()
-        self._twoD_update_phase_coeffs_display()
+    def _on_twoD_shot_rotation_changed(self, _value: int = 0) -> None:
+        """Handle live shot-rotation spinner changes without freezing large datasets."""
+        target_ds = getattr(self, "twoD_dataset", None)
+        if target_ds is None:
+            return
+        if len(getattr(target_ds, "delays", ())) <= _SHOT_ROT_ASYNC_THRESHOLD_DELAYS:
+            self._cancel_pending_twoD_shot_rotation()
+            self.twoD_reprocess_data(silent=True)
+            return
+
+        timer = getattr(self, "_twoD_shot_rot_timer", None)
+        if timer is None:
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.timeout.connect(self._start_async_twoD_shot_rotation)
+            self._twoD_shot_rot_timer = timer
+        timer.stop()
+        timer.start(_SHOT_ROT_DEBOUNCE_MS)
+
+    def _start_async_twoD_shot_rotation(self) -> None:
+        """Launch shot-rotation reprocessing on a background thread for large datasets."""
+        target_ds = getattr(self, "twoD_dataset", None)
+        if target_ds is None:
+            return
+        if not (
+            target_ds.datatype in ("shaper", "interferometer", "FreqDomain")
+            or getattr(target_ds, "is_frequency_domain", False)
+        ):
+            return
+
+        req_seq = self._next_twoD_op_seq()
+        bridge = getattr(self, "_twoD_shot_rot_bridge", None)
+        if bridge is None:
+            bridge = _TwoDShotRotBridge(self)
+            bridge.finished.connect(self._on_twoD_shot_rot_finished)
+            self._twoD_shot_rot_bridge = bridge
+
+        proc_kwargs = self._twoD_collect_process_kwargs()
+        auto_cal = getattr(self, "twoD_auto_cal_chk", None)
+        autocalibrate_probe = auto_cal.isChecked() if auto_cal is not None else False
+        cal_probe_vec = (
+            self._get_cal_tab_probe_curve(len(target_ds.probe))
+            if autocalibrate_probe
+            else None
+        )
+        raw_probe = getattr(self, "_twoD_raw_probe", None)
+        raw_cal_level = getattr(self, "_twoD_raw_cal_level", None)
+        work_ds = target_ds.copy(deep=False)
+
+        if hasattr(self, "statusBar"):
+            try:
+                self.statusBar().showMessage("Reprocessing 2D dataset...")
+            except Exception:
+                pass
+
+        def _worker():
+            err: Exception | None = None
+            try:
+                self._run_twoD_dataset_process(
+                    progress_tracker=_QuietTracker(),
+                    dataset=work_ds,
+                    raw_probe=raw_probe,
+                    raw_cal_level=raw_cal_level,
+                    proc_kwargs_override=proc_kwargs,
+                    autocalibrate_override=autocalibrate_probe,
+                    cal_probe_override=cal_probe_vec,
+                )
+            except Exception as exc:
+                err = exc
+            try:
+                bridge.finished.emit((req_seq, target_ds, work_ds, err))
+            except RuntimeError:
+                pass
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _on_twoD_shot_rot_finished(self, payload) -> None:
+        """Apply completed background shot-rotation results if still current."""
+        req_seq, target_ds, work_ds, err = payload
+        if req_seq != getattr(self, "_twoD_op_seq", 0) or self.twoD_dataset is not target_ds:
+            return
+        if err is not None:
+            logger.warning("Background 2D shot-rotation reprocessing failed: %s", err, exc_info=err)
+            if hasattr(self, "statusBar"):
+                try:
+                    self.statusBar().showMessage(f"2D reprocessing failed: {err}")
+                except Exception:
+                    pass
+            return
+
+        self._commit_twoD_processed_snapshot(target_ds, work_ds)
+        self._refresh_twoD_after_reprocess()
+        if hasattr(self, "statusBar"):
+            try:
+                bar = self.statusBar()
+                if bar.currentMessage() == "Reprocessing 2D dataset...":
+                    bar.clearMessage()
+            except Exception:
+                pass
 
     @busy_guard("Loading 2D dataset...")
     def twoD_load_path(self, path: str, data_type: str | None = None, force: bool = False):
@@ -140,6 +341,9 @@ class TwoDTabMixin:
             and getattr(self.twoD_dataset, "data_type", None) == dt
         ):
             return
+
+        self._cancel_pending_twoD_shot_rotation()
+        load_seq = self._next_twoD_op_seq()
 
         prev_delay = None
         prev_idx = None
@@ -164,44 +368,73 @@ class TwoDTabMixin:
                 progress = None
 
         try:
-            self.twoD_dataset = pm.load_2D(path, data_type=dt, progress_tracker=progress)
-            self._twoD_current_path = path
-            self._twoD_raw_probe = (
-                self.twoD_dataset.probe.copy()
-                if getattr(self.twoD_dataset, "probe", None) is not None
+            loaded_ds = pm.load_2D(path, data_type=dt, progress_tracker=progress)
+            if load_seq != getattr(self, "_twoD_op_seq", 0):
+                return
+
+            loaded_raw_probe = (
+                loaded_ds.probe.copy()
+                if getattr(loaded_ds, "probe", None) is not None
                 else None
             )
-            self._twoD_raw_cal_level = getattr(self.twoD_dataset, "cal_level", None)
+            loaded_raw_cal_level = getattr(loaded_ds, "cal_level", None)
+
+            has_neg_ref = (
+                dt != "P2DAT"
+                and len(loaded_ds.delays) > 1
+                and float(np.nanmin(loaded_ds.delays)) < -0.05
+            )
+
+            if loaded_ds is not None and (
+                loaded_ds.datatype in ("shaper", "interferometer", "FreqDomain")
+                or getattr(loaded_ds, "is_frequency_domain", False)
+            ):
+                proc_kwargs = self._twoD_collect_process_kwargs()
+                proc_kwargs["shot_rotation"] = 0
+                auto_cal = getattr(self, "twoD_auto_cal_chk", None)
+                autocalibrate_probe = auto_cal.isChecked() if auto_cal is not None else False
+                cal_probe_vec = (
+                    self._get_cal_tab_probe_curve(len(loaded_ds.probe))
+                    if autocalibrate_probe
+                    else None
+                )
+                self._run_twoD_dataset_process(
+                    progress_tracker=progress,
+                    dataset=loaded_ds,
+                    raw_probe=loaded_raw_probe,
+                    raw_cal_level=loaded_raw_cal_level,
+                    proc_kwargs_override=proc_kwargs,
+                    autocalibrate_override=autocalibrate_probe,
+                    cal_probe_override=cal_probe_vec,
+                )
+                if load_seq != getattr(self, "_twoD_op_seq", 0):
+                    return
+
+            self.twoD_dataset = loaded_ds
+            self._twoD_current_path = path
+            self._twoD_raw_probe = loaded_raw_probe
+            self._twoD_raw_cal_level = loaded_raw_cal_level
 
             shot_spin = getattr(self, "twoD_shot_rotation", None)
-            if (
-                shot_spin is not None
-                and self.twoD_dataset is not None
-                and getattr(self.twoD_dataset, "raw_signal", None) is not None
-                and not getattr(self.twoD_dataset, "is_frequency_domain", False)
-            ):
-                n_bins = max(2, int(self.twoD_dataset.raw_signal.shape[0]))
+            if shot_spin is not None:
                 shot_spin.blockSignals(True)
-                shot_spin.setRange(-(n_bins - 1), n_bins - 1)
+                if (
+                    getattr(self.twoD_dataset, "raw_signal", None) is not None
+                    and not getattr(self.twoD_dataset, "is_frequency_domain", False)
+                ):
+                    n_bins = max(2, int(self.twoD_dataset.raw_signal.shape[0]))
+                    shot_spin.setRange(-(n_bins - 1), n_bins - 1)
+                shot_spin.setValue(0)
                 shot_spin.blockSignals(False)
 
             sub_chk = getattr(self, "twoD_sub_scat_chk", None)
             if sub_chk is not None and self.twoD_dataset is not None:
-                has_neg_ref = (
-                    dt != "P2DAT"
-                    and len(self.twoD_dataset.delays) > 1
-                    and float(np.nanmin(self.twoD_dataset.delays)) < -0.05
-                )
                 sub_chk.blockSignals(True)
                 sub_chk.setChecked(bool(has_neg_ref))
                 sub_chk.blockSignals(False)
-
-            if self.twoD_dataset is not None and (
-                self.twoD_dataset.datatype in ("shaper", "interferometer", "FreqDomain")
-                or getattr(self.twoD_dataset, "is_frequency_domain", False)
-            ):
-                self._run_twoD_dataset_process(progress_tracker=progress)
         except Exception as exc:
+            if load_seq != getattr(self, "_twoD_op_seq", 0):
+                return
             QMessageBox.critical(self, "Load failed", str(exc))
             self.twoD_dataset = None
             self._update_twoD_state_selector()
@@ -344,44 +577,71 @@ class TwoDTabMixin:
             "bkgIdx": bkgIdx,
         }
 
-    def _run_twoD_dataset_process(self, progress_tracker=None):
-        """Run self.twoD_dataset.process(...) using the current GUI control values."""
-        if self.twoD_dataset is None:
+    def _run_twoD_dataset_process(
+        self,
+        progress_tracker=None,
+        *,
+        dataset=None,
+        raw_probe=None,
+        raw_cal_level=None,
+        shot_rotation_override: int | None = None,
+        proc_kwargs_override: dict | None = None,
+        autocalibrate_override: bool | None = None,
+        cal_probe_override: np.ndarray | None = None,
+    ):
+        """Run ``process(...)`` on ``dataset`` (defaults to ``self.twoD_dataset``)."""
+        ds = self.twoD_dataset if dataset is None else dataset
+        if ds is None:
             return
-        proc_kwargs = self._twoD_collect_process_kwargs()
+        proc_kwargs = (
+            dict(proc_kwargs_override)
+            if proc_kwargs_override is not None
+            else self._twoD_collect_process_kwargs()
+        )
+        if shot_rotation_override is not None:
+            proc_kwargs["shot_rotation"] = int(shot_rotation_override)
 
-        if getattr(self, "_twoD_raw_probe", None) is None:
-            self._twoD_raw_probe = (
-                self.twoD_dataset.probe.copy()
-                if hasattr(self.twoD_dataset, "probe") and self.twoD_dataset.probe is not None
-                else None
-            )
-            self._twoD_raw_cal_level = getattr(self.twoD_dataset, "cal_level", None)
+        if raw_probe is None and getattr(self, "_twoD_raw_probe", None) is None:
+            if hasattr(ds, "probe") and ds.probe is not None:
+                self._twoD_raw_probe = ds.probe.copy()
+                self._twoD_raw_cal_level = getattr(ds, "cal_level", None)
 
-        auto_cal = getattr(self, "twoD_auto_cal_chk", None)
-        autocalibrate_probe = auto_cal.isChecked() if auto_cal is not None else False
-        cal_probe_vec = (
-            self._get_cal_tab_probe_curve(len(self.twoD_dataset.probe))
-            if autocalibrate_probe
-            else None
+        base_probe = self._twoD_raw_probe if raw_probe is None else raw_probe
+        base_cal_level = (
+            getattr(self, "_twoD_raw_cal_level", None)
+            if raw_probe is None
+            else raw_cal_level
         )
 
-        self.twoD_dataset.process(
+        if autocalibrate_override is None:
+            auto_cal = getattr(self, "twoD_auto_cal_chk", None)
+            autocalibrate_probe = auto_cal.isChecked() if auto_cal is not None else False
+        else:
+            autocalibrate_probe = bool(autocalibrate_override)
+
+        if cal_probe_override is not None:
+            cal_probe_vec = cal_probe_override
+        elif autocalibrate_probe:
+            cal_probe_vec = self._get_cal_tab_probe_curve(len(ds.probe))
+        else:
+            cal_probe_vec = None
+
+        ds.process(
             **proc_kwargs,
             autocalibrate_probe=autocalibrate_probe,
             cal_probe_vector=cal_probe_vec,
             progress_tracker=progress_tracker,
         )
         if autocalibrate_probe and cal_probe_vec is not None:
-            self.twoD_dataset.probe = cal_probe_vec.copy()
-            self.twoD_dataset.cal_level = "autocalibrated"
+            ds.probe = cal_probe_vec.copy()
+            ds.cal_level = "autocalibrated"
         elif (
             not autocalibrate_probe
-            and getattr(self, "_twoD_raw_probe", None) is not None
-            and len(self._twoD_raw_probe) == len(self.twoD_dataset.probe)
+            and base_probe is not None
+            and len(base_probe) == len(ds.probe)
         ):
-            self.twoD_dataset.probe = self._twoD_raw_probe.copy()
-            self.twoD_dataset.cal_level = getattr(self, "_twoD_raw_cal_level", None)
+            ds.probe = base_probe.copy()
+            ds.cal_level = base_cal_level
 
     def _update_twoD_state_selector(self):
         """Show and populate the polarization/slow-modulation state selector if multiple states exist."""
@@ -426,21 +686,54 @@ class TwoDTabMixin:
 
     def _on_twoD_state_changed(self, state_name: str):
         """Switch active polarization/slow-modulation state on the 2D dataset and re-render."""
-        if not state_name or self.twoD_dataset is None:
+        target_ds = self.twoD_dataset
+        if not state_name or target_ds is None:
             return
-        if not self.twoD_dataset.set_active_state(state_name):
+        self._cancel_pending_twoD_shot_rotation()
+        req_seq = self._next_twoD_op_seq()
+        if not target_ds.set_active_state(state_name):
             return
-        if (
-            self.twoD_dataset.datatype in ("shaper", "interferometer", "FreqDomain")
-            or getattr(self.twoD_dataset, "is_frequency_domain", False)
+        shot_spin = getattr(self, "twoD_shot_rotation", None)
+        if shot_spin is not None and not (
+            getattr(target_ds, "is_frequency_domain", False)
+            or getattr(target_ds, "datatype", None) == "FreqDomain"
         ):
-            self._run_twoD_dataset_process()
+            shot_spin.blockSignals(True)
+            shot_spin.setValue(0)
+            shot_spin.blockSignals(False)
+        if (
+            target_ds.datatype in ("shaper", "interferometer", "FreqDomain")
+            or getattr(target_ds, "is_frequency_domain", False)
+        ):
+            proc_kwargs = self._twoD_collect_process_kwargs()
+            proc_kwargs["shot_rotation"] = 0
+            auto_cal = getattr(self, "twoD_auto_cal_chk", None)
+            autocalibrate_probe = auto_cal.isChecked() if auto_cal is not None else False
+            cal_probe_vec = (
+                self._get_cal_tab_probe_curve(len(target_ds.probe))
+                if autocalibrate_probe
+                else None
+            )
+            work_ds = target_ds.copy(deep=False)
+            self._run_twoD_dataset_process(
+                dataset=work_ds,
+                raw_probe=getattr(self, "_twoD_raw_probe", None),
+                raw_cal_level=getattr(self, "_twoD_raw_cal_level", None),
+                proc_kwargs_override=proc_kwargs,
+                autocalibrate_override=autocalibrate_probe,
+                cal_probe_override=cal_probe_vec,
+            )
+            if req_seq != getattr(self, "_twoD_op_seq", 0) or self.twoD_dataset is not target_ds:
+                return
+            self._commit_twoD_processed_snapshot(target_ds, work_ds)
+        if req_seq != getattr(self, "_twoD_op_seq", 0) or self.twoD_dataset is not target_ds:
+            return
         if self.twoD_plot_controls is not None:
             lst_delays = getattr(self, "twoD_t2delay_lst", None)
             active_idx = lst_delays.currentIndex().row() if lst_delays is not None else 0
-            if active_idx < 0 or active_idx >= len(self.twoD_dataset.delays):
-                active_idx = max(0, len(self.twoD_dataset.delays) - 1)
-            self.twoD_plot_controls.set_dataset(self.twoD_dataset, active_idx)
+            if active_idx < 0 or active_idx >= len(target_ds.delays):
+                active_idx = max(0, len(target_ds.delays) - 1)
+            self.twoD_plot_controls.set_dataset(target_ds, active_idx)
         self._twoD_preview_contour()
         if hasattr(self, "_twoD_update_other_plot"):
             self._twoD_update_other_plot()
@@ -1271,6 +1564,7 @@ class TwoDTabMixin:
         contour_pump_lim = contour_ylim if is_vertical else contour_xlim
         contour_probe_lim = contour_xlim if is_vertical else contour_ylim
         dual_sec = self._twoD_dual_axis()
+        nat_unit, nat_ltx = self._twoD_native_unit()
 
         import matplotlib.pyplot as plt
 
@@ -1295,7 +1589,7 @@ class TwoDTabMixin:
                     ax=new_ax,
                     fig=fig,
                     normY=self._twoD_norm(),
-                    x_axis_unit="cm-1",
+                    x_axis_unit=nat_unit,
                     secondary_axis=dual_sec,
                 )
 
@@ -1316,7 +1610,7 @@ class TwoDTabMixin:
 
         elif choice == "Off-diagonal (parallel offset)":
             offset, ok_off = QInputDialog.getDouble(
-                self, "Off-diagonal Offset", "Enter offset (probe = pump + offset in cm⁻¹):", 15.0, -500.0, 500.0, 1
+                self, "Off-diagonal Offset", f"Enter offset (probe = pump + offset in {nat_unit}):", 15.0, -500.0, 500.0, 1
             )
             if ok_off:
                 try:
@@ -1335,17 +1629,17 @@ class TwoDTabMixin:
                         ax=new_ax,
                         fig=fig,
                         normY=self._twoD_norm(),
-                        x_axis_unit="cm-1",
+                        x_axis_unit=nat_unit,
                         secondary_axis=dual_sec,
                     )
 
                     line = new_ax.get_lines()[n_before]
                     line.set_color("purple")
-                    line.set_label(f"Off-diagonal (offset={offset:+.1f} " + r"cm$^{-1}$)")
+                    line.set_label(f"Off-diagonal (offset={offset:+.1f} {nat_ltx})")
 
                     pumpAll, probeAll, pump_symbol, probe_symbol = self._get_twoD_axis_labels()
                     new_ax.set_xlabel(f"{pump_symbol} ({probe_symbol} = {pump_symbol} {offset:+.1f})")
-                    new_ax.set_title(f"Off-diagonal Cut (offset={offset:+.1f} " + r"cm$^{-1}$) at $t_2$ = " + f"{active_delay:.2f} ps")
+                    new_ax.set_title(f"Off-diagonal Cut (offset={offset:+.1f} {nat_ltx}) at $t_2$ = {active_delay:.2f} ps")
                     new_ax.legend()
                     fig.tight_layout()
                     plt.show(block=False)
@@ -1356,11 +1650,11 @@ class TwoDTabMixin:
             w1_mid = float(np.mean(self.twoD_dataset.pump))
             w3_mid = float(np.mean(self.twoD_dataset.probe))
             w1_val, ok1 = QInputDialog.getDouble(
-                self, "Anti-diagonal Centre", "Centre pump wavenumber w1 (cm⁻¹):", w1_mid, float(np.min(self.twoD_dataset.pump)), float(np.max(self.twoD_dataset.pump)), 1
+                self, "Anti-diagonal Centre", f"Centre pump ({nat_unit}):", w1_mid, float(np.min(self.twoD_dataset.pump)), float(np.max(self.twoD_dataset.pump)), 1
             )
             if ok1:
                 w3_val, ok2 = QInputDialog.getDouble(
-                    self, "Anti-diagonal Centre", "Centre probe wavenumber w3 (cm⁻¹):", w3_mid, float(np.min(self.twoD_dataset.probe)), float(np.max(self.twoD_dataset.probe)), 1
+                    self, "Anti-diagonal Centre", f"Centre probe ({nat_unit}):", w3_mid, float(np.min(self.twoD_dataset.probe)), float(np.max(self.twoD_dataset.probe)), 1
                 )
                 if ok2:
                     try:
@@ -1379,7 +1673,7 @@ class TwoDTabMixin:
                             ax=new_ax,
                             fig=fig,
                             normY=self._twoD_norm(),
-                            x_axis_unit="cm-1",
+                            x_axis_unit=nat_unit,
                             secondary_axis=False,
                         )
 
@@ -1387,7 +1681,11 @@ class TwoDTabMixin:
                         line.set_color("r")
                         line.set_label("Anti-diagonal")
 
-                        new_ax.set_xlabel(r"Relative Displacement $\Delta\omega$ (cm$^{-1}$)")
+                        new_ax.set_xlabel(
+                            r"Relative Displacement $\Delta\omega$ (cm$^{-1}$)"
+                            if nat_unit == "cm-1"
+                            else f"Relative Displacement ({nat_ltx})"
+                        )
                         new_ax.set_title(f"Anti-diagonal Cut at ({w1_val:.1f}, {w3_val:.1f}) | $t_2$ = {active_delay:.2f} ps")
                         new_ax.legend()
                         fig.tight_layout()
@@ -1413,7 +1711,11 @@ class TwoDTabMixin:
                         new_ax.plot(rel_disp, norm_diag, "k-", linewidth=2.0, label="Diagonal (Normalised)")
                         new_ax.plot(rel_disp, norm_antidiag, "r--", linewidth=2.0, label="Anti-diagonal (Normalised)")
 
-                        new_ax.set_xlabel(r"Relative Wavenumber Displacement $\Delta\omega$ (cm$^{-1}$)")
+                        new_ax.set_xlabel(
+                            r"Relative Wavenumber Displacement $\Delta\omega$ (cm$^{-1}$)"
+                            if nat_unit == "cm-1"
+                            else f"Relative Displacement ({nat_ltx})"
+                        )
                         new_ax.set_ylabel("Normalised Intensity (max = 1.0)")
                         new_ax.set_title(f"Combined Diagonal & Anti-diagonal Profiles at ({w1_val:.1f}, {w3_val:.1f}) | $t_2$ = {active_delay:.2f} ps")
                         new_ax.grid(True, linestyle=":", alpha=0.6)
@@ -1752,6 +2054,21 @@ class TwoDTabMixin:
                 if vals:
                     self._plot_several_probe_slices(vals, active_delay, contour_pump_lim)
 
+    def _twoD_native_unit(self) -> tuple[str, str]:
+        """Return ``(unit_token, latex_label)`` for ``self.twoD_dataset``'s native spectral axis."""
+        ds = getattr(self, "twoD_dataset", None)
+        units = getattr(ds, "units", None) if ds is not None else None
+        raw = (
+            (units.get("unitsL") if isinstance(units, dict) else None)
+            or (getattr(ds, "freq_units", None) if ds is not None else None)
+            or "cm-1"
+        )
+        u = str(raw).strip()
+        norm = "cm-1" if u in ("cm-1", "cm^-1", "cm\u207b\u00b9", "cm^{-1}", "") else u
+        if norm in hlp.SPECTRAL_UNITS:
+            return norm, hlp.x_unit_label(norm)[1]
+        return "cm-1", r"cm$^{-1}$"
+
     def _twoD_dual_axis(self) -> bool | None:
         if self.twoD_plot_controls is not None:
             return self.twoD_plot_controls.dual_axis()
@@ -1802,6 +2119,7 @@ class TwoDTabMixin:
         from ...oneD.plot import plot_spectra
 
         pm.apply_style()
+        nat_unit, nat_ltx = self._twoD_native_unit()
         slice_ds = self.twoD_dataset.get_slice_at_pump(pump_wn)
         fig, ax = plt.subplots(figsize=(7.5, 4.375))
         plot_spectra(
@@ -1810,13 +2128,13 @@ class TwoDTabMixin:
             ax=ax,
             fig=fig,
             normY=self._twoD_norm(),
-            x_axis_unit="cm-1",
+            x_axis_unit=nat_unit,
             secondary_axis=self._twoD_dual_axis(),
         )
 
         pumpAll, probeAll, pump_symbol, probe_symbol = self._get_twoD_axis_labels()
         ax.set_xlabel(probeAll)
-        ax.set_title(f"Slice at {pump_symbol} = {pump_wn:.1f} cm$^{{-1}}$")
+        ax.set_title(f"Slice at {pump_symbol} = {pump_wn:.1f} {nat_ltx}")
         ax.set_xlim(xlim)
         fig.tight_layout()
         plt.show(block=False)
@@ -1828,6 +2146,7 @@ class TwoDTabMixin:
         from ...oneD.plot import plot_spectra
 
         pm.apply_style()
+        nat_unit, nat_ltx = self._twoD_native_unit()
         slice_ds = self.twoD_dataset.get_slice_at_probe(probe_wn)
         fig, ax = plt.subplots(figsize=(7.5, 4.375))
         plot_spectra(
@@ -1836,13 +2155,13 @@ class TwoDTabMixin:
             ax=ax,
             fig=fig,
             normY=self._twoD_norm(),
-            x_axis_unit="cm-1",
+            x_axis_unit=nat_unit,
             secondary_axis=self._twoD_dual_axis(),
         )
 
         pumpAll, probeAll, pump_symbol, probe_symbol = self._get_twoD_axis_labels()
         ax.set_xlabel(pumpAll)
-        ax.set_title(f"Slice at {probe_symbol} = {probe_wn:.1f} cm$^{{-1}}$")
+        ax.set_title(f"Slice at {probe_symbol} = {probe_wn:.1f} {nat_ltx}")
         ax.set_xlim(xlim)
         fig.tight_layout()
         plt.show(block=False)
@@ -1854,6 +2173,7 @@ class TwoDTabMixin:
         from ...oneD.plot import plot_spectra
 
         pm.apply_style()
+        nat_unit, nat_ltx = self._twoD_native_unit()
         slice_ds = self.twoD_dataset.get_slice_integrate_pump(pump_range[0], pump_range[1])
         fig, ax = plt.subplots(figsize=(7.5, 4.375))
         plot_spectra(
@@ -1862,14 +2182,14 @@ class TwoDTabMixin:
             ax=ax,
             fig=fig,
             normY=self._twoD_norm(),
-            x_axis_unit="cm-1",
+            x_axis_unit=nat_unit,
             secondary_axis=self._twoD_dual_axis(),
         )
 
         pumpAll, probeAll, pump_symbol, probe_symbol = self._get_twoD_axis_labels()
         ax.set_xlabel(probeAll)
         ax.set_title(
-            f"Integrated {pump_symbol} [{pump_range[0]:.1f}:{pump_range[1]:.1f}] cm$^{{-1}}$"
+            f"Integrated {pump_symbol} [{pump_range[0]:.1f}:{pump_range[1]:.1f}] {nat_ltx}"
         )
         ax.set_xlim(xlim)
         fig.tight_layout()
@@ -1882,6 +2202,7 @@ class TwoDTabMixin:
         from ...oneD.plot import plot_spectra
 
         pm.apply_style()
+        nat_unit, nat_ltx = self._twoD_native_unit()
         slice_ds = self.twoD_dataset.get_slice_integrate_probe(probe_range[0], probe_range[1])
         fig, ax = plt.subplots(figsize=(7.5, 4.375))
         plot_spectra(
@@ -1890,14 +2211,14 @@ class TwoDTabMixin:
             ax=ax,
             fig=fig,
             normY=self._twoD_norm(),
-            x_axis_unit="cm-1",
+            x_axis_unit=nat_unit,
             secondary_axis=self._twoD_dual_axis(),
         )
 
         pumpAll, probeAll, pump_symbol, probe_symbol = self._get_twoD_axis_labels()
         ax.set_xlabel(pumpAll)
         ax.set_title(
-            f"Integrated {probe_symbol} [{probe_range[0]:.1f}:{probe_range[1]:.1f}] cm$^{{-1}}$"
+            f"Integrated {probe_symbol} [{probe_range[0]:.1f}:{probe_range[1]:.1f}] {nat_ltx}"
         )
         ax.set_xlim(xlim)
         fig.tight_layout()
@@ -1917,6 +2238,7 @@ class TwoDTabMixin:
         cm = hlp.get_trace_cmap(s.traces_cmap, Nplots)
         pumpAll, probeAll, pump_symbol, probe_symbol = self._get_twoD_axis_labels()
         dual_sec = self._twoD_dual_axis()
+        nat_unit, nat_ltx = self._twoD_native_unit()
 
         lines = []
         labels = []
@@ -1929,7 +2251,7 @@ class TwoDTabMixin:
                 ax=ax,
                 fig=fig,
                 normY=self._twoD_norm(),
-                x_axis_unit="cm-1",
+                x_axis_unit=nat_unit,
                 secondary_axis=dual_sec if i == Nplots - 1 else False,
             )
             line = ax.get_lines()[n_before]
@@ -1946,7 +2268,7 @@ class TwoDTabMixin:
         leg = ax.legend(
             handles=lines,
             labels=labels,
-            title=f"{pump_symbol} (cm$^{{-1}}$)",
+            title=f"{pump_symbol} ({nat_ltx})",
             loc="center left",
             bbox_to_anchor=(1, 0.5),
             handlelength=0.75,
@@ -1970,6 +2292,7 @@ class TwoDTabMixin:
         cm = hlp.get_trace_cmap(s.traces_cmap, Nplots)
         pumpAll, probeAll, pump_symbol, probe_symbol = self._get_twoD_axis_labels()
         dual_sec = self._twoD_dual_axis()
+        nat_unit, nat_ltx = self._twoD_native_unit()
 
         lines = []
         labels = []
@@ -1982,7 +2305,7 @@ class TwoDTabMixin:
                 ax=ax,
                 fig=fig,
                 normY=self._twoD_norm(),
-                x_axis_unit="cm-1",
+                x_axis_unit=nat_unit,
                 secondary_axis=dual_sec if i == Nplots - 1 else False,
             )
             line = ax.get_lines()[n_before]
@@ -1999,7 +2322,7 @@ class TwoDTabMixin:
         leg = ax.legend(
             handles=lines,
             labels=labels,
-            title=f"{probe_symbol} (cm$^{{-1}}$)",
+            title=f"{probe_symbol} ({nat_ltx})",
             loc="center left",
             bbox_to_anchor=(1, 0.5),
             handlelength=0.75,
@@ -2341,6 +2664,12 @@ class TwoDTabMixin:
                 )
                 continue
 
+            pm.apply_style()
+            delay_unit = (
+                self.twoD_dataset.units.get("unitsT_ltx", "ps")
+                if isinstance(getattr(self.twoD_dataset, "units", None), dict)
+                else "ps"
+            )
             fig, ax = plt.subplots(figsize=(7.5, 4.5))
             # Use ax.scatter with high visibility options to ensure dots are rendered clearly
             ax.scatter(
@@ -2394,7 +2723,7 @@ class TwoDTabMixin:
                         zorder=3,
                     )
                     param_text.append(
-                        f"Single-exponential:\n  A = {popt[0]:.3f}\n  \u03c4 = {popt[1]:.2f} ps\n  y\u2080 = {popt[2]:.3f}"
+                        f"Single-exponential:\n  $A$ = {popt[0]:.3f}\n  $\\tau$ = {popt[1]:.2f} {delay_unit}\n  $y_0$ = {popt[2]:.3f}"
                     )
                 except Exception as exc:
                     param_text.append(f"Single-exponential Fit Failed:\n  {exc}")
@@ -2421,13 +2750,13 @@ class TwoDTabMixin:
                         zorder=3,
                     )
                     param_text.append(
-                        f"Bi-exponential:\n  A\u2081 = {popt[0]:.3f}, \u03c4\u2081 = {popt[1]:.2f} ps\n  A\u2082 = {popt[2]:.3f}, \u03c4\u2082 = {popt[3]:.2f} ps\n  y\u2080 = {popt[4]:.3f}"
+                        f"Bi-exponential:\n  $A_1$ = {popt[0]:.3f}, $\\tau_1$ = {popt[1]:.2f} {delay_unit}\n  $A_2$ = {popt[2]:.3f}, $\\tau_2$ = {popt[3]:.2f} {delay_unit}\n  $y_0$ = {popt[4]:.3f}"
                     )
                 except Exception as exc:
                     param_text.append(f"Bi-exponential Fit Failed:\n  {exc}")
 
             ax.set_title(title)
-            ax.set_xlabel("t\u2082 (ps)")
+            ax.set_xlabel(f"$t_2$ ({delay_unit})")
             ax.set_ylabel(ylabel)
             ax.legend(loc="best")
 
@@ -3640,9 +3969,17 @@ class TwoDTabMixin:
             pump_full = self.twoD_dataset.proc_pump_full
             n_ft = len(pump_full)
             n_pos = n_ft // 2
+            units_dict = getattr(self.twoD_dataset, "units", None)
+            nyquist_invert = bool(
+                isinstance(units_dict, dict)
+                and units_dict.get("nyquist_invert", False)
+                and (n_ft - n_pos >= 1)
+            )
+            fft_offset = (n_ft - n_pos) if nyquist_invert else 0
+            fft_slice = slice(fft_offset, n_ft) if nyquist_invert else slice(0, n_pos)
 
-            pump_pos = pump_full[:n_pos]
-            abs_fft = self.twoD_dataset.proc_absFFT_ZPint[:n_pos, ref_idx]
+            pump_pos = pump_full[fft_slice]
+            abs_fft = self.twoD_dataset.proc_absFFT_ZPint[fft_slice, ref_idx]
 
             # Add zero line
             ax.axhline(0, lw=0.75, c="0.75")
@@ -3726,14 +4063,15 @@ class TwoDTabMixin:
                     )
 
             if self.twoD_dataset.datatype == "interferometer":
-                raw_phase = self.twoD_dataset.proc_ZP_phase[:n_pos, ref_idx]
-                fitted_phase = self.twoD_dataset.proc_fittedPhase[:n_pos, ref_idx]
+                raw_phase = self.twoD_dataset.proc_ZP_phase[fft_slice, ref_idx]
+                fitted_phase = self.twoD_dataset.proc_fittedPhase[fft_slice, ref_idx]
 
                 # Re-centre phase: subtract fitted phase value at the spectral peak
                 binspecmax = 0
                 phase_points = 10
                 if hasattr(self.twoD_dataset, "proc_binspecmax"):
-                    binspecmax = self.twoD_dataset.proc_binspecmax[ref_idx]
+                    binspecmax = int(self.twoD_dataset.proc_binspecmax[ref_idx]) - fft_offset
+                    binspecmax = int(np.clip(binspecmax, 0, max(0, len(pump_pos) - 1)))
                 if hasattr(self.twoD_dataset, "proc_phase_points"):
                     phase_points = self.twoD_dataset.proc_phase_points
 
@@ -3753,7 +4091,7 @@ class TwoDTabMixin:
                     fit_end = in_range_indices[-1]
                 else:
                     fit_start = max(0, binspecmax - 10)
-                    fit_end = min(n_pos - 1, binspecmax + 10)
+                    fit_end = min(len(pump_pos) - 1, binspecmax + 10)
 
                 fit_mask_phase = np.zeros_like(pump_pos, dtype=bool)
                 fit_mask_phase[fit_start : fit_end + 1] = True

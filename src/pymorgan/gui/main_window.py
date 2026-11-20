@@ -1139,6 +1139,13 @@ class MainWindow(
 
     def closeEvent(self, event):
         try:
+            if hasattr(self, "_cancel_pending_twoD_shot_rotation"):
+                self._cancel_pending_twoD_shot_rotation()
+            if hasattr(self, "_next_twoD_op_seq"):
+                self._next_twoD_op_seq()
+        except Exception:
+            pass
+        try:
             lst = getattr(self, "PP_datafolderlist_lst", None)
             if lst is not None:
                 lst.removeEventFilter(self)
@@ -1429,7 +1436,8 @@ class MainWindow(
         self._connect("twoD_apply_reprocess_btn", self.twoD_reprocess_data)
         _shot_rot = getattr(self, "twoD_shot_rotation", None)
         if _shot_rot is not None:
-            _shot_rot.valueChanged.connect(lambda _v: self.twoD_reprocess_data(silent=True))
+            _shot_rot.setKeyboardTracking(False)
+            _shot_rot.valueChanged.connect(self._on_twoD_shot_rotation_changed)
 
         self._twoD_delay_model = QStandardItemModel(self)
         lst_delays = getattr(self, "twoD_t2delay_lst", None)

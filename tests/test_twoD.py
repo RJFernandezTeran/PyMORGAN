@@ -1,6 +1,7 @@
 """Unit tests for 2D dataset processing, CLS extraction, Kubo fitting, and ROI picker."""
 
 import numpy as np
+import pytest
 import synthetic
 
 import pymorgan as pm
@@ -1034,3 +1035,248 @@ def test_shot_rotation_pipeline_and_gui(tmp_path):
     finally:
         win.close()
     assert app is not None
+
+
+def test_twoD_native_nm_sample_info_slices_and_surface_default_inversion(monkeypatch):
+    """Verify native-nm sample_info, slice xlims, and default electronic plot_surface inversion."""
+    import matplotlib.pyplot as plt
+    from PyQt6.QtWidgets import QApplication
+
+    from pymorgan import helpers as hlp
+    from pymorgan.gui.main_window import MainWindow
+
+    app = QApplication.instance() or QApplication([])
+    assert app is not None
+
+    # 1. Default plot_surface inverts both axes for electronic cm-1 datasets without explicit limits
+    pump_cm1 = np.linspace(18500.0, 21500.0, 12)
+    probe_cm1 = np.linspace(18000.0, 22000.0, 14)
+    P, R = np.meshgrid(pump_cm1, probe_cm1, indexing="ij")
+    Z_cm1 = -np.exp(-(((P - 20000.0) ** 2 + (R - 20000.0) ** 2) / (2.0 * 450.0**2)))
+    ds_cm1 = Dataset2D(
+        Z_cm1[:, :, np.newaxis],
+        pump_cm1,
+        probe_cm1,
+        np.array([0.5]),
+        hlp.units2dic("cm-1", "ps", "mOD"),
+        freq_units="cm-1",
+    )
+    ax3d = ds_cm1.plot_surface(0.5)
+    try:
+        assert ax3d.get_xlim()[0] > ax3d.get_xlim()[1]
+        assert ax3d.get_ylim()[0] > ax3d.get_ylim()[1]
+    finally:
+        plt.close(ax3d.figure)
+
+    # 2. Native-nm electronic dataset reports true nm range in sample_info and matches slice xlim
+    pump_nm = np.linspace(480.0, 600.0, 20)
+    probe_nm = np.linspace(475.0, 610.0, 24)
+    Pn, Rn = np.meshgrid(pump_nm, probe_nm, indexing="ij")
+    Z_nm = -np.exp(-(((Pn - 540.0) ** 2 + (Rn - 540.0) ** 2) / (2.0 * 18.0**2)))
+    units_nm = hlp.units2dic("nm", "ps", "mOD")
+    units_nm["unitsL_lbl"] = "Wavelength"
+    units_nm["unitsL_ltx"] = "nm"
+    ds_nm = Dataset2D(
+        np.stack([Z_nm, 0.7 * Z_nm], axis=-1),
+        pump_nm,
+        probe_nm,
+        np.array([0.5, 2.0]),
+        units_nm,
+        freq_units="nm",
+    )
+    assert ds_nm.is_electronic is True
+    info_html = ds_nm.sample_info()
+    assert "(480.0\u2013600.0 nm)" in info_html
+    assert "(475.0\u2013610.0 nm)" in info_html
+
+    monkeypatch.setattr(plt, "show", lambda *a, **kw: None)
+    win = MainWindow()
+    try:
+        win.twoD_dataset = ds_nm
+        win._plot_pump_slice(540.0, [0.5], (480.0, 600.0))
+        fig_pu = plt.gcf()
+        try:
+            ax_pu = fig_pu.axes[0]
+            assert ax_pu.get_xlim() == pytest.approx((480.0, 600.0))
+            xdata_pu = np.asarray(ax_pu.get_lines()[0].get_xdata(), dtype=float)
+            assert float(np.min(xdata_pu)) >= 470.0 and float(np.max(xdata_pu)) <= 620.0
+        finally:
+            plt.close(fig_pu)
+
+        win._plot_probe_slice(540.0, [0.5], (480.0, 600.0))
+        fig_pr = plt.gcf()
+        try:
+            ax_pr = fig_pr.axes[0]
+            assert ax_pr.get_xlim() == pytest.approx((480.0, 600.0))
+            xdata_pr = np.asarray(ax_pr.get_lines()[0].get_xdata(), dtype=float)
+            assert float(np.min(xdata_pr)) >= 470.0 and float(np.max(xdata_pr)) <= 620.0
+        finally:
+            plt.close(fig_pr)
+    finally:
+        win.close()
+
+
+def test_cls_kinetics_plot_uses_mathtext_labels(monkeypatch):
+    """Verify CLS kinetics figure annotations and labels use Matplotlib mathtext instead of Unicode subscripts."""
+    import matplotlib.pyplot as plt
+    from PyQt6.QtWidgets import QApplication, QInputDialog, QMessageBox
+
+    from pymorgan import helpers as hlp
+    from pymorgan.gui.main_window import MainWindow
+
+    app = QApplication.instance() or QApplication([])
+    assert app is not None
+
+    pump = np.linspace(1980.0, 2020.0, 12)
+    probe = np.linspace(1980.0, 2020.0, 12)
+    delays = np.linspace(0.5, 20.0, 8)
+    Z = np.zeros((12, 12, 8), dtype=float)
+    ds = Dataset2D(Z, pump, probe, delays, hlp.units2dic("cm-1", "ps", "mOD"))
+    t = delays
+    y = 0.35 * np.exp(-t / 1.5) + 0.25 * np.exp(-t / 8.0) + 0.15
+    ds._sd_results = {"CLS": np.column_stack([t, y])}
+
+    monkeypatch.setattr(QInputDialog, "getItem", lambda *a, **kw: ("Both", True))
+    monkeypatch.setattr(QInputDialog, "getText", lambda *a, **kw: ("0:20", True))
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **kw: QMessageBox.StandardButton.No)
+    monkeypatch.setattr(plt, "show", lambda *a, **kw: None)
+
+    win = MainWindow()
+    try:
+        win.twoD_dataset = ds
+        win._update_spectral_diffusion_controls_state()
+        win.twoD_show_cls_chk.setChecked(True)
+        win._on_twoD_plot_sd_kinetics_clicked()
+        fig = plt.gcf()
+        try:
+            ax = fig.axes[0]
+            all_texts = [t_obj.get_text() for t_obj in ax.texts] + [ax.get_xlabel()]
+            joined = "\n".join(all_texts)
+            assert "$y_0$" in joined
+            assert "$A_1$" in joined
+            assert r"$\tau_1$" in joined
+            assert "$t_2$" in ax.get_xlabel()
+            for bad_cp in ("\u2080", "\u2081", "\u2082"):
+                assert bad_cp not in joined
+        finally:
+            plt.close(fig)
+    finally:
+        win.close()
+
+
+def test_process_atomicity_shared_base_and_gui_reprocess_guards(tmp_path):
+    """Verify shared unrotated base arrays, atomic process(), spinner reset, and reentrancy/async guards."""
+    import time
+
+    from PyQt6.QtWidgets import QApplication
+    from synthetic import make_synthetic_quickcontrol_2d
+
+    from pymorgan.gui.main_window import MainWindow
+    from pymorgan.twoD.progress import ProgressTracker
+
+    n_bins, n_probe = 32, 12
+    dt1_fs, w0_cm1, c_cm_fs = 30.0, 1800.0, 2.99792458e-5
+    t1_fs = np.arange(n_bins, dtype=float) * dt1_fs
+    probe = np.linspace(1960.0, 2040.0, n_probe)
+    delays = np.array([0.2, 1.0])
+    osc = np.cos(2.0 * np.pi * 200.0 * c_cm_fs * t1_fs) * np.exp(-t1_fs / 400.0)
+    pr_prof = -np.exp(-0.5 * ((probe - 2000.0) / 8.0) ** 2)
+    sig = np.stack([np.outer(osc, pr_prof), 0.6 * np.outer(osc, pr_prof)], axis=-1)
+    interf = np.mean(sig, axis=1)
+
+    units = {
+        "unitsL": "cm-1",
+        "unitsL_lbl": "Wavenumber",
+        "unitsL_ltx": r"cm$^{-1}$",
+        "unitsT": "ps",
+        "unitsT_ltx": "ps",
+        "unitsZ": "mOD",
+        "unitsZ_lbl": r"$S_{\text{2DIR}}$",
+        "unitsZ_ltx": r"mOD cm$^{1/2}$",
+        "interferogram_from_signal": True,
+    }
+    ds = Dataset2D(
+        sig.copy(),
+        t1_fs.copy(),
+        probe.copy(),
+        delays.copy(),
+        units,
+        freq_units="cm-1",
+        datatype="shaper",
+        raw_signal=sig.copy(),
+        raw_interferogram=interf.copy(),
+        raw_t1delays=t1_fs.copy(),
+        w0_cm1=w0_cm1,
+        dt1_fs=dt1_fs,
+    )
+    assert ds.raw_signal is ds._base_raw_signal
+    assert ds.raw_interferogram is ds._base_raw_interferogram
+
+    silent = ProgressTracker(1, is_gui=False)
+    ds.process(apodise_method="Cos", zeropad_factor=2, shot_rotation=0, progress_tracker=silent)
+    z_ok = ds.Z_R.copy()
+
+    # Failure during step 6 must leave shot_rotation, raw_signal, and Z_R untouched
+    with pytest.raises(IndexError):
+        ds.process(
+            apodise_method="Cos",
+            zeropad_factor=2,
+            shot_rotation=3,
+            bkg_sub=True,
+            bkgIdx=999,
+            progress_tracker=silent,
+        )
+    assert ds.shot_rotation == 0
+    assert ds.raw_signal is ds._base_raw_signal
+    np.testing.assert_allclose(ds.Z_R, z_ok)
+
+    # GUI: loading second dataset resets shot_rotation spinner; stale reprocess is discarded;
+    # large-delay (>16) shot rotation completes asynchronously on background worker.
+    app = QApplication.instance() or QApplication([])
+    m_small = make_synthetic_quickcontrol_2d(tmp_path / "qc_a", prefix="ds_a#01", n_scans=1)
+    m_large = make_synthetic_quickcontrol_2d(
+        tmp_path / "qc_b",
+        prefix="ds_b#02",
+        n_t1=32,
+        n_pixels=12,
+        t2_fs=tuple(float(i * 100) for i in range(18)),
+        n_scans=1,
+    )
+    win = MainWindow()
+    try:
+        win.twoD_load_path(str(m_small["info_path"]), data_type="QuickControl_2D")
+        win.twoD_shot_rotation.setValue(2)
+        assert win.twoD_dataset.shot_rotation == 2
+
+        win.twoD_load_path(str(m_large["info_path"]), data_type="QuickControl_2D")
+        assert win.twoD_shot_rotation.value() == 0
+        assert win.twoD_dataset.shot_rotation == 0
+
+        # Simulate stale concurrent reprocess interrupted by a newer request during processing
+        orig_runner = win._run_twoD_dataset_process
+        sentinel_z = win.twoD_dataset.Z_R.copy()
+
+        def _interrupting_runner(*args, **kwargs):
+            orig_runner(*args, **kwargs)
+            win._twoD_op_seq += 1
+
+        win._run_twoD_dataset_process = _interrupting_runner
+        try:
+            win.twoD_shot_rotation.blockSignals(True)
+            win.twoD_shot_rotation.setValue(4)
+            win.twoD_shot_rotation.blockSignals(False)
+            win.twoD_reprocess_data(silent=True)
+            assert win.twoD_dataset.shot_rotation == 0
+            np.testing.assert_allclose(win.twoD_dataset.Z_R, sentinel_z)
+        finally:
+            win._run_twoD_dataset_process = orig_runner
+
+        # >16 delays triggers debounced background worker when spinner changes normally
+        win.twoD_shot_rotation.setValue(3)
+        deadline = time.monotonic() + 5.0
+        while win.twoD_dataset.shot_rotation != 3 and time.monotonic() < deadline:
+            app.processEvents()
+            time.sleep(0.02)
+        assert win.twoD_dataset.shot_rotation == 3
+    finally:
+        win.close()

@@ -434,3 +434,154 @@ def test_quickcontrol_2d_electronic_2des_unfolding_dual_axes_and_gui(qapp, tmp_p
         assert pc.probe_min.value() < pc.probe_max.value()
     finally:
         win.close()
+
+
+def test_quickcontrol_partial_first_scan_preserves_full_scans(tmp_path: Path):
+    """Verify partial first .scan files NaN-pad to expected rows without truncating later scans."""
+    # 1D multi-scan: scan #001 is truncated to 12 of 30 rows, scan #002 is full 30 rows
+    m1_multi = synthetic.make_synthetic_quickcontrol_1d(
+        tmp_path / "pp_multi",
+        prefix="pp_part_01",
+        n_delays=30,
+        n_pixels=12,
+        n_scans=2,
+        polarised=False,
+    )
+    pp_scan1 = tmp_path / "pp_multi" / "pp_part_01#001.scan"
+    pp_scan1.write_text(
+        "\n".join(pp_scan1.read_text(encoding="utf-8").splitlines()[:12]) + "\n",
+        encoding="utf-8",
+    )
+    ds1_multi = pm.load_1D(m1_multi["info_path"], data_type="QuickControl_PP")
+    assert len(ds1_multi.delays) == 30
+    assert ds1_multi.Zavg_R.shape == (30, 12, 1)
+    assert np.all(np.isfinite(ds1_multi.Zss_R[:12, :, 0, 0]))
+    assert np.all(np.isnan(ds1_multi.Zss_R[12:, :, 0, 0]))
+    assert np.all(np.isfinite(ds1_multi.Zss_R[:, :, 0, 1]))
+
+    # 1D single-scan truncated to 12 of 30 rows
+    m1_single = synthetic.make_synthetic_quickcontrol_1d(
+        tmp_path / "pp_single",
+        prefix="pp_part_02",
+        n_delays=30,
+        n_pixels=12,
+        n_scans=1,
+        polarised=False,
+    )
+    pp_s1 = tmp_path / "pp_single" / "pp_part_02#001.scan"
+    pp_s1.write_text(
+        "\n".join(pp_s1.read_text(encoding="utf-8").splitlines()[:12]) + "\n",
+        encoding="utf-8",
+    )
+    ds1_single = pm.load_1D(m1_single["info_path"], data_type="QuickControl_PP")
+    assert len(ds1_single.delays) == 30
+    assert np.all(np.isfinite(ds1_single.Zss_R[:12, :, 0, 0]))
+    assert np.all(np.isnan(ds1_single.Zss_R[12:, :, 0, 0]))
+
+    # 2D multi-scan: scan #001 is truncated to 12 of 30 rows, scan #002 is complete
+    m2_multi = synthetic.make_synthetic_quickcontrol_2d(
+        tmp_path / "td_multi",
+        prefix="ir_first_part_01",
+        n_t1=30,
+        dt1_fs=25.0,
+        n_pixels=16,
+        t2_fs=(500.0,),
+        n_scans=2,
+        polarised=False,
+        qc_v094_footer=True,
+    )
+    scan1_2d = tmp_path / "td_multi" / "ir_first_part_01_T01#001.scan"
+    scan1_2d.write_text(
+        "\n".join(scan1_2d.read_text(encoding="utf-8").splitlines()[:12]) + "\n",
+        encoding="utf-8",
+    )
+    ds2_multi = pm.load_2D(m2_multi["info_path"], data_type="QuickControl_2D")
+    assert ds2_multi.in_progress is True
+    assert len(ds2_multi.raw_t1delays) == 30
+    assert ds2_multi.raw_signal.shape == (30, 16, 1)
+    assert np.all(np.isfinite(ds2_multi.raw_signal_ss[:12, :, 0, 0]))
+    assert np.all(np.isnan(ds2_multi.raw_signal_ss[12:, :, 0, 0]))
+    assert np.all(np.isfinite(ds2_multi.raw_signal_ss[:, :, 0, 1]))
+
+    # 2D single-scan truncated to 12 of 30 rows
+    m2_single = synthetic.make_synthetic_quickcontrol_2d(
+        tmp_path / "td_single",
+        prefix="ir_first_part_02",
+        n_t1=30,
+        dt1_fs=25.0,
+        n_pixels=16,
+        t2_fs=(500.0,),
+        n_scans=1,
+        polarised=False,
+        qc_v094_footer=True,
+    )
+    scan1_single = tmp_path / "td_single" / "ir_first_part_02_T01#001.scan"
+    scan1_single.write_text(
+        "\n".join(scan1_single.read_text(encoding="utf-8").splitlines()[:12]) + "\n",
+        encoding="utf-8",
+    )
+    ds2_single = pm.load_2D(m2_single["info_path"], data_type="QuickControl_2D")
+    assert ds2_single.in_progress is True
+    assert len(ds2_single.raw_t1delays) == 30
+    assert ds2_single.raw_signal.shape == (30, 16, 1)
+
+
+def test_quickcontrol_2des_negative_nyquist_unfolding_and_ph_plot(qapp, tmp_path: Path):
+    """Verify negative-Nyquist alias selection and GUI PH diagnostic upper-half slicing."""
+    meta = synthetic.make_synthetic_quickcontrol_2des(
+        tmp_path,
+        prefix="vis_2des_neg_nyq",
+        n_t1=107,
+        dt1_fs=12.0,
+        n_pixels=128,
+        t2_fs=(250.0, 1500.0),
+        n_scans=2,
+        w0_scanned_cm1=0.0,
+        peak_cm1=21500.0,
+        cwl_nm=480.0,
+    )
+
+    ds = pm.load_2D(meta["info_path"], data_type="QuickControl_2D")
+    ds.process(apodise_method="Cos", zeropad_factor=2)
+
+    assert ds.units.get("nyquist_invert") is True
+    i_pu, i_pr = np.unravel_index(np.argmin(ds.Z[:, :, 0]), ds.Z[:, :, 0].shape)
+    assert ds.pump[i_pu] == pytest.approx(21500.0, abs=30.0)
+    assert ds.probe[i_pr] == pytest.approx(21500.0, abs=80.0)
+
+    win = MainWindow()
+    try:
+        win.twoD_load_path(str(meta["info_path"]), data_type="QuickControl_2D")
+        win.twoD_other_btn_PH.setChecked(True)
+        win._twoD_update_other_plot()
+        pump_lines = [ln for ln in win.twoD_other_plot.ax.get_lines() if ln.get_label() == "Pump"]
+        assert len(pump_lines) == 1
+        xdata = np.asarray(pump_lines[0].get_xdata(), dtype=float)
+        assert float(np.min(xdata)) >= 20500.0
+        assert float(np.min(xdata)) <= 21500.0 <= float(np.max(xdata))
+    finally:
+        win.close()
+
+
+def test_quickcontrol_2d_calibrated_probe_csv_wavelength_preserved(tmp_path: Path):
+    """Verify Dataset2D.from_file does not overwrite QuickControl's nm->cm-1 CalibratedProbe.csv axis."""
+    sub = tmp_path / "qc_nm_cal"
+    meta = synthetic.make_synthetic_quickcontrol_2des(
+        sub,
+        prefix="vis_cal_01",
+        n_t1=64,
+        dt1_fs=12.0,
+        n_pixels=64,
+        t2_fs=(250.0,),
+        n_scans=1,
+    )
+    cal_nm = np.linspace(480.0, 600.0, 64)
+    np.savetxt(sub / "CalibratedProbe.csv", cal_nm, delimiter=",")
+
+    ds = pm.load_2D(meta["info_path"], data_type="QuickControl_2D")
+    assert ds.freq_units == "cm-1"
+    assert ds.cal_level == "datadir"
+    assert "CalibratedProbe.csv" in ds.calibration_status()
+    assert np.all(np.diff(ds.probe) > 0)
+    assert ds.probe[0] == pytest.approx(1.0e7 / 600.0, rel=1e-5)
+    assert ds.probe[-1] == pytest.approx(1.0e7 / 480.0, rel=1e-5)

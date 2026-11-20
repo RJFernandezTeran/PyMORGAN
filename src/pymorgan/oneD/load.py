@@ -4458,15 +4458,15 @@ def _resolve_quickcontrol_info_path(
     raise FileNotFoundError(f"QuickControl .info file not found for: {path}")
 
 
-def _expected_quickcontrol_scan_rows(info: dict[str, str], kind: str) -> int | None:
-    """Infer the expected number of body rows per ``.scan`` file from ``.info`` metadata."""
+def _expected_quickcontrol_axis0(info: dict[str, str], kind: str) -> np.ndarray | None:
+    """Infer the expected axis-0 coordinate vector from QuickControl ``.info`` metadata."""
     if kind == "1d":
         raw_list = info.get("Delays") or info.get("Delay List") or ""
         if raw_list.strip():
             try:
                 vals = [float(x.strip()) for x in raw_list.split(",") if x.strip()]
                 if vals:
-                    return len(vals)
+                    return np.asarray(vals, dtype=np.float64)
             except ValueError:
                 pass
         return None
@@ -4482,8 +4482,14 @@ def _expected_quickcontrol_scan_rows(info: dict[str, str], kind: str) -> int | N
             if step_fs > 0.0 and final_fs >= 0.0:
                 n_steps = int(round(final_fs / step_fs)) + 1
                 if n_steps >= 1:
-                    return n_steps
+                    return np.arange(n_steps, dtype=np.float64) * step_fs
     return None
+
+
+def _expected_quickcontrol_scan_rows(info: dict[str, str], kind: str) -> int | None:
+    """Infer the expected number of body rows per ``.scan`` file from ``.info`` metadata."""
+    axis0 = _expected_quickcontrol_axis0(info, kind)
+    return int(axis0.size) if axis0 is not None else None
 
 
 def _resolve_quickcontrol_probe_axis(
@@ -4732,35 +4738,72 @@ def _stack_quickcontrol_scans(
     n_pix_ref: int | None = None,
     *,
     expected_n_rows: int | None = None,
+    expected_axis0: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray | None, bool]:
     """Stack ``scan_files`` into ``(axis0, stack_3d, footer_col0_1d, footer_raw_2d, has_partial_scan)``.
 
     ``stack_3d`` has shape ``(n_rows, n_pix, n_scans)`` in mOD. Incomplete
-    trailing scans (e.g. from an interrupted acquisition) are padded with NaN.
+    scans (including when the first scan is partial) are padded with NaN to
+    the reference row count.
     """
+    parsed = [
+        (sf, *_read_quickcontrol_scan_matrix(sf, expected_n_rows=expected_n_rows))
+        for sf in scan_files
+    ]
+    if not parsed:
+        raise ValueError("No QuickControl scan files to stack.")
+
+    if n_pix_ref is None:
+        n_pix_ref = int(parsed[0][2].shape[1])
+
+    for sf, _ax0, sig, _fc, _fr, _part in parsed:
+        if sig.shape[1] != n_pix_ref:
+            raise ValueError(
+                f"Pixel count mismatch in {sf.name}: expected {n_pix_ref}, got {sig.shape[1]}."
+            )
+
+    max_rows_observed = max(int(sig.shape[0]) for _, _, sig, _, _, _ in parsed)
+    if n_rows_ref is None:
+        if expected_n_rows is not None and expected_n_rows >= 1:
+            n_rows_ref = int(expected_n_rows)
+        else:
+            n_rows_ref = max_rows_observed
+
+    assert n_rows_ref is not None and n_pix_ref is not None
+
     axis0_ref: np.ndarray | None = None
+    best_ax0: np.ndarray | None = None
+    for _sf, ax0, _sig, _fc, _fr, _part in parsed:
+        if best_ax0 is None or len(ax0) > len(best_ax0):
+            best_ax0 = ax0
+        if len(ax0) >= n_rows_ref:
+            axis0_ref = ax0[:n_rows_ref].copy()
+            break
+
+    if axis0_ref is None:
+        assert best_ax0 is not None
+        if expected_axis0 is not None and expected_axis0.size >= n_rows_ref:
+            axis0_ref = expected_axis0[:n_rows_ref].astype(np.float64, copy=True)
+            n_copy = min(len(best_ax0), n_rows_ref)
+            axis0_ref[:n_copy] = best_ax0[:n_copy]
+        elif len(best_ax0) < n_rows_ref:
+            axis0_ref = np.empty(n_rows_ref, dtype=np.float64)
+            axis0_ref[: len(best_ax0)] = best_ax0
+            step = float(np.median(np.diff(best_ax0))) if len(best_ax0) >= 2 else 1.0
+            last_val = float(best_ax0[-1]) if len(best_ax0) > 0 else 0.0
+            n_extra = n_rows_ref - len(best_ax0)
+            axis0_ref[len(best_ax0) :] = last_val + step * np.arange(1, n_extra + 1, dtype=np.float64)
+        else:
+            axis0_ref = best_ax0[:n_rows_ref].copy()
+
     mats: list[np.ndarray] = []
     footer_cols: list[float] = []
     footer_rows: list[np.ndarray] = []
     has_partial_scan = False
 
-    for idx, sf in enumerate(scan_files):
-        ax0, sig, f_col0, f_raw, is_partial = _read_quickcontrol_scan_matrix(
-            sf, expected_n_rows=expected_n_rows
-        )
+    for _sf, _ax0, sig, f_col0, f_raw, is_partial in parsed:
         if is_partial:
             has_partial_scan = True
-        if idx == 0:
-            axis0_ref = ax0 if n_rows_ref is None else ax0[:n_rows_ref]
-            if n_rows_ref is None:
-                n_rows_ref = int(sig.shape[0])
-            if n_pix_ref is None:
-                n_pix_ref = int(sig.shape[1])
-        assert n_rows_ref is not None and n_pix_ref is not None
-        if sig.shape[1] != n_pix_ref:
-            raise ValueError(
-                f"Pixel count mismatch in {sf.name}: expected {n_pix_ref}, got {sig.shape[1]}."
-            )
         if sig.shape[0] == n_rows_ref:
             mats.append(sig)
         elif sig.shape[0] < n_rows_ref:
@@ -4774,7 +4817,6 @@ def _stack_quickcontrol_scans(
         if f_raw is not None and f_raw.size == n_pix_ref:
             footer_rows.append(f_raw)
 
-    assert axis0_ref is not None
     footer_raw_2d = np.stack(footer_rows, axis=-1) if footer_rows else None
     return (
         axis0_ref,
@@ -4783,6 +4825,15 @@ def _stack_quickcontrol_scans(
         footer_raw_2d,
         has_partial_scan,
     )
+
+
+def _pad_scan_stack_rows(stack: np.ndarray, n_rows: int) -> np.ndarray:
+    """NaN-pad a 3D scan stack ``(rows, pix, scans)`` along axis 0 to ``n_rows``."""
+    if stack.shape[0] >= n_rows:
+        return stack
+    out = np.full((n_rows, stack.shape[1], stack.shape[2]), np.nan, dtype=np.float64)
+    out[: stack.shape[0], :, :] = stack
+    return out
 
 
 def _format_quickcontrol_sample_info(
@@ -4908,48 +4959,66 @@ def read_QuickControl_PP(
     if not (has_par or has_per or has_unpol):
         raise ValueError(f"No 1D .scan files found for QuickControl dataset {info_path.stem!r}.")
 
-    expected_rows = _expected_quickcontrol_scan_rows(info, "1d")
+    expected_axis0 = _expected_quickcontrol_axis0(info, "1d")
+    expected_rows = int(expected_axis0.size) if expected_axis0 is not None else None
     footer_spec_parts: list[np.ndarray] = []
 
     if has_par and has_per:
-        raw_delays, par_stack, _, par_f_raw, _ = _stack_quickcontrol_scans(
-            scans["par"], expected_n_rows=expected_rows
+        raw_delays_par, par_stack, _, par_f_raw, par_part = _stack_quickcontrol_scans(
+            scans["par"],
+            n_rows_ref=expected_rows,
+            expected_n_rows=expected_rows,
+            expected_axis0=expected_axis0,
         )
-        n_delays, n_pix, n_par = par_stack.shape
-        _, per_stack, _, per_f_raw, _ = _stack_quickcontrol_scans(
+        n_pix = int(par_stack.shape[1])
+        raw_delays_per, per_stack, _, per_f_raw, per_part = _stack_quickcontrol_scans(
             scans["per"],
-            n_rows_ref=n_delays,
+            n_rows_ref=expected_rows,
             n_pix_ref=n_pix,
             expected_n_rows=expected_rows,
+            expected_axis0=expected_axis0,
         )
+        n_par = par_stack.shape[-1]
+        n_per = per_stack.shape[-1]
+        n_delays = max(int(par_stack.shape[0]), int(per_stack.shape[0]))
+        par_stack = _pad_scan_stack_rows(par_stack, n_delays)
+        per_stack = _pad_scan_stack_rows(per_stack, n_delays)
+        if len(raw_delays_per) > len(raw_delays_par) or (
+            par_part and not per_part and len(raw_delays_per) == len(raw_delays_par)
+        ):
+            raw_delays = raw_delays_per
+        else:
+            raw_delays = raw_delays_par
         if par_f_raw is not None:
             footer_spec_parts.append(par_f_raw)
         if per_f_raw is not None:
             footer_spec_parts.append(per_f_raw)
-        n_per = per_stack.shape[-1]
         n_common = min(n_par, n_per)
 
-        with np.errstate(invalid="ignore"):
+        import warnings
+
+        with warnings.catch_warnings(), np.errstate(invalid="ignore"):
+            warnings.simplefilter("ignore", RuntimeWarning)
             avg_par = np.nanmean(par_stack, axis=-1)
             avg_per = np.nanmean(per_stack, axis=-1)
-        avg_ma = (avg_par + 2.0 * avg_per) / 3.0
+            avg_ma = (avg_par + 2.0 * avg_per) / 3.0
 
-        ss_par_common = par_stack[:, :, :n_common]
-        ss_per_common = per_stack[:, :, :n_common]
-        ss_ma_common = (ss_par_common + 2.0 * ss_per_common) / 3.0
+            ss_par_common = par_stack[:, :, :n_common]
+            ss_per_common = per_stack[:, :, :n_common]
+            ss_ma_common = (ss_par_common + 2.0 * ss_per_common) / 3.0
 
-        Zavg_R = np.stack([avg_ma, avg_par, avg_per], axis=2)
-        std_ma = (
-            np.nanstd(ss_ma_common, axis=-1, ddof=1)
-            if n_common > 1
-            else np.zeros_like(avg_ma)
-        )
-        std_par = (
-            np.nanstd(par_stack, axis=-1, ddof=1) if n_par > 1 else np.zeros_like(avg_par)
-        )
-        std_per = (
-            np.nanstd(per_stack, axis=-1, ddof=1) if n_per > 1 else np.zeros_like(avg_per)
-        )
+            Zavg_R = np.stack([avg_ma, avg_par, avg_per], axis=2)
+            std_ma = (
+                np.nanstd(ss_ma_common, axis=-1, ddof=1)
+                if n_common > 1
+                else np.zeros_like(avg_ma)
+            )
+            std_par = (
+                np.nanstd(par_stack, axis=-1, ddof=1) if n_par > 1 else np.zeros_like(avg_par)
+            )
+            std_per = (
+                np.nanstd(per_stack, axis=-1, ddof=1) if n_per > 1 else np.zeros_like(avg_per)
+            )
         Zstdv = np.stack([std_ma, std_par, std_per], axis=2)
         Nscans: int | float = int(n_common)
         if load_single_scans and n_common >= 1:
@@ -4969,14 +5038,20 @@ def read_QuickControl_PP(
             detectors = ["Signal"]
 
         raw_delays, ch_stack, _, ch_f_raw, _ = _stack_quickcontrol_scans(
-            chan_files, expected_n_rows=expected_rows
+            chan_files,
+            n_rows_ref=expected_rows,
+            expected_n_rows=expected_rows,
+            expected_axis0=expected_axis0,
         )
         if ch_f_raw is not None:
             footer_spec_parts.append(ch_f_raw)
         n_delays, n_pix, n_ch = ch_stack.shape
-        with np.errstate(invalid="ignore"):
+        import warnings
+
+        with warnings.catch_warnings(), np.errstate(invalid="ignore"):
+            warnings.simplefilter("ignore", RuntimeWarning)
             avg_ch = np.nanmean(ch_stack, axis=-1)
-        std_ch = np.nanstd(ch_stack, axis=-1, ddof=1) if n_ch > 1 else np.zeros_like(avg_ch)
+            std_ch = np.nanstd(ch_stack, axis=-1, ddof=1) if n_ch > 1 else np.zeros_like(avg_ch)
         Zavg_R = avg_ch[:, :, np.newaxis]
         Zstdv = std_ch[:, :, np.newaxis]
         Nscans = int(n_ch)
@@ -5021,7 +5096,7 @@ def read_QuickControl_PP(
         Zstdv = Zstdv[:, p_order, :]
         if Zss_R is not None and Zss_R.ndim == 4 and Zss_R.shape[1] == n_pix:
             Zss_R = Zss_R[:, p_order, :, :]
-        if spec_arr is not None:
+        if spec_arr is not None and spec_arr.size == p_order.size:
             spec_arr = spec_arr[p_order]
 
     Units = hlp.units2dic(unitsL, unitsT, "x1E3")
