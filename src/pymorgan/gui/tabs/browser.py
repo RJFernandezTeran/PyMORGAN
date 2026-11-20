@@ -34,6 +34,7 @@ from ..mw_common import (
     _ISDIR_ROLE,
     _PATH_ROLE,
     get_combo_datatype,
+    set_combo_datatype,
 )
 
 
@@ -345,3 +346,138 @@ class DatasetBrowserMixin:
         if target and hasattr(self, "RootDir_field"):
             self.RootDir_field.setText(str(target))
             self._on_rootdir_changed()
+
+    def _find_and_select_browser_item(
+        self, view_name: str, model_name: str, target_path: Path
+    ) -> str | None:
+        """Select the row matching ``target_path`` without firing selection signals."""
+        view = getattr(self, view_name, None)
+        model = getattr(self, model_name, None)
+        if view is None or model is None:
+            return None
+
+        norm_target = os.path.normcase(os.path.normpath(str(target_path)))
+        for row in range(model.rowCount()):
+            index = model.index(row, 0)
+            if index.data(_ISDIR_ROLE):
+                continue
+            raw_path = index.data(_PATH_ROLE)
+            if raw_path and os.path.normcase(os.path.normpath(str(raw_path))) == norm_target:
+                sel = view.selectionModel()
+                if sel is not None:
+                    sel.blockSignals(True)
+                try:
+                    view.setCurrentIndex(index)
+                    view.scrollTo(index)
+                finally:
+                    if sel is not None:
+                        sel.blockSignals(False)
+                return str(raw_path)
+        return None
+
+    def open_external_path(self, path: str | os.PathLike, *, set_rootdir: bool = True) -> bool:
+        """Open a folder or dataset file (such as ``.pdat`` / ``.p2dat``) passed externally.
+
+        When ``path`` is a file and ``set_rootdir`` is true, sets ``RootDir_field``
+        to the file's parent directory, selects the appropriate tab and data type
+        for known file extensions (``.pdat`` -> 1D/PDAT, ``.p2dat`` -> 2D/P2DAT),
+        highlights the file in the dataset browser, and loads it.
+        """
+        raw = Path(path).expanduser()
+        try:
+            target = raw.resolve()
+        except OSError:
+            target = raw
+
+        if not target.exists():
+            return False
+
+        if target.is_dir():
+            if hasattr(self, "RootDir_field") and self.RootDir_field is not None:
+                self.RootDir_field.setText(str(target))
+            self._on_rootdir_changed()
+            return True
+
+        if not target.is_file():
+            return False
+
+        if target.suffix.lower() == ".pdatn":
+            sibling = target.with_suffix(".pdat")
+            if sibling.is_file():
+                target = sibling
+
+        suffix = target.suffix.lower()
+        if set_rootdir and hasattr(self, "RootDir_field") and self.RootDir_field is not None:
+            self.RootDir_field.setText(str(target.parent))
+
+        tabs = getattr(self, "MainTabs", None)
+
+        def _open_typed(
+            *,
+            combo_name: str,
+            dt: str,
+            tab_idx: int,
+            view_name: str,
+            model_name: str,
+            refresh_single,
+            loader,
+            result_attr: str,
+        ) -> bool:
+            combo = getattr(self, combo_name, None)
+            if combo is not None:
+                combo.blockSignals(True)
+                try:
+                    set_combo_datatype(combo, dt)
+                finally:
+                    combo.blockSignals(False)
+            if tab_idx == 1 and hasattr(self, "_set_twoD_phasing_tab_visible"):
+                self._set_twoD_phasing_tab_visible(False)
+            if tabs is not None and tabs.currentIndex() != tab_idx:
+                tabs.setCurrentIndex(tab_idx)
+            if set_rootdir:
+                self._on_rootdir_changed()
+            else:
+                refresh_single()
+            matched = self._find_and_select_browser_item(view_name, model_name, target)
+            loader(matched or str(target), data_type=dt)
+            return getattr(self, result_attr, None) is not None
+
+        if suffix == ".pdat":
+            return _open_typed(
+                combo_name="PP_datatype_cbx",
+                dt="PDAT",
+                tab_idx=0,
+                view_name="PP_datafolderlist_lst",
+                model_name="_folder_model",
+                refresh_single=self.refresh_dataset_list,
+                loader=self.load_path,
+                result_attr="dataset",
+            )
+
+        if suffix == ".p2dat":
+            return _open_typed(
+                combo_name="twoD_datatype_cbx",
+                dt="P2DAT",
+                tab_idx=1,
+                view_name="twoD_datafolderlist_lst",
+                model_name="_twoD_folder_model",
+                refresh_single=self.twoD_refresh_dataset_list,
+                loader=self.twoD_load_path,
+                result_attr="twoD_dataset",
+            )
+
+        if set_rootdir:
+            self._on_rootdir_changed()
+
+        if tabs is not None and tabs.currentIndex() == 1:
+            matched = self._find_and_select_browser_item(
+                "twoD_datafolderlist_lst", "_twoD_folder_model", target
+            )
+            self.twoD_load_path(matched or str(target))
+            return getattr(self, "twoD_dataset", None) is not None
+
+        matched = self._find_and_select_browser_item(
+            "PP_datafolderlist_lst", "_folder_model", target
+        )
+        self.load_path(matched or str(target))
+        return getattr(self, "dataset", None) is not None

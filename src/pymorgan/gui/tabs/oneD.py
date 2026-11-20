@@ -118,11 +118,20 @@ class OneDTabMixin:
     """Pump-Probe (1D) tab: dataset loading, state controls, previews and plots."""
 
     def open_file(self):
+        start_dir = self._rootdir_text() if hasattr(self, "_rootdir_text") else ""
         path, _ = QFileDialog.getOpenFileName(
-            self, "Open data file", "", "Data (*.pdat *.csv *.dat *.h5 *.info);;All files (*)"
+            self,
+            "Open data file",
+            start_dir,
+            "Data (*.pdat *.p2dat *.csv *.dat *.h5 *.hdf5 *.info);;All files (*)",
         )
         if path:
-            self.load_path(path)
+            if Path(path).suffix.lower() in (".pdat", ".pdatn", ".p2dat") and hasattr(
+                self, "open_external_path"
+            ):
+                self.open_external_path(path, set_rootdir=True)
+            else:
+                self.load_path(path)
 
     def reload_data(self):
         if self._current_path:
@@ -153,7 +162,10 @@ class OneDTabMixin:
         from disk when the file list is repopulated, e.g. on tab changes.
         """
         combo = getattr(self, "PP_datatype_cbx", None)
-        dt = data_type or get_combo_datatype(combo, "PDAT")
+        if data_type is None and Path(path).suffix.lower() == ".pdat":
+            dt = "PDAT"
+        else:
+            dt = data_type or get_combo_datatype(combo, "PDAT")
         if (
             not force
             and reset_selection

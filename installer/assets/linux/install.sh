@@ -76,6 +76,26 @@ if [ -f "$INSTALL_DIR/PyRATE-TA" ]; then
     ln -sf "$INSTALL_DIR/PyRATE-TA" "$BIN_DIR/pyrate-ta"
 fi
 
+# Install MIME type associations for .pdat and .p2dat files
+MIME_DIR="$HOME/.local/share/mime"
+mkdir -p "$MIME_DIR/packages"
+cat > "$MIME_DIR/packages/pymorgan.xml" <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
+  <mime-type type="application/x-pdat">
+    <comment>PyMORGAN Processed 1D Spectrum</comment>
+    <glob pattern="*.pdat"/>
+  </mime-type>
+  <mime-type type="application/x-p2dat">
+    <comment>PyMORGAN Processed 2D Spectrum</comment>
+    <glob pattern="*.p2dat"/>
+  </mime-type>
+</mime-info>
+EOF
+if command -v update-mime-database >/dev/null 2>&1; then
+    update-mime-database "$MIME_DIR" || true
+fi
+
 # Refresh desktop database
 if command -v update-desktop-database >/dev/null 2>&1; then
     update-desktop-database "$DESKTOP_DIR" || true

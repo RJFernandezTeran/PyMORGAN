@@ -131,9 +131,10 @@ class MainWindow(
 ):
     """PyMORGAN main window."""
 
-    def __init__(self):
+    def __init__(self, *, init_rootdir: bool = True):
         super().__init__()
         self._load_ui()
+        self.setAcceptDrops(True)
         # Default geometry as declared in main_window.ui, captured before any
         # user-driven resize so that View -> Restore Default Window Size works.
         self._default_size = self.size()
@@ -160,7 +161,8 @@ class MainWindow(
 
         self._build_menus()
         self._init_state_controls()
-        self._init_rootdir()
+        if init_rootdir:
+            self._init_rootdir()
         self._init_plot_controls()
         self._init_spectral_diffusion_controls()
         self._init_twoD_other_plot()
@@ -1153,7 +1155,36 @@ class MainWindow(
             pop_win.close()
             pop_win.deleteLater()
             self._twoD_pop_window = None
+        file_open_filter = getattr(self, "_file_open_filter", None)
+        if file_open_filter is not None:
+            app_inst = QApplication.instance()
+            if app_inst is not None:
+                app_inst.removeEventFilter(file_open_filter)
+            self._file_open_filter = None
         super().closeEvent(event)
+
+    def dragEnterEvent(self, event):
+        mime = event.mimeData() if event is not None else None
+        if mime is not None and mime.hasUrls():
+            for url in mime.urls():
+                if url.isLocalFile():
+                    local = url.toLocalFile()
+                    if local and Path(local).exists():
+                        event.acceptProposedAction()
+                        return
+        super().dragEnterEvent(event)
+
+    def dropEvent(self, event):
+        mime = event.mimeData() if event is not None else None
+        if mime is not None and mime.hasUrls():
+            for url in mime.urls():
+                if url.isLocalFile():
+                    local = url.toLocalFile()
+                    if local and Path(local).exists():
+                        self.open_external_path(local)
+                        event.acceptProposedAction()
+                        return
+        super().dropEvent(event)
 
     def handle_reload(self):
         """Reload the dataset for the currently active tab (1D or 2D)."""

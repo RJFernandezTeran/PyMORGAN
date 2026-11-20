@@ -1186,3 +1186,212 @@ def test_embed_calibrated_probe_h5_menu_action_and_workflow(qapp, tmp_path, monk
         win.close()
 
 
+def test_extract_cli_targets_ignores_qt_platform_flags():
+    """CLI target extraction skips Qt/PyMORGAN flags and keeps direct file/dir targets."""
+    from pymorgan.gui.app import _extract_cli_targets
+
+    assert _extract_cli_targets(["PyMORGAN.exe", "-platform", "windows:darkmode=0"]) == []
+    assert _extract_cli_targets(
+        ["PyMORGAN.exe", "--dark", "-platform", "windows:darkmode=0", r"C:\My Data\scan 01.pdat"]
+    ) == [r"C:\My Data\scan 01.pdat"]
+    assert _extract_cli_targets(
+        ["PyMORGAN.exe", "-platform=offscreen", r"D:\folder with spaces\map.p2dat"]
+    ) == [r"D:\folder with spaces\map.p2dat"]
+    assert _extract_cli_targets(["PyMORGAN.exe", r"C:\data\folder"]) == [r"C:\data\folder"]
+    assert _extract_cli_targets([r"C:\data\direct.pdat"]) == [r"C:\data\direct.pdat"]
+    assert _extract_cli_targets([r"C:\data\direct.p2dat"]) == [r"C:\data\direct.p2dat"]
+
+
+def test_open_external_pdat_switches_tab_datatype_rootdir_and_selection(qapp, tmp_path, monkeypatch):
+    """Opening a .pdat file sets RootDir, switches to 1D/PDAT, loads data, and selects item."""
+    from PyQt6.QtWidgets import QMessageBox
+
+    from pymorgan.gui.mw_common import _PATH_ROLE, get_combo_datatype, set_combo_datatype
+
+    crit_calls = []
+    monkeypatch.setattr(QMessageBox, "critical", lambda *args, **kwargs: crit_calls.append(args))
+
+    data_dir = tmp_path / "my 1d folder"
+    data_dir.mkdir()
+    pdat1 = synthetic.make_synthetic_pdat(data_dir / "pdat1.pdat")
+    pdat2 = synthetic.make_synthetic_pdat(data_dir / "pdat2.pdat")
+    unrelated = tmp_path / "unrelated"
+    unrelated.mkdir()
+
+    win = MainWindow()
+    try:
+        set_combo_datatype(win.PP_datatype_cbx, "PyMESS_PP")
+        win.MainTabs.setCurrentIndex(1)
+        win.RootDir_field.setText(str(unrelated))
+        win._on_rootdir_changed()
+
+        opened = win.open_external_path(pdat1["path"])
+        assert opened is True
+        assert crit_calls == []
+        assert win.MainTabs.currentIndex() == 0
+        assert get_combo_datatype(win.PP_datatype_cbx, "") == "PDAT"
+        assert Path(win.RootDir_field.text()).resolve() == data_dir.resolve()
+        assert win.dataset is not None
+        assert win.dataset.data_type == "PDAT"
+        assert Path(win.PP_datafolderlist_lst.currentIndex().data(_PATH_ROLE)).resolve() == Path(
+            pdat1["path"]
+        ).resolve()
+
+        assert win._navigate_dataset_browser(forward=True) is True
+        assert Path(win._current_path).resolve() == Path(pdat2["path"]).resolve()
+    finally:
+        win.close()
+
+
+def test_open_external_p2dat_switches_tab_datatype_rootdir_and_selection(
+    qapp, tmp_path, monkeypatch
+):
+    """Opening a .p2dat file sets RootDir, switches to 2D/P2DAT, hides Phasing/FT, and loads."""
+    from PyQt6.QtWidgets import QMessageBox
+
+    from pymorgan.gui.mw_common import _PATH_ROLE, get_combo_datatype, set_combo_datatype
+
+    crit_calls = []
+    monkeypatch.setattr(QMessageBox, "critical", lambda *args, **kwargs: crit_calls.append(args))
+
+    data_dir = tmp_path / "my 2d folder"
+    data_dir.mkdir()
+    p2 = synthetic.make_synthetic_p2dat(data_dir / "map_2d.p2dat")
+    unrelated = tmp_path / "unrelated_2d"
+    unrelated.mkdir()
+
+    win = MainWindow()
+    try:
+        set_combo_datatype(win.PP_datatype_cbx, "PyMESS_PP")
+        set_combo_datatype(win.twoD_datatype_cbx, "PyMESS_2D")
+        win.MainTabs.setCurrentIndex(0)
+        win.RootDir_field.setText(str(unrelated))
+        win._on_rootdir_changed()
+
+        opened = win.open_external_path(p2["path"])
+        assert opened is True
+        assert crit_calls == []
+        assert win.MainTabs.currentIndex() == 1
+        assert get_combo_datatype(win.twoD_datatype_cbx, "") == "P2DAT"
+        phasing_tabs = [win.twoD_subtabs.widget(i) for i in range(win.twoD_subtabs.count())]
+        assert win._twoD_phasingft_tab_widget not in phasing_tabs
+        assert Path(win.RootDir_field.text()).resolve() == data_dir.resolve()
+        assert win.twoD_dataset is not None
+        assert win.twoD_dataset.data_type == "P2DAT"
+        assert Path(win.twoD_datafolderlist_lst.currentIndex().data(_PATH_ROLE)).resolve() == Path(
+            p2["path"]
+        ).resolve()
+    finally:
+        win.close()
+
+
+def test_app_main_cli_opens_pdat_and_p2dat_with_hdf5_defaults(qapp, tmp_path, monkeypatch):
+    """app.main opens .pdat/.p2dat via CLI args even when defaults are PyMESS HDF5 loaders."""
+    from PyQt6.QtWidgets import QMessageBox
+
+    from pymorgan.gui import app as app_mod
+
+    crit_calls = []
+    monkeypatch.setattr(QMessageBox, "critical", lambda *args, **kwargs: crit_calls.append(args))
+    monkeypatch.setattr(QApplication, "exec", lambda self: 0)
+    monkeypatch.setattr(app_mod, "_read_splash_duration", lambda: 0.0)
+
+    old_settings = pm.get_settings()
+
+    def _force_hdf5_defaults():
+        pm.update_settings(default_oneD_datatype="PyMESS_PP", default_twoD_datatype="PyMESS_2D")
+
+    monkeypatch.setattr(MainWindow, "_load_project_settings", staticmethod(_force_hdf5_defaults))
+
+    dir_1d = tmp_path / "cli 1d"
+    dir_1d.mkdir()
+    pdat_info = synthetic.make_synthetic_pdat(dir_1d / "cli_scan.pdat")
+
+    dir_2d = tmp_path / "cli 2d"
+    dir_2d.mkdir()
+    p2_info = synthetic.make_synthetic_p2dat(dir_2d / "cli_map.p2dat")
+
+    try:
+        before_1d = set(QApplication.topLevelWidgets())
+        rc1 = app_mod.main(["PyMORGAN.exe", str(pdat_info["path"])])
+        new_1d = [
+            w for w in QApplication.topLevelWidgets() if w not in before_1d and isinstance(w, MainWindow)
+        ]
+        try:
+            assert rc1 == 0
+            assert crit_calls == []
+            assert len(new_1d) == 1
+            w1 = new_1d[0]
+            assert w1.MainTabs.currentIndex() == 0
+            assert w1.dataset is not None
+            assert w1.dataset.data_type == "PDAT"
+            assert Path(w1.RootDir_field.text()).resolve() == dir_1d.resolve()
+        finally:
+            for w in new_1d:
+                w.close()
+
+        before_2d = set(QApplication.topLevelWidgets())
+        rc2 = app_mod.main(["PyMORGAN.exe", str(p2_info["path"])])
+        new_2d = [
+            w for w in QApplication.topLevelWidgets() if w not in before_2d and isinstance(w, MainWindow)
+        ]
+        try:
+            assert rc2 == 0
+            assert crit_calls == []
+            assert len(new_2d) == 1
+            w2 = new_2d[0]
+            assert w2.MainTabs.currentIndex() == 1
+            assert w2.twoD_dataset is not None
+            assert w2.twoD_dataset.data_type == "P2DAT"
+            assert Path(w2.RootDir_field.text()).resolve() == dir_2d.resolve()
+        finally:
+            for w in new_2d:
+                w.close()
+    finally:
+        pm.set_settings(old_settings)
+
+
+def test_file_open_event_and_suite_launcher_dispatch(qapp, tmp_path):
+    """QFileOpenEvent filter opens datasets in MainWindow and SuiteLauncher forwards .pdat files."""
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from PyQt6.QtCore import QEvent, QUrl
+
+    from pymorgan.gui import suite_launcher
+    from pymorgan.gui.app import _install_file_open_filter
+
+    pdat_info = synthetic.make_synthetic_pdat(tmp_path / "drop_1d.pdat")
+    p2_info = synthetic.make_synthetic_p2dat(tmp_path / "open_2d.p2dat")
+
+    win = MainWindow()
+    filt = _install_file_open_filter(qapp, win)
+    try:
+        ev_file = SimpleNamespace(type=lambda: QEvent.Type.FileOpen, file=lambda: str(p2_info["path"]))
+        assert filt.eventFilter(qapp, ev_file) is True
+        assert win.MainTabs.currentIndex() == 1
+        assert win.twoD_dataset is not None
+        assert win.twoD_dataset.data_type == "P2DAT"
+        assert Path(win.RootDir_field.text()).resolve() == tmp_path.resolve()
+
+        ev_url = SimpleNamespace(
+            type=lambda: QEvent.Type.FileOpen,
+            file=lambda: "",
+            url=lambda: QUrl.fromLocalFile(str(pdat_info["path"])),
+        )
+        assert filt.eventFilter(qapp, ev_url) is True
+        assert win.MainTabs.currentIndex() == 0
+        assert win.dataset is not None
+        assert win.dataset.data_type == "PDAT"
+        assert Path(win.RootDir_field.text()).resolve() == tmp_path.resolve()
+    finally:
+        win.close()
+
+    with patch("pymorgan.launcher.main", return_value=0) as mock_morgan:
+        rc = suite_launcher.main([str(pdat_info["path"])])
+        assert rc == 0
+        mock_morgan.assert_called_once()
+        forwarded = mock_morgan.call_args[0][0]
+        assert len(forwarded) == 2
+        assert forwarded[1] == str(pdat_info["path"])
+

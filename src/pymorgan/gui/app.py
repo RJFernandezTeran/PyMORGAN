@@ -102,15 +102,96 @@ def _resolve_theme(
     return available.get(base.lower(), "Fusion"), False
 
 
+_DIRECT_OPEN_SUFFIXES = (".pdat", ".pdatn", ".p2dat")
+_QT_VALUE_FLAGS = frozenset(
+    {
+        "-platform",
+        "-platformpluginpath",
+        "-platformtheme",
+        "-plugin",
+        "-qmljsdebugger",
+        "-qwindowgeometry",
+        "-qwindowicon",
+        "-qwindowtitle",
+        "-session",
+        "-display",
+        "-geometry",
+        "-style",
+        "-stylesheet",
+    }
+)
+
+
+def _extract_cli_targets(args: list[str]) -> list[str]:
+    """Extract positional file/directory targets from raw CLI argv."""
+    if not args:
+        return []
+    tokens = args if Path(args[0]).suffix.lower() in _DIRECT_OPEN_SUFFIXES else args[1:]
+    targets: list[str] = []
+    skip_next = False
+    after_sep = False
+    for tok in tokens:
+        if after_sep:
+            if tok:
+                targets.append(tok)
+            continue
+        if skip_next:
+            skip_next = False
+            continue
+        if tok == "--":
+            after_sep = True
+            continue
+        if tok == "--dark":
+            continue
+        if tok in _QT_VALUE_FLAGS or any(tok.startswith(f"{f}=") for f in _QT_VALUE_FLAGS):
+            skip_next = "=" not in tok
+            continue
+        if tok.startswith("-"):
+            continue
+        if tok:
+            targets.append(tok)
+    return targets
+
+
+def _install_file_open_filter(app, window):
+    """Install an application-level filter to open macOS/Qt QFileOpenEvent paths."""
+    from PyQt6.QtCore import QEvent, QObject
+
+    class _FileOpenFilter(QObject):
+        def __init__(self, target_window):
+            super().__init__(target_window)
+            self._window = target_window
+
+        def eventFilter(self, obj, event):
+            if event is not None and event.type() == QEvent.Type.FileOpen:
+                file_path = event.file() if hasattr(event, "file") else ""
+                if not file_path and hasattr(event, "url"):
+                    url = event.url()
+                    if url is not None and url.isLocalFile():
+                        file_path = url.toLocalFile()
+                if file_path:
+                    self._window.open_external_path(file_path)
+                    return True
+            return False
+
+    filt = _FileOpenFilter(window)
+    window._file_open_filter = filt
+    app.installEventFilter(filt)
+    return filt
+
+
 def main(argv: list[str] | None = None) -> int:
     """Create the QApplication, show the main window and run the event loop."""
     t_start = _START_TIME if "_START_TIME" in globals() else time.perf_counter()
-    args = list(argv) if argv is not None else list(sys.argv)
+    raw_args = list(argv) if argv is not None else list(sys.argv)
+    cli_targets = _extract_cli_targets(raw_args)
     # ``--dark`` forces the dark theme regardless of settings.toml; strip it so
     # Qt does not treat it as an unknown command-line option.
-    cli_dark = "--dark" in args
-    if cli_dark:
-        args = [a for a in args if a != "--dark"]
+    cli_dark = "--dark" in raw_args
+    args = [a for a in raw_args if a != "--dark"]
+    if not args or Path(args[0]).suffix.lower() in _DIRECT_OPEN_SUFFIXES:
+        prog_name = sys.argv[0] if sys.argv else "PyMORGAN"
+        args = [prog_name, *args]
     # Ignore the OS dark theme on Windows unless a specific QPA platform (e.g. offscreen) is set.
     if (
         sys.platform.startswith("win")
@@ -193,27 +274,26 @@ def main(argv: list[str] | None = None) -> int:
                 splash.show()
                 app.processEvents()
 
+    startup_target: Path | None = None
+    for raw_target in cli_targets:
+        candidate = Path(raw_target).expanduser()
+        if candidate.exists():
+            startup_target = candidate
+            break
+
     from .main_window import MainWindow
 
-    window = MainWindow()
-
-    # Open initial directory or dataset if supplied on command line
-    cli_targets = [a for a in args[1:] if not a.startswith("-")]
-    if cli_targets:
-        target_path = Path(cli_targets[0]).resolve()
-        if target_path.is_dir():
-            window.RootDir_field.setText(str(target_path))
-            window._on_rootdir_changed()
-        elif target_path.is_file():
-            window.RootDir_field.setText(str(target_path.parent))
-            window._on_rootdir_changed()
-            try:
-                window.load_path(str(target_path))
-            except Exception:
-                logger.debug("Could not load initial file %s", target_path, exc_info=True)
+    window = MainWindow(init_rootdir=(startup_target is None))
+    _install_file_open_filter(app, window)
 
     if splash is not None:
         from PyQt6.QtCore import QTimer
+
+        if startup_target is not None:
+            try:
+                window.open_external_path(startup_target)
+            except Exception:
+                logger.debug("Could not load initial path %s", startup_target, exc_info=True)
 
         def _reveal() -> None:
             splash.finish(window)
@@ -225,6 +305,11 @@ def main(argv: list[str] | None = None) -> int:
         QTimer.singleShot(int(remaining * 1000), _reveal)
     else:
         window.show()
+        if startup_target is not None:
+            try:
+                window.open_external_path(startup_target)
+            except Exception:
+                logger.debug("Could not load initial path %s", startup_target, exc_info=True)
 
     elapsed = time.perf_counter() - t_start
     print(f"[PyMORGAN] GUI loaded in {elapsed:.2f} s", flush=True)

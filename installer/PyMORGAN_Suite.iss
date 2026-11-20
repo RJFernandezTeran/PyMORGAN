@@ -3,7 +3,7 @@
 
 #define MyAppName "PyMORGAN Suite"
 #ifndef MyAppVersion
-  #define MyAppVersion "1.261120.1"
+  #define MyAppVersion "1.261120.2"
 #endif
 #define MyAppPublisher "Dr. Ricardo J. Fernández-Terán"
 #define MyAppURL "https://github.com/RJFernandezTeran/PyMORGAN"
@@ -40,6 +40,7 @@ WizardStyle=modern
 ; Branding & Aesthetics
 DisableProgramGroupPage=auto
 ArchitecturesInstallIn64BitMode=x64compatible
+ChangesAssociations=yes
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"

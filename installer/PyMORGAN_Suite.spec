@@ -262,5 +262,19 @@ app = BUNDLE(
         "CFBundleVersion": _pm_version,
         "NSHighResolutionCapable": True,
         "NSRequiresAquaSystemAppearance": False,
+        "CFBundleDocumentTypes": [
+            {
+                "CFBundleTypeName": "Processed 1D Spectrum",
+                "CFBundleTypeExtensions": ["pdat"],
+                "CFBundleTypeRole": "Viewer",
+                "LSHandlerRank": "Owner",
+            },
+            {
+                "CFBundleTypeName": "Processed 2D Spectrum",
+                "CFBundleTypeExtensions": ["p2dat"],
+                "CFBundleTypeRole": "Viewer",
+                "LSHandlerRank": "Owner",
+            },
+        ],
     },
 )

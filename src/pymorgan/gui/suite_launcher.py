@@ -819,11 +819,16 @@ def main(argv: list[str] | None = None) -> int:
             fig.savefig(buf, format=fmt)
         return 0
 
-    # Fast dispatch if flag is provided
-    if args.pymorgan:
+    # Fast dispatch if flag or a PyMORGAN dataset file is provided
+    has_morgan_file = any(
+        not u.startswith("-") and Path(u).suffix.lower() in (".pdat", ".pdatn", ".p2dat")
+        for u in unknown
+    )
+    if args.pymorgan or has_morgan_file:
         from pymorgan.launcher import main as morgan_main
 
-        return morgan_main(unknown)
+        prog = sys.argv[0] if sys.argv else "PyMORGAN_Suite"
+        return morgan_main([prog, *unknown])
 
     if args.pyrate:
         if importlib.util.find_spec("pyrate_ta") is not None:

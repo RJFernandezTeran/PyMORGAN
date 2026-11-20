@@ -78,7 +78,10 @@ class TwoDTabMixin:
     def twoD_load_path(self, path: str, data_type: str | None = None, force: bool = False):
         """Load a 2-D dataset from ``path``."""
         combo = getattr(self, "twoD_datatype_cbx", None)
-        dt = data_type or get_combo_datatype(combo, "P2DAT")
+        if data_type is None and Path(path).suffix.lower() == ".p2dat":
+            dt = "P2DAT"
+        else:
+            dt = data_type or get_combo_datatype(combo, "P2DAT")
 
         if (
             not force
