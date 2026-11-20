@@ -669,7 +669,12 @@ class OneDTabMixin:
         return w, w.ax
 
     def _on_contour_scroll(self, event):
-        """Scroll mouse wheel over the 1D contour plot to adjust Z scale %."""
+        """Scroll over 1D contour: Shift=X, Ctrl=Y, Ctrl+Shift=both, plain=Z scale %."""
+        from ..canvas import handle_contour_scroll_zoom
+
+        ax = getattr(getattr(self, "PPaxes", None), "ax", None)
+        if handle_contour_scroll_zoom(event, ax):
+            return
         if event.inaxes is None or not hasattr(self, "plot_controls") or self.plot_controls is None:
             return
         step = getattr(event, "step", 0)
@@ -829,8 +834,8 @@ class OneDTabMixin:
         except Exception as exc:
             QMessageBox.warning(self, "Plot failed", str(exc))
 
-    def _plot_noise(self):
-        """Plot the per-point noise 3D surface map in a new window."""
+    def _plot_noise(self, _checked: bool = False, *, averaged: bool | None = None):
+        """Plot the 3D noise surface, or delay-averaged 1D trace on Shift+Click."""
         if self.dataset is None:
             return
         import matplotlib.pyplot as plt
@@ -840,14 +845,27 @@ class OneDTabMixin:
             QMessageBox.warning(self, "Plot failed", "No noise or single-scan data available.")
             return
 
+        use_avg = (
+            bool(QApplication.keyboardModifiers() & Qt.KeyboardModifier.ShiftModifier)
+            if averaged is None
+            else bool(averaged)
+        )
+
         pm.apply_style()
         self._apply_background()
         pc = getattr(self, "plot_controls", None)
         det = getattr(pc, "detector", 0) if pc is not None else 0
         try:
-            ax = self.dataset.plot_noise_3d(detector=det)
-            if pc is not None:
-                _safe_set_limits(ax, pc.xlim(), pc.ylim())
+            if use_avg:
+                ax = self.dataset.plot_noise_spectrum(detector=det)
+                if pc is not None:
+                    xmin, xmax = pc.xlim()
+                    if xmin != xmax:
+                        ax.set_xlim(xmin, xmax)
+            else:
+                ax = self.dataset.plot_noise_3d(detector=det)
+                if pc is not None:
+                    _safe_set_limits(ax, pc.xlim(), pc.ylim())
             plt.show(block=False)
         except Exception as exc:
             QMessageBox.warning(self, "Plot failed", str(exc))
@@ -893,10 +911,13 @@ class OneDTabMixin:
         det = getattr(pc, "detector", 0) if pc is not None else 0
         try:
             if kind == "contour":
+                from ..canvas import attach_contour_scroll_zoom
+
                 kwargs = pc.contour_kwargs() if pc is not None else {}
                 ax = self.dataset.plot_contour(**kwargs)  # ax=None -> new figure
                 if pc is not None:
                     _safe_set_limits(ax, pc.xlim(), pc.ylim())
+                attach_contour_scroll_zoom(ax)
             elif kind == "surface":
                 fig = plt.figure(figsize=(8, 6))
                 ax = fig.add_subplot(111, projection="3d")

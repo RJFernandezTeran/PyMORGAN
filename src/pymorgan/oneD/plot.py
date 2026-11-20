@@ -1197,6 +1197,106 @@ def plot_noise_3d(
     return where
 
 
+def plot_noise_spectrum(
+    data,
+    ax=None,
+    fig=None,
+    *,
+    detector: int = 0,
+    settings=None,
+    label_style: str | None = None,
+    delta_a_units=None,
+    x_axis_unit=None,
+    secondary_axis=None,
+    dualScale=None,
+    color="purple",
+    title=None,
+    show_xlabel=True,
+    show_ylabel=True,
+    **kwargs,
+):
+    """Plot the delay-averaged noise spectrum versus the probe axis.
+
+    Computes the mean across the delay axis of :meth:`Dataset1D.noise_array`
+    and renders it as a 1-D trace against the active spectral X axis unit
+    (Honouring ``Settings.x_axis_unit`` and ``Settings.secondary_axis``).
+    """
+    noise = data.noise_array()
+    if noise is None:
+        raise ValueError("No noise or single-scan data available to plot.")
+
+    s, labelStyle, Units = data._resolve(settings, label_style, delta_a_units)
+    created = ax is None
+    pFig, where = _new_axes(ax, fig, layout="constrained", figsize=s.spectra_figsize)
+    if created:
+        pFig.set_size_inches(*s.spectra_figsize)
+
+    noise_arr = np.asarray(noise, dtype=float)
+    if noise_arr.ndim == 3:
+        d = int(np.clip(detector, 0, noise_arr.shape[2] - 1))
+        noise_2d = noise_arr[:, :, d]
+    else:
+        noise_2d = np.atleast_2d(noise_arr)
+
+    with np.errstate(invalid="ignore"):
+        valid_cols = np.any(np.isfinite(noise_2d), axis=0)
+        y_avg = np.full(noise_2d.shape[1], np.nan, dtype=float)
+        if np.any(valid_cols):
+            y_avg[valid_cols] = np.nanmean(noise_2d[:, valid_cols], axis=0)
+
+    X_l = _get_probe(data, detector)
+    if len(X_l) >= 2:
+        with np.errstate(divide="ignore", invalid="ignore"):
+            grad = np.abs(np.gradient(X_l))
+            cond = np.nan_to_num(grad > 1.5 * np.nanmedian(grad), nan=True)
+    else:
+        cond = np.zeros_like(X_l, dtype=bool)
+    yplot = np.ma.masked_where(cond | np.isnan(X_l) | np.isnan(y_avg), y_avg)
+
+    if secondary_axis is None and dualScale:
+        secondary_axis = True
+    xplot, XUnits, _sec, _ = _resolve_x_axis(
+        X_l, Units, s, x_axis_unit=x_axis_unit, secondary_axis=secondary_axis
+    )
+
+    where.plot(xplot, yplot, "-", linewidth=1.5, color=color, **kwargs)
+    _add_complementary_axis(where, _sec, labelStyle, side="top")
+
+    YUnits = {"lbl": "Avg. Noise", "ltx": Units["unitsZ_ltx"]}
+    hlp.setXYlabels(
+        where, labelStyle, XUnits, YUnits, setXLabel=show_xlabel, setYLabel=show_ylabel
+    )
+    if XUnits.get("wn_scaled"):
+        where.xaxis.set_major_formatter(_wn_div1000_formatter())
+    where.autoscale(enable=True, axis="x", tight=True)
+    where.axhline(y=0, color="0.75", linewidth=0.75)
+
+    fin_x = xplot[np.isfinite(xplot)]
+    if fin_x.size >= 2 and fin_x[0] != fin_x[-1]:
+        where.set_xlim(fin_x[0], fin_x[-1])
+
+    fin_y = (
+        yplot.compressed()
+        if isinstance(yplot, np.ma.MaskedArray)
+        else yplot[np.isfinite(yplot)]
+    )
+    if fin_y.size == 0 or np.all(fin_y == 0) or np.nanmax(fin_y) <= 0:
+        where.set_ylim(0.0, 1.0)
+    elif np.nanmin(fin_y) >= 0:
+        where.set_ylim(bottom=0.0)
+
+    if title is None:
+        src = getattr(data, "source", None)
+        name = pathlib.Path(src).stem if src else ""
+        title = f"Averaged Noise \u2014 {name}" if name else "Averaged Noise"
+    where.set_title(title)
+    mgr = getattr(pFig.canvas, "manager", None)
+    if mgr is not None and hasattr(mgr, "set_window_title"):
+        mgr.set_window_title(title)
+
+    return where
+
+
 def plot_counts(
     data,
     ax=None,

@@ -1491,6 +1491,12 @@ class Dataset1D:
 
         return plot.plot_noise_3d(self, ax, **kwargs)
 
+    def plot_noise_spectrum(self, ax=None, **kwargs):
+        """Plot the delay-averaged noise spectrum against the probe axis."""
+        from . import plot
+
+        return plot.plot_noise_spectrum(self, ax, **kwargs)
+
     def plot_counts(self, ax=None, **kwargs):
         """Plot accumulation counts as a function of probe delay.
 

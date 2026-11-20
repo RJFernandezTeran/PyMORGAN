@@ -280,7 +280,7 @@ class MainWindow(
             "PP_plotBkg_btn": "Plot fitted background subtraction curve",
             "PP_maskProbe_btn": "Mask specific probe wavelength ranges",
             "PP_shiftT0_btn": "Shift delay time axis so a chosen point becomes the new t0",
-            "PP_plotNoise_btn": "Plot noise spectrum across probe pixels",
+            "PP_plotNoise_btn": "Plot 3D noise surface across probe pixels and delays (Shift+Click: delay-averaged noise trace vs probe axis)",
             "PP_plotCounts_btn": "Plot total accumulation counts vs probe delay",
             "PP_CtrPlot_btn": "Open 2D contour plot window of 1D dataset",
             "PP_kineticsPlot_btn": "Plot kinetic decay traces at selected probe wavelengths",

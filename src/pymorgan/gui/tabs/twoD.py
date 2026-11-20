@@ -984,9 +984,12 @@ class TwoDTabMixin:
                 fig.tight_layout()
                 plt.show(block=False)
             else:
+                from ..canvas import attach_contour_scroll_zoom
+
                 use_dual = bool(self._twoD_dual_axis())
                 fig, ax = plt.subplots(figsize=(6.8, 6.2) if use_dual else (6, 6))
                 self.render_twoD_contour_frame(active_delay, ax=ax)
+                attach_contour_scroll_zoom(ax)
                 fig.tight_layout()
                 plt.show(block=False)
         except Exception as exc:
@@ -3489,7 +3492,12 @@ class TwoDTabMixin:
         return w, w.ax
 
     def _on_twoD_contour_scroll(self, event):
-        """Scroll mouse wheel over the 2D contour plot to adjust Z scale %."""
+        """Scroll over 2D contour: Shift=X, Ctrl=Y, Ctrl+Shift=both, plain=Z scale %."""
+        from ..canvas import handle_contour_scroll_zoom
+
+        ax = getattr(getattr(self, "twoDaxes", None), "ax", None)
+        if handle_contour_scroll_zoom(event, ax):
+            return
         if event.inaxes is None or not hasattr(self, "twoD_plot_controls") or self.twoD_plot_controls is None:
             return
         step = getattr(event, "step", 0)

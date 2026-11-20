@@ -1395,3 +1395,312 @@ def test_file_open_event_and_suite_launcher_dispatch(qapp, tmp_path):
         assert len(forwarded) == 2
         assert forwarded[1] == str(pdat_info["path"])
 
+
+def test_plot_noise_spectrum_and_shift_click(qapp, tmp_path, monkeypatch):
+    """Plain-click Plot Noise opens 3D noise; Shift+Click pops up delay-averaged 1D trace."""
+    import matplotlib.pyplot as plt
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtTest import QTest
+
+    pdat_no_noise = synthetic.make_synthetic_pdat(tmp_path / "no_noise.pdat")
+    ds_no_noise = pm.load_1D(pdat_no_noise["path"], data_type="PDAT")
+    with pytest.raises(ValueError, match="No noise"):
+        ds_no_noise.plot_noise_spectrum()
+
+    pdat2_info = synthetic.make_synthetic_pdat(tmp_path / "with_noise.pdat")
+    synthetic.make_synthetic_pdatn(pdat2_info["path"])
+    ds = pm.load_1D(pdat2_info["path"], data_type="PDAT")
+
+    # Inject a NaN entry to verify nanmean ignores missing delay points
+    ds.Zstdv[0, 3, 0] = np.nan
+    expected_avg = np.nanmean(ds.noise_array()[:, :, 0], axis=0)
+
+    ax_ev = ds.plot_noise_spectrum(x_axis_unit="eV", secondary_axis=True)
+    try:
+        line = ax_ev.get_lines()[0]
+        np.testing.assert_allclose(np.asarray(line.get_ydata(), dtype=float), expected_avg)
+        assert np.all(np.asarray(line.get_xdata(), dtype=float) < 10.0)
+        assert "eV" in ax_ev.get_xlabel()
+        assert len(ax_ev.child_axes) >= 1
+    finally:
+        plt.close(ax_ev.figure)
+
+    # GUI tests: plain click -> 3D surface; Shift+Click -> 1D averaged noise vs active X unit
+    created_figs = []
+    monkeypatch.setattr(plt, "show", lambda *a, **kw: created_figs.append(plt.gcf()))
+
+    orig_x_unit = pm.get_settings().x_axis_unit
+    win = MainWindow(init_rootdir=False)
+    try:
+        win.show()
+        win.load_path(pdat2_info["path"], "PDAT")
+        app_inst = QApplication.instance()
+        app_inst.processEvents()
+
+        # Plain click -> 3D noise surface
+        QTest.mouseClick(win.PP_plotNoise_btn, Qt.MouseButton.LeftButton)
+        app_inst.processEvents()
+        assert len(created_figs) == 1
+        fig_3d = created_figs[-1]
+        assert fig_3d.axes[0].name == "3d"
+
+        # Inject pixel- and delay-dependent noise to verify exact delay-axis mean
+        n_delays, n_pix, _ = win.dataset.Zstdv.shape
+        ramp = np.outer(np.linspace(1.0, 3.0, n_delays), np.linspace(0.2, 2.2, n_pix))
+        win.dataset.Zstdv[:, :, 0] = ramp
+        expected_gui_avg = np.nanmean(ramp, axis=0)
+
+        # Shift+Click in native cm-1 unit -> 1D trace against probe wavenumbers
+        QTest.mouseClick(
+            win.PP_plotNoise_btn, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.ShiftModifier
+        )
+        app_inst.processEvents()
+        assert len(created_figs) == 2
+        fig_native = created_figs[-1]
+        ax_native = fig_native.axes[0]
+        assert ax_native.name == "rectilinear"
+        line_native = ax_native.get_lines()[0]
+        np.testing.assert_allclose(
+            np.asarray(line_native.get_xdata(), dtype=float), win.dataset.probe
+        )
+        np.testing.assert_allclose(
+            np.asarray(line_native.get_ydata(), dtype=float), expected_gui_avg
+        )
+        assert "cm" in ax_native.get_xlabel()
+        assert ax_native.get_ylim()[0] == pytest.approx(0.0)
+        assert ax_native.get_ylim()[1] < float(np.nanmax(win.dataset.delays))
+
+        # Switch 1D X-axis unit to nm -> Shift+Click follows active X unit
+        win.PC_xUnit.setCurrentText("nm")
+        app_inst.processEvents()
+        QTest.mouseClick(
+            win.PP_plotNoise_btn, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.ShiftModifier
+        )
+        app_inst.processEvents()
+        assert len(created_figs) == 3
+        fig_nm = created_figs[-1]
+        ax_nm = fig_nm.axes[0]
+        line_nm = ax_nm.get_lines()[0]
+        np.testing.assert_allclose(
+            np.asarray(line_nm.get_xdata(), dtype=float), 1.0e7 / win.dataset.probe
+        )
+        np.testing.assert_allclose(np.asarray(line_nm.get_ydata(), dtype=float), expected_gui_avg)
+        assert "nm" in ax_nm.get_xlabel()
+
+        # Switch 1D X-axis unit to eV -> Shift+Click follows active X unit
+        win.PC_xUnit.setCurrentText("eV")
+        app_inst.processEvents()
+        QTest.mouseClick(
+            win.PP_plotNoise_btn, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.ShiftModifier
+        )
+        app_inst.processEvents()
+        assert len(created_figs) == 4
+        fig_ev = created_figs[-1]
+        ax_ev2 = fig_ev.axes[0]
+        line_ev = ax_ev2.get_lines()[0]
+        np.testing.assert_allclose(
+            np.asarray(line_ev.get_xdata(), dtype=float),
+            pm.helpers.convert_spectral(win.dataset.probe, "cm-1", "eV"),
+        )
+        np.testing.assert_allclose(np.asarray(line_ev.get_ydata(), dtype=float), expected_gui_avg)
+        assert "eV" in ax_ev2.get_xlabel()
+    finally:
+        QTest.keyRelease(win, Qt.Key.Key_Shift)
+        for fig in created_figs:
+            plt.close(fig)
+        pm.update_settings(x_axis_unit=orig_x_unit)
+        win.close()
+
+
+def test_contour_scroll_axis_zooming(qapp, tmp_path, monkeypatch):
+    """Shift=X, Ctrl=Y, Ctrl+Shift=both zoom on 1D & 2D contour plots without changing spinboxes."""
+    import matplotlib.pyplot as plt
+    from matplotlib.backend_bases import MouseEvent
+    from PyQt6.QtCore import QPoint, QPointF, Qt
+    from PyQt6.QtGui import QWheelEvent
+
+    def _fire_scroll(canvas, ax, xdata, ydata, step=1.0, modifiers=(), inaxes=None):
+        target_ax = ax if inaxes is None else inaxes
+        px, py = (
+            target_ax.transData.transform((xdata, ydata))
+            if target_ax is not None
+            else (5.0, 5.0)
+        )
+        ev = MouseEvent("scroll_event", canvas, px, py, step=step, modifiers=modifiers)
+        ev.inaxes = target_ax
+        ev.xdata = xdata
+        ev.ydata = ydata
+        canvas.callbacks.process("scroll_event", ev)
+
+    orig_time_scale = pm.get_settings().time_axis_scale
+    pdat_info = synthetic.make_synthetic_pdat(tmp_path / "scroll_1d.pdat")
+    el_info = synthetic.make_synthetic_quickcontrol_2des(tmp_path / "scroll_2d", n_scans=1)
+
+    created_figs = []
+    monkeypatch.setattr(plt, "show", lambda *a, **kw: created_figs.append(plt.gcf()))
+
+    win = MainWindow(init_rootdir=False)
+    try:
+        win.show()
+
+        # --- 1. 1D embedded contour (symlog & log Y scales) ---
+        win.load_path(pdat_info["path"], "PDAT")
+        app_inst = QApplication.instance()
+        app_inst.processEvents()
+
+        ax1d = win.PPaxes.ax
+        orig_xmin = win.PC_xMin.value()
+        orig_xmax = win.PC_xMax.value()
+        orig_ymin = win.PC_yMin.value()
+        orig_ymax = win.PC_yMax.value()
+        win.PC_zPct.setValue(50.0)
+        app_inst.processEvents()
+        orig_zpct = win.PC_zPct.value()
+
+        # Plain scroll changes Z scale % only
+        xl0, yl0 = ax1d.get_xlim(), ax1d.get_ylim()
+        _fire_scroll(win.PPaxes.canvas, ax1d, 1940.0, 10.0, step=1.0, modifiers=())
+        assert win.PC_zPct.value() > orig_zpct
+        assert ax1d.get_xlim() == pytest.approx(xl0)
+        assert ax1d.get_ylim() == pytest.approx(yl0)
+
+        # Shift+Scroll zooms X around x_cursor, leaving Y and Z% and spinboxes unchanged
+        z_before = win.PC_zPct.value()
+        x_cur = 1935.0
+        frac_x_before = (x_cur - xl0[0]) / (xl0[1] - xl0[0])
+        _fire_scroll(win.PPaxes.canvas, ax1d, x_cur, 10.0, step=1.0, modifiers=("shift",))
+        xl1 = ax1d.get_xlim()
+        assert abs(xl1[1] - xl1[0]) < abs(xl0[1] - xl0[0])
+        assert (x_cur - xl1[0]) / (xl1[1] - xl1[0]) == pytest.approx(frac_x_before, rel=1e-6)
+        assert ax1d.get_ylim() == pytest.approx(yl0)
+        assert win.PC_zPct.value() == pytest.approx(z_before)
+        assert win.PC_xMin.value() == pytest.approx(orig_xmin)
+        assert win.PC_xMax.value() == pytest.approx(orig_xmax)
+
+        # Shift+Scroll out widens back to original xlim
+        _fire_scroll(win.PPaxes.canvas, ax1d, x_cur, 10.0, step=-1.0, modifiers=("shift",))
+        assert ax1d.get_xlim() == pytest.approx(xl0, rel=1e-6)
+
+        # Ctrl+Scroll zooms Y on symlog around y_cur, leaving X and spinboxes unchanged
+        y_cur = 15.0
+        _fire_scroll(win.PPaxes.canvas, ax1d, x_cur, y_cur, step=1.0, modifiers=("ctrl",))
+        yl1 = ax1d.get_ylim()
+        assert abs(yl1[1] - yl1[0]) < abs(yl0[1] - yl0[0])
+        assert yl1[0] < y_cur < yl1[1]
+        assert ax1d.get_xlim() == pytest.approx(xl0, rel=1e-6)
+        assert win.PC_yMin.value() == pytest.approx(orig_ymin)
+        assert win.PC_yMax.value() == pytest.approx(orig_ymax)
+        assert win.PC_zPct.value() == pytest.approx(z_before)
+
+        # Ctrl+Shift+Scroll zooms both X & Y
+        _fire_scroll(
+            win.PPaxes.canvas, ax1d, x_cur, y_cur, step=1.0, modifiers=("ctrl", "shift")
+        )
+        xl2, yl2 = ax1d.get_xlim(), ax1d.get_ylim()
+        assert abs(xl2[1] - xl2[0]) < abs(xl0[1] - xl0[0])
+        assert abs(yl2[1] - yl2[0]) < abs(yl1[1] - yl1[0])
+
+        # macOS-style horizontal QWheelEvent with ShiftModifier zooms X
+        win.PC_timeScale.setCurrentText("log")
+        win._render_timer.stop()
+        win._preview_contour()
+        app_inst.processEvents()
+        ax1d_log = win.PPaxes.ax
+        xl_log0, yl_log0 = ax1d_log.get_xlim(), ax1d_log.get_ylim()
+        bbox = ax1d_log.bbox
+        dpr = win.PPaxes.canvas.devicePixelRatioF() or 1.0
+        qpos = QPointF(0.5 * (bbox.x0 + bbox.x1) / dpr, win.PPaxes.canvas.height() - 0.5 * (bbox.y0 + bbox.y1) / dpr)
+        qev = QWheelEvent(
+            qpos,
+            qpos,
+            QPoint(0, 0),
+            QPoint(120, 0),
+            Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.ShiftModifier,
+            Qt.ScrollPhase.NoScrollPhase,
+            False,
+        )
+        win.PPaxes.canvas.wheelEvent(qev)
+        xl_log1 = ax1d_log.get_xlim()
+        assert abs(xl_log1[1] - xl_log1[0]) < abs(xl_log0[1] - xl_log0[0])
+        assert ax1d_log.get_ylim() == pytest.approx(yl_log0)
+
+        # Ctrl+Scroll on log Y stays positive both zoom-in and zoom-out
+        _fire_scroll(win.PPaxes.canvas, ax1d_log, 1950.0, 5.0, step=-2.0, modifiers=("ctrl",))
+        assert ax1d_log.get_ylim()[0] > 0.0
+        assert ax1d_log.get_ylim()[1] > ax1d_log.get_ylim()[0]
+
+        # Modifier scroll over colorbar leaves Z% and colorbar limits untouched
+        other_ax = win.PPaxes.figure.axes[1]
+        _fire_scroll(
+            win.PPaxes.canvas, ax1d_log, 0.5, 0.5, step=1.0, modifiers=("ctrl",), inaxes=other_ax
+        )
+        assert win.PC_zPct.value() == pytest.approx(z_before)
+
+        # Standalone 1D contour popup supports Shift+Scroll and Ctrl+Scroll
+        win._plot_cut("contour")
+        app_inst.processEvents()
+        fig_1d_pop = created_figs[-1]
+        ax_1d_pop = fig_1d_pop.axes[0]
+        xpop0, ypop0 = ax_1d_pop.get_xlim(), ax_1d_pop.get_ylim()
+        _fire_scroll(fig_1d_pop.canvas, ax_1d_pop, 1950.0, 10.0, step=1.0, modifiers=("shift",))
+        assert abs(ax_1d_pop.get_xlim()[1] - ax_1d_pop.get_xlim()[0]) < abs(xpop0[1] - xpop0[0])
+        assert ax_1d_pop.get_ylim() == pytest.approx(ypop0)
+        _fire_scroll(fig_1d_pop.canvas, ax_1d_pop, 1950.0, 10.0, step=1.0, modifiers=("ctrl",))
+        assert abs(ax_1d_pop.get_ylim()[1] - ax_1d_pop.get_ylim()[0]) < abs(ypop0[1] - ypop0[0])
+
+        # --- 2. 2D embedded contour (electronic 2D-ES with descending axes) ---
+        win.MainTabs.setCurrentIndex(1)
+        win.twoD_load_path(str(el_info["info_path"]), data_type="QuickControl_2D")
+        app_inst.processEvents()
+
+        ax2d = win.twoDaxes.ax
+        x2d_0, y2d_0 = ax2d.get_xlim(), ax2d.get_ylim()
+        assert x2d_0[0] > x2d_0[1] and y2d_0[0] > y2d_0[1]
+        p_spin_orig = (win.twoD_PC_pumpMin.value(), win.twoD_PC_pumpMax.value())
+        pr_spin_orig = (win.twoD_PC_probeMin.value(), win.twoD_PC_probeMax.value())
+
+        xc_2d = 0.5 * (x2d_0[0] + x2d_0[1])
+        yc_2d = 0.5 * (y2d_0[0] + y2d_0[1])
+
+        # Shift+Scroll zooms X preserving descending order & spinboxes
+        _fire_scroll(win.twoDaxes.canvas, ax2d, xc_2d, yc_2d, step=1.0, modifiers=("shift",))
+        x2d_1 = ax2d.get_xlim()
+        assert x2d_1[0] > x2d_1[1]
+        assert abs(x2d_1[1] - x2d_1[0]) < abs(x2d_0[1] - x2d_0[0])
+        assert ax2d.get_ylim() == pytest.approx(y2d_0)
+        assert (win.twoD_PC_pumpMin.value(), win.twoD_PC_pumpMax.value()) == pytest.approx(p_spin_orig)
+
+        # Ctrl+Scroll zooms Y preserving descending order & spinboxes
+        _fire_scroll(win.twoDaxes.canvas, ax2d, xc_2d, yc_2d, step=1.0, modifiers=("ctrl",))
+        y2d_1 = ax2d.get_ylim()
+        assert y2d_1[0] > y2d_1[1]
+        assert abs(y2d_1[1] - y2d_1[0]) < abs(y2d_0[1] - y2d_0[0])
+        assert ax2d.get_xlim() == pytest.approx(x2d_1)
+        assert (win.twoD_PC_probeMin.value(), win.twoD_PC_probeMax.value()) == pytest.approx(pr_spin_orig)
+
+        # Sync Limits afterwards picks up zoomed bounds while preserving descending order
+        win._on_twoD_sync_limits()
+        app_inst.processEvents()
+        assert win.twoD_PC_pumpMin.value() < win.twoD_PC_pumpMax.value()
+        assert win.twoD_plot_controls.pump_descending() is True
+        assert win.twoD_plot_controls.probe_descending() is True
+        assert win.twoD_PC_pumpMax.value() < p_spin_orig[1]
+
+        # Standalone 2D contour popup supports Ctrl+Shift+Scroll
+        win._plot_twoD_cut("contour")
+        app_inst.processEvents()
+        fig_2d_pop = created_figs[-1]
+        ax_2d_pop = fig_2d_pop.axes[0]
+        xpop2d_0, ypop2d_0 = ax_2d_pop.get_xlim(), ax_2d_pop.get_ylim()
+        _fire_scroll(
+            fig_2d_pop.canvas, ax_2d_pop, xc_2d, yc_2d, step=1.0, modifiers=("ctrl", "shift")
+        )
+        assert abs(ax_2d_pop.get_xlim()[1] - ax_2d_pop.get_xlim()[0]) < abs(xpop2d_0[1] - xpop2d_0[0])
+        assert abs(ax_2d_pop.get_ylim()[1] - ax_2d_pop.get_ylim()[0]) < abs(ypop2d_0[1] - ypop2d_0[0])
+    finally:
+        for fig in created_figs:
+            plt.close(fig)
+        pm.update_settings(time_axis_scale=orig_time_scale)
+        win.close()
+
