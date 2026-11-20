@@ -797,6 +797,8 @@ _WIDGETS_2D = {
     "dual_axis_chk": "twoD_PC_dualAxis",
     "text_white_bg_chk": "twoD_PC_textWhiteBg",
     "cut_plot_chk": "twoD_PC_cutPlot",
+    "pump_order_btn": "twoD_PC_pumpOrder",
+    "probe_order_btn": "twoD_PC_probeOrder",
 }
 
 
@@ -813,24 +815,22 @@ class PlotControlsPanel2D(QObject):
         self._active_delay_index = 0
         self._zabs = 1.0  # max |Z| at current delay
         self._freq_scale = 1.0
+        self._pump_descending: bool | None = None
+        self._probe_descending: bool | None = None
+        self._default_invert: bool = False
 
         for attr, name in _WIDGETS_2D.items():
             setattr(self, attr, getattr(host, name, None))
 
+        for btn, axis_name in ((self.pump_order_btn, "Pump"), (self.probe_order_btn, "Probe")):
+            if btn is not None:
+                btn.setCheckable(True)
+                self._sync_order_button(btn, axis_name, bool(btn.isChecked()))
+
         # Populate combos
         if self.cmb_cmap is not None:
             PlotControlsPanel._set_combo_items(self.cmb_cmap, _CMAPS)
-            s = pm.get_settings()
-            idx = self.cmb_cmap.findText(str(s.cmap))
-            if idx < 0:
-                for i in range(self.cmb_cmap.count()):
-                    if self.cmb_cmap.itemText(i).lower() == str(s.cmap).lower():
-                        idx = i
-                        break
-            if idx >= 0:
-                self.cmb_cmap.setCurrentIndex(idx)
-            else:
-                self.cmb_cmap.setCurrentText(str(s.cmap))
+            self.sync_from_settings()
             self.cmb_cmap.currentTextChanged.connect(self._on_cmap_changed)
 
         if self.white_spin is not None:
@@ -952,6 +952,93 @@ class PlotControlsPanel2D(QObject):
 
         if self.restore_btn is not None:
             self.restore_btn.clicked.connect(self.restore_limits)
+
+        if self.pump_order_btn is not None:
+            self.pump_order_btn.toggled.connect(self._on_pump_order_toggled)
+        if self.probe_order_btn is not None:
+            self.probe_order_btn.toggled.connect(self._on_probe_order_toggled)
+
+    @staticmethod
+    def _sync_order_button(btn, axis_name: str, descending: bool) -> None:
+        if btn is None:
+            return
+        btn.setText("\u2193" if descending else "\u2191")
+        if descending:
+            btn.setToolTip(
+                f"{axis_name} axis order: Descending (high \u2192 low). Click to switch to Ascending."
+            )
+        else:
+            btn.setToolTip(
+                f"{axis_name} axis order: Ascending (low \u2192 high). Click to switch to Descending."
+            )
+
+    def _apply_order_button(self, btn, axis_name: str, descending: bool) -> None:
+        if btn is not None:
+            btn.blockSignals(True)
+            btn.setChecked(descending)
+            btn.blockSignals(False)
+            self._sync_order_button(btn, axis_name, descending)
+
+    def set_pump_descending(self, descending: bool) -> None:
+        val = bool(descending)
+        self._pump_descending = val
+        self._apply_order_button(self.pump_order_btn, "Pump", val)
+
+    def set_probe_descending(self, descending: bool) -> None:
+        val = bool(descending)
+        self._probe_descending = val
+        self._apply_order_button(self.probe_order_btn, "Probe", val)
+
+    def pump_descending(self) -> bool | None:
+        if self._pump_descending is None and self._dataset is None:
+            return None
+        if self.pump_order_btn is not None:
+            return bool(self.pump_order_btn.isChecked())
+        return self._pump_descending
+
+    def probe_descending(self) -> bool | None:
+        if self._probe_descending is None and self._dataset is None:
+            return None
+        if self.probe_order_btn is not None:
+            return bool(self.probe_order_btn.isChecked())
+        return self._probe_descending
+
+    def _on_pump_order_toggled(self, checked: bool):
+        val = bool(checked)
+        self._pump_descending = val
+        self._sync_order_button(self.pump_order_btn, "Pump", val)
+        self.limitsChanged.emit()
+
+    def _on_probe_order_toggled(self, checked: bool):
+        val = bool(checked)
+        self._probe_descending = val
+        self._sync_order_button(self.probe_order_btn, "Probe", val)
+        self.limitsChanged.emit()
+
+    def sync_from_settings(self) -> None:
+        """Reflect active Settings changes in cmap and default axis order."""
+        s = pm.get_settings()
+        if self.cmb_cmap is not None:
+            self.cmb_cmap.blockSignals(True)
+            idx = self.cmb_cmap.findText(str(s.cmap))
+            if idx < 0:
+                for i in range(self.cmb_cmap.count()):
+                    if self.cmb_cmap.itemText(i).lower() == str(s.cmap).lower():
+                        idx = i
+                        break
+            if idx >= 0:
+                self.cmb_cmap.setCurrentIndex(idx)
+            else:
+                self.cmb_cmap.setCurrentText(str(s.cmap))
+            self.cmb_cmap.blockSignals(False)
+        if self._dataset is not None:
+            new_default = pm.twoD.plot.should_invert_2d_axes(self._dataset, settings=s)
+            if new_default != self._default_invert:
+                if self.pump_descending() == self._default_invert:
+                    self.set_pump_descending(new_default)
+                if self.probe_descending() == self._default_invert:
+                    self.set_probe_descending(new_default)
+                self._default_invert = new_default
 
     def _on_n_contours_return(self):
         if self.n_contours is not None:
@@ -1116,6 +1203,11 @@ class PlotControlsPanel2D(QObject):
         self.set_pump_lim_native(pump_min_val, pump_max_val)
         self.set_probe_lim_native(probe_min_val, probe_max_val)
 
+        default_inv = pm.twoD.plot.should_invert_2d_axes(dataset)
+        self._default_invert = default_inv
+        self.set_pump_descending(default_inv)
+        self.set_probe_descending(default_inv)
+
         self.update_delay_index(active_delay_index, force_reset_pct=True)
 
     def update_delay_index(self, active_delay_index, force_reset_pct=False):
@@ -1252,4 +1344,6 @@ class PlotControlsPanel2D(QObject):
             "Nlevels": int(self.n_contours.value()) if self.n_contours is not None else 40,
             "symmetric": self.sym_chk.isChecked() if self.sym_chk is not None else False,
             "secondary_axis": self.dual_axis(),
+            "invert_pump": self.pump_descending(),
+            "invert_probe": self.probe_descending(),
         }

@@ -253,23 +253,35 @@ def create_2d_movie_animation(
     # Extract plot controls settings if provided
     kwargs = {}
     if plot_controls is not None:
-        if hasattr(plot_controls, "showlines_chk"):
-            kwargs["ShowLines"] = plot_controls.showlines_chk.isChecked()
-        if hasattr(plot_controls, "nskip_spn"):
-            kwargs["Nskip"] = plot_controls.nskip_spn.value()
-        if hasattr(plot_controls, "text_white_bg_chk"):
-            kwargs["text_white_bg"] = plot_controls.text_white_bg_chk.isChecked()
-        if hasattr(plot_controls, "cmap_combo"):
-            kwargs["cmap_ID"] = plot_controls.cmap_combo.currentText()
-        if hasattr(plot_controls, "white_lvl_spn"):
-            kwargs["white_levels"] = plot_controls.white_lvl_spn.value()
-        if hasattr(plot_controls, "cut_chk") and plot_controls.cut_chk.isChecked():
-            kwargs["cut_plot"] = True
-            kwargs["pump_lim"] = (plot_controls.pump_min.value(), plot_controls.pump_max.value())
-            kwargs["probe_lim"] = (
-                plot_controls.probe_min.value(),
-                plot_controls.probe_max.value(),
-            )
+        if hasattr(plot_controls, "contour_kwargs"):
+            ck = dict(plot_controls.contour_kwargs())
+            ck.pop("symmetric", None)
+            if not ck.get("cut_plot", False):
+                ck.pop("pump_lim", None)
+                ck.pop("probe_lim", None)
+            kwargs.update(ck)
+        else:
+            if hasattr(plot_controls, "showlines_chk"):
+                kwargs["ShowLines"] = plot_controls.showlines_chk.isChecked()
+            if hasattr(plot_controls, "nskip_spn"):
+                kwargs["Nskip"] = plot_controls.nskip_spn.value()
+            if hasattr(plot_controls, "text_white_bg_chk"):
+                kwargs["text_white_bg"] = plot_controls.text_white_bg_chk.isChecked()
+            if hasattr(plot_controls, "cmap_combo"):
+                kwargs["cmap_ID"] = plot_controls.cmap_combo.currentText()
+            if hasattr(plot_controls, "white_lvl_spn"):
+                kwargs["white_levels"] = plot_controls.white_lvl_spn.value()
+            if hasattr(plot_controls, "cut_chk") and plot_controls.cut_chk.isChecked():
+                kwargs["cut_plot"] = True
+                kwargs["pump_lim"] = (plot_controls.pump_min.value(), plot_controls.pump_max.value())
+                kwargs["probe_lim"] = (
+                    plot_controls.probe_min.value(),
+                    plot_controls.probe_max.value(),
+                )
+            if hasattr(plot_controls, "pump_descending"):
+                kwargs["invert_pump"] = plot_controls.pump_descending()
+            if hasattr(plot_controls, "probe_descending"):
+                kwargs["invert_probe"] = plot_controls.probe_descending()
 
     n_frames = len(indices)
     progress = QProgressDialog("Rendering frames...", "Cancel", 0, n_frames, parent_widget)

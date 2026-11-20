@@ -788,6 +788,15 @@ class TwoDTabMixin:
         self._twoD_preview_contour()
         self._twoD_update_phase_coeffs_display()
 
+    def _twoD_xy_inversions(self, is_vertical: bool) -> tuple[bool | None, bool | None]:
+        """Return ``(invert_x, invert_y)`` mapped from the 2D axis-order controls."""
+        pc = getattr(self, "twoD_plot_controls", None)
+        if pc is None:
+            return None, None
+        inv_pu = pc.pump_descending()
+        inv_pr = pc.probe_descending()
+        return (inv_pr, inv_pu) if is_vertical else (inv_pu, inv_pr)
+
     def _on_twoD_sync_limits(self):
         if self.twoD_dataset is None or self.twoD_plot_controls is None:
             return
@@ -797,13 +806,21 @@ class TwoDTabMixin:
         s = pm.get_settings()
         pump_axis_val = s.pump_axis.value if hasattr(s.pump_axis, "value") else s.pump_axis
         is_vertical = pump_axis_val == "Vertical"
+        x_disp = tuple(float(v) for v in ax.get_xlim())
+        y_disp = tuple(float(v) for v in ax.get_ylim())
         to_native = pm.twoD.plot.native_converter(self.twoD_dataset, settings=s)
-        x_nat = to_native(ax.get_xlim())
-        y_nat = to_native(ax.get_ylim())
+        x_nat = to_native(x_disp)
+        y_nat = to_native(y_disp)
+        pu_disp = y_disp if is_vertical else x_disp
+        pr_disp = x_disp if is_vertical else y_disp
         pu_nat = y_nat if is_vertical else x_nat
         pr_nat = x_nat if is_vertical else y_nat
 
         pc = self.twoD_plot_controls
+        if pu_disp[0] != pu_disp[1]:
+            pc.set_pump_descending(pu_disp[0] > pu_disp[1])
+        if pr_disp[0] != pr_disp[1]:
+            pc.set_probe_descending(pr_disp[0] > pr_disp[1])
         pc.set_pump_lim_native(float(pu_nat[0]), float(pu_nat[1]))
         pc.set_probe_lim_native(float(pr_nat[0]), float(pr_nat[1]))
         pc.limitsChanged.emit()
@@ -902,6 +919,8 @@ class TwoDTabMixin:
             Nlevels=kwargs.get("Nlevels"),
             filled=kwargs.get("filled"),
             secondary_axis=kwargs.get("secondary_axis"),
+            invert_pump=kwargs.get("invert_pump"),
+            invert_probe=kwargs.get("invert_probe"),
         )
 
         if self.twoD_plot_controls is not None:
@@ -915,8 +934,13 @@ class TwoDTabMixin:
                 if is_vertical
                 else self.twoD_plot_controls.probe_lim()
             )
-            xlim = pm.twoD.plot.ordered_display_limits(raw_xlim, self.twoD_dataset, settings=s)
-            ylim = pm.twoD.plot.ordered_display_limits(raw_ylim, self.twoD_dataset, settings=s)
+            inv_x, inv_y = self._twoD_xy_inversions(is_vertical)
+            xlim = pm.twoD.plot.ordered_display_limits(
+                raw_xlim, self.twoD_dataset, settings=s, invert_axes=inv_x
+            )
+            ylim = pm.twoD.plot.ordered_display_limits(
+                raw_ylim, self.twoD_dataset, settings=s, invert_axes=inv_y
+            )
             _safe_set_limits(ax, xlim, ylim)
         sq_chk = getattr(self, "twoD_PC_square", None)
         if sq_chk is not None and sq_chk.isChecked():
@@ -953,6 +977,8 @@ class TwoDTabMixin:
                         "zlim": (zmin, zmax),
                         "vmin": zmin,
                         "vmax": zmax,
+                        "invert_pump": pc.pump_descending(),
+                        "invert_probe": pc.probe_descending(),
                     }
                 self.twoD_dataset.plot_surface(t2=active_delay, ax=ax, **surf_kwargs)
                 fig.tight_layout()
@@ -1076,6 +1102,8 @@ class TwoDTabMixin:
                     Nlevels=kwargs.get("Nlevels"),
                     white_levels=kwargs.get("white_levels"),
                     aspect=aspect,
+                    invert_pump=kwargs.get("invert_pump"),
+                    invert_probe=kwargs.get("invert_probe"),
                 )
                 state["panels"] = panels_out
                 fig_out.suptitle(
@@ -3190,9 +3218,14 @@ class TwoDTabMixin:
             else self.twoD_plot_controls.probe_lim()
         )
         # The panel holds limits in the dataset's own units; the axes may be
-        # drawn in another (Settings.twoD_freq_unit) or inverted for 2D-ES.
-        xlim = pm.twoD.plot.ordered_display_limits(xlim, self.twoD_dataset, settings=s)
-        ylim = pm.twoD.plot.ordered_display_limits(ylim, self.twoD_dataset, settings=s)
+        # drawn in another (Settings.twoD_freq_unit) or inverted per axis.
+        inv_x, inv_y = self._twoD_xy_inversions(is_vertical)
+        xlim = pm.twoD.plot.ordered_display_limits(
+            xlim, self.twoD_dataset, settings=s, invert_axes=inv_x
+        )
+        ylim = pm.twoD.plot.ordered_display_limits(
+            ylim, self.twoD_dataset, settings=s, invert_axes=inv_y
+        )
         _safe_set_limits(ax, xlim, ylim)
         self.twoDaxes.canvas.draw_idle()
 
@@ -3326,6 +3359,8 @@ class TwoDTabMixin:
                 ivcls_points=ivcls_points,
                 nls_points=nls_points,
                 secondary_axis=kwargs.get("secondary_axis"),
+                invert_pump=kwargs.get("invert_pump"),
+                invert_probe=kwargs.get("invert_probe"),
             )
             to_display = pm.twoD.plot.display_converter(plot_dataset, settings=s)
 
@@ -3413,8 +3448,13 @@ class TwoDTabMixin:
             if is_vertical
             else self.twoD_plot_controls.probe_lim()
         )
-        xlim = pm.twoD.plot.ordered_display_limits(raw_xlim, plot_dataset, settings=s)
-        ylim = pm.twoD.plot.ordered_display_limits(raw_ylim, plot_dataset, settings=s)
+        inv_x, inv_y = self._twoD_xy_inversions(is_vertical)
+        xlim = pm.twoD.plot.ordered_display_limits(
+            raw_xlim, plot_dataset, settings=s, invert_axes=inv_x
+        )
+        ylim = pm.twoD.plot.ordered_display_limits(
+            raw_ylim, plot_dataset, settings=s, invert_axes=inv_y
+        )
         _safe_set_limits(ax, xlim, ylim)
 
         sq_chk = getattr(self, "twoD_PC_square", None)

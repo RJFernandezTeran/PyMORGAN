@@ -381,6 +381,23 @@ class MainWindow(
                     f"QPushButton:disabled {{ color: {_DISABLED_LIGHT_FG}; background-color: {_DISABLED_LIGHT_BG}; border: 1px solid {_DISABLED_LIGHT_BORDER}; }}"
                 )
 
+        def order_toggle_style() -> str:
+            if dark:
+                return (
+                    "QPushButton { font-weight: bold; font-size: 14px; color: #e2e8f0; background-color: #1e293b; border: 1px solid #334155; border-radius: 4px; padding: 0px; }"
+                    "QPushButton:hover:enabled { background-color: #334155; color: #f8fafc; }"
+                    "QPushButton:checked { color: #7dd3fc; background-color: #0c4a6e; border: 1px solid #0284c7; }"
+                    "QPushButton:checked:hover:enabled { background-color: #0284c7; color: #ffffff; }"
+                    f"QPushButton:disabled {{ color: {_DISABLED_DARK_FG}; background-color: {_DISABLED_DARK_BG}; border: 1px solid {_DISABLED_DARK_BORDER}; }}"
+                )
+            return (
+                "QPushButton { font-weight: bold; font-size: 14px; color: #1e293b; background-color: #f1f5f9; border: 1px solid #cbd5e1; border-radius: 4px; padding: 0px; }"
+                "QPushButton:hover:enabled { background-color: #e2e8f0; color: #0f172a; }"
+                "QPushButton:checked { color: #0369a1; background-color: #e0f2fe; border: 1px solid #7dd3fc; }"
+                "QPushButton:checked:hover:enabled { background-color: #bae6fd; color: #0369a1; }"
+                f"QPushButton:disabled {{ color: {_DISABLED_LIGHT_FG}; background-color: {_DISABLED_LIGHT_BG}; border: 1px solid {_DISABLED_LIGHT_BORDER}; }}"
+            )
+
         import colorsys
 
         from matplotlib.colors import to_hex, to_rgb
@@ -1117,6 +1134,8 @@ class MainWindow(
                 "#64748b",
                 "#475569",
             ),
+            "twoD_PC_pumpOrder": order_toggle_style(),
+            "twoD_PC_probeOrder": order_toggle_style(),
         }
 
         # Apply mapped styles
@@ -2128,11 +2147,9 @@ class MainWindow(
             if self.dataset is not None:
                 self._preview_contour()
         elif current_tab_idx == 1:
+            if self.twoD_plot_controls is not None:
+                self.twoD_plot_controls.sync_from_settings()
             if self.twoD_dataset is not None:
-                if self.twoD_plot_controls is not None:
-                    s = pm.get_settings()
-                    if self.twoD_plot_controls.cmb_cmap is not None:
-                        self.twoD_plot_controls.cmb_cmap.setCurrentText(str(s.cmap))
                 self._twoD_preview_contour()
 
     # ----------------------------------------------------------------- #

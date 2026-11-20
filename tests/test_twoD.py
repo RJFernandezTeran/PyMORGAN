@@ -1280,3 +1280,221 @@ def test_process_atomicity_shared_base_and_gui_reprocess_guards(tmp_path):
         assert win.twoD_dataset.shot_rotation == 3
     finally:
         win.close()
+
+
+def test_2d_independent_axis_inversion_api():
+    """Verify independent invert_pump / invert_probe across plot_map, plot_surface, and plot_scan_map_array."""
+    import matplotlib.pyplot as plt
+
+    orig_pump_axis = pm.get_settings().pump_axis
+    try:
+        ds = _tilted_map()
+        ds_scans = ds.copy(deep=True)
+        ds_scans.delays = np.array([1.0], dtype=float)
+        ds_scans.raw_signal_ss = np.stack([ds.Z_R, 0.9 * ds.Z_R], axis=-1)
+        ds_scans.nscans = 2
+        ds_scans.datatype = "FreqDomain"
+
+        pm.update_settings(pump_axis="Horizontal")
+        out_pf = ds.plot_map(1.0, invert_pump=True, invert_probe=False)
+        try:
+            assert out_pf.ax.get_xlim()[0] > out_pf.ax.get_xlim()[1]
+            assert out_pf.ax.get_ylim()[0] < out_pf.ax.get_ylim()[1]
+        finally:
+            plt.close(out_pf.ax.figure)
+
+        out_fp = ds.plot_map(1.0, invert_pump=False, invert_probe=True)
+        try:
+            assert out_fp.ax.get_xlim()[0] < out_fp.ax.get_xlim()[1]
+            assert out_fp.ax.get_ylim()[0] > out_fp.ax.get_ylim()[1]
+        finally:
+            plt.close(out_fp.ax.figure)
+
+        ax_surf = ds.plot_surface(
+            1.0,
+            pump_lim=(1995.0, 2050.0),
+            probe_lim=(1995.0, 2050.0),
+            invert_pump=True,
+            invert_probe=False,
+        )
+        try:
+            assert ax_surf.get_xlim()[0] > ax_surf.get_xlim()[1]
+            assert ax_surf.get_ylim()[0] < ax_surf.get_ylim()[1]
+        finally:
+            plt.close(ax_surf.get_figure())
+
+        ax_surf_auto = ds.plot_surface(1.0, invert_pump=False, invert_probe=True)
+        try:
+            assert ax_surf_auto.get_xlim()[0] < ax_surf_auto.get_xlim()[1]
+            assert ax_surf_auto.get_ylim()[0] > ax_surf_auto.get_ylim()[1]
+        finally:
+            plt.close(ax_surf_auto.get_figure())
+
+        fig_scans, axes_scans, _ = ds_scans.plot_scan_maps(
+            1.0, invert_pump=True, invert_probe=False
+        )
+        try:
+            assert axes_scans[0].get_xlim()[0] > axes_scans[0].get_xlim()[1]
+            assert axes_scans[0].get_ylim()[0] < axes_scans[0].get_ylim()[1]
+        finally:
+            plt.close(fig_scans)
+
+        pm.update_settings(pump_axis="Vertical")
+        out_vert = ds.plot_map(1.0, invert_pump=True, invert_probe=False)
+        try:
+            # Probe is X (ascending), Pump is Y (descending)
+            assert out_vert.ax.get_xlim()[0] < out_vert.ax.get_xlim()[1]
+            assert out_vert.ax.get_ylim()[0] > out_vert.ax.get_ylim()[1]
+        finally:
+            plt.close(out_vert.ax.figure)
+    finally:
+        pm.update_settings(pump_axis=orig_pump_axis)
+
+
+def test_2d_axis_order_buttons_gui(tmp_path):
+    """Verify square Pump/Probe ascending/descending toggle buttons across mid-IR and 2D-ES maps."""
+    import matplotlib.pyplot as plt
+    from PyQt6.QtWidgets import QApplication
+    from synthetic import (
+        make_synthetic_quickcontrol_2d,
+        make_synthetic_quickcontrol_2des,
+    )
+
+    from pymorgan.gui.main_window import MainWindow
+
+    orig_pump_axis = pm.get_settings().pump_axis
+    orig_freq_unit = pm.get_settings().twoD_freq_unit
+
+    app = QApplication.instance() or QApplication([])
+    m_ir = make_synthetic_quickcontrol_2d(tmp_path / "qc_ir", prefix="ir#01", n_scans=1)
+    m_el = make_synthetic_quickcontrol_2des(tmp_path / "qc_el", prefix="el#01", n_scans=1)
+
+    win = MainWindow(init_rootdir=False)
+    try:
+        win.MainTabs.setCurrentIndex(1)
+        win.twoD_load_path(str(m_ir["info_path"]), data_type="QuickControl_2D")
+        app.processEvents()
+
+        # Vibrational mid-IR defaults: both Pump and Probe Ascending (up arrow, unchecked)
+        assert win.twoD_PC_pumpOrder.isChecked() is False
+        assert win.twoD_PC_pumpOrder.text() == "\u2191"
+        assert "Ascending" in win.twoD_PC_pumpOrder.toolTip()
+        assert win.twoD_PC_probeOrder.isChecked() is False
+        assert win.twoD_PC_probeOrder.text() == "\u2191"
+        assert "Ascending" in win.twoD_PC_probeOrder.toolTip()
+
+        ax = win.twoDaxes.ax
+        assert ax.get_xlim()[0] < ax.get_xlim()[1]
+        assert ax.get_ylim()[0] < ax.get_ylim()[1]
+
+        # Click Pump order button (cut_plot=True path): only Pump becomes Descending
+        win.twoD_PC_pumpOrder.click()
+        app.processEvents()
+        assert win.twoD_PC_pumpOrder.isChecked() is True
+        assert win.twoD_PC_pumpOrder.text() == "\u2193"
+        assert "Descending" in win.twoD_PC_pumpOrder.toolTip()
+        assert win.twoD_PC_probeOrder.isChecked() is False
+        assert win.twoDaxes.ax.get_xlim()[0] > win.twoDaxes.ax.get_xlim()[1]
+        assert win.twoDaxes.ax.get_ylim()[0] < win.twoDaxes.ax.get_ylim()[1]
+
+        # Standalone frame renderer matches active axis order
+        fig_tmp, ax_tmp = plt.subplots()
+        try:
+            win.render_twoD_contour_frame(float(win.twoD_dataset.delays[0]), ax=ax_tmp)
+            assert ax_tmp.get_xlim()[0] > ax_tmp.get_xlim()[1]
+            assert ax_tmp.get_ylim()[0] < ax_tmp.get_ylim()[1]
+        finally:
+            plt.close(fig_tmp)
+
+        # Uncheck cut_plot so _twoD_apply_view_limits fast path is exercised
+        win.twoD_PC_cutPlot.setChecked(False)
+        win._twoD_render_timer.stop()
+        win._twoD_preview_contour()
+        app.processEvents()
+
+        win.twoD_PC_probeOrder.click()
+        app.processEvents()
+        assert win.twoD_PC_probeOrder.isChecked() is True
+        assert win.twoD_PC_probeOrder.text() == "\u2193"
+        assert win.twoDaxes.ax.get_xlim()[0] > win.twoDaxes.ax.get_xlim()[1]
+        assert win.twoDaxes.ax.get_ylim()[0] > win.twoDaxes.ax.get_ylim()[1]
+
+        win.twoD_PC_pumpOrder.click()
+        app.processEvents()
+        assert win.twoD_PC_pumpOrder.isChecked() is False
+        assert win.twoD_PC_pumpOrder.text() == "\u2191"
+        assert win.twoDaxes.ax.get_xlim()[0] < win.twoDaxes.ax.get_xlim()[1]
+        assert win.twoDaxes.ax.get_ylim()[0] > win.twoDaxes.ax.get_ylim()[1]
+
+        # Vertical pump orientation swaps X=Probe (descending) and Y=Pump (ascending)
+        pm.update_settings(pump_axis="Vertical")
+        win._twoD_preview_contour()
+        app.processEvents()
+        assert win.twoDaxes.ax.get_xlim()[0] > win.twoDaxes.ax.get_xlim()[1]
+        assert win.twoDaxes.ax.get_ylim()[0] < win.twoDaxes.ax.get_ylim()[1]
+
+        # Sync Limits preserves active axis-order directions
+        pm.update_settings(pump_axis="Horizontal")
+        win._twoD_preview_contour()
+        app.processEvents()
+        x0, x1 = win.twoDaxes.ax.get_xlim()
+        y0, y1 = win.twoDaxes.ax.get_ylim()
+        win.twoDaxes.ax.set_xlim(x0 + 0.1 * (x1 - x0), x1 - 0.1 * (x1 - x0))
+        win.twoDaxes.ax.set_ylim(y0 + 0.1 * (y1 - y0), y1 - 0.1 * (y1 - y0))
+        win._on_twoD_sync_limits()
+        app.processEvents()
+        assert win.twoD_plot_controls.pump_descending() is False
+        assert win.twoD_plot_controls.probe_descending() is True
+
+        # Restore resets both order buttons to dataset default (Ascending for IR)
+        win.twoD_PC_restore.click()
+        win._twoD_render_timer.stop()
+        win._twoD_preview_contour()
+        app.processEvents()
+        assert win.twoD_PC_pumpOrder.isChecked() is False
+        assert win.twoD_PC_probeOrder.isChecked() is False
+        assert win.twoDaxes.ax.get_xlim()[0] < win.twoDaxes.ax.get_xlim()[1]
+        assert win.twoDaxes.ax.get_ylim()[0] < win.twoDaxes.ax.get_ylim()[1]
+
+        # Electronic 2D-ES defaults: both Pump and Probe Descending (down arrow, checked)
+        win.twoD_load_path(str(m_el["info_path"]), data_type="QuickControl_2D")
+        app.processEvents()
+        assert win.twoD_PC_pumpOrder.isChecked() is True
+        assert win.twoD_PC_pumpOrder.text() == "\u2193"
+        assert win.twoD_PC_probeOrder.isChecked() is True
+        assert win.twoD_PC_probeOrder.text() == "\u2193"
+        assert win.twoDaxes.ax.get_xlim()[0] > win.twoDaxes.ax.get_xlim()[1]
+        assert win.twoDaxes.ax.get_ylim()[0] > win.twoDaxes.ax.get_ylim()[1]
+
+        # Toggling Probe on 2D-ES leaves Pump Descending while flipping Probe Ascending
+        win.twoD_PC_probeOrder.click()
+        app.processEvents()
+        win.twoDaxes.canvas.draw()
+        assert win.twoD_PC_pumpOrder.isChecked() is True
+        assert win.twoD_PC_probeOrder.isChecked() is False
+        assert win.twoDaxes.ax.get_xlim()[0] > win.twoDaxes.ax.get_xlim()[1]
+        assert win.twoDaxes.ax.get_ylim()[0] < win.twoDaxes.ax.get_ylim()[1]
+
+        # Child dialogs and movie exporter inherit active per-axis order
+        from pymorgan.gui.movie_dialog import create_2d_movie_animation
+        from pymorgan.gui.twoD_integral_dialog import TwoDIntegralDynamicsDialog
+
+        dlg = TwoDIntegralDynamicsDialog(win, win.twoD_dataset)
+        try:
+            assert dlg.ax_2d.get_xlim()[0] > dlg.ax_2d.get_xlim()[1]
+            assert dlg.ax_2d.get_ylim()[0] < dlg.ax_2d.get_ylim()[1]
+        finally:
+            dlg.close()
+
+        gif_path = tmp_path / "anim.gif"
+        ok = create_2d_movie_animation(
+            win.twoD_dataset,
+            np.array([0]),
+            str(gif_path),
+            plot_controls=win.twoD_plot_controls,
+            parent_widget=None,
+        )
+        assert ok and gif_path.is_file()
+    finally:
+        pm.update_settings(pump_axis=orig_pump_axis, twoD_freq_unit=orig_freq_unit)
+        win.close()

@@ -1008,6 +1008,16 @@ class TwoDGaussianFitDialog(QDialog):
 
         from pymorgan.twoD.plot import plot_map
 
+        pc = getattr(self.parent(), "twoD_plot_controls", None)
+        inv_kw = (
+            {
+                "invert_pump": pc.pump_descending(),
+                "invert_probe": pc.probe_descending(),
+            }
+            if pc is not None
+            else {}
+        )
+
         # 1. Plot Data
         plot_map(
             self.dataset,
@@ -1017,6 +1027,7 @@ class TwoDGaussianFitDialog(QDialog):
             vmax=vmax_data_fit,
             show_colorbar=False,
             t2_label=False,
+            **inv_kw,
         )
         self.ax_data.set_title(f"Data ($t_2$ = {t2_val:.2f} ps)")
 
@@ -1064,6 +1075,7 @@ class TwoDGaussianFitDialog(QDialog):
                 show_colorbar=False,
                 show_ylabel=False,
                 t2_label=False,
+                **inv_kw,
             )
             self.ax_fit.set_title(f"2D {shape_name} Fit")
         else:
@@ -1089,6 +1101,7 @@ class TwoDGaussianFitDialog(QDialog):
                 show_colorbar=False,
                 show_ylabel=False,
                 t2_label=False,
+                **inv_kw,
             )
             self.ax_res.set_title("Residual (Data - Fit) [10x Z-scale]")
         else:

@@ -199,6 +199,8 @@ def plot_map(
     filled: bool = True,
     secondary_axis: bool | None = None,
     invert_axes: bool | None = None,
+    invert_pump: bool | None = None,
+    invert_probe: bool | None = None,
 ):
     """Plot the 2-D map nearest population time ``t2``.
 
@@ -345,11 +347,13 @@ def plot_map(
     )
     comp_u = hlp.complementary_unit(target_u) if use_sec else target_u
     has_sec = bool(use_sec and comp_u != target_u)
-    inv_axes = (
+    default_inv = (
         should_invert_2d_axes(data, freq_unit, s)
         if invert_axes is None
         else bool(invert_axes)
     )
+    inv_pump = default_inv if invert_pump is None else bool(invert_pump)
+    inv_probe = default_inv if invert_probe is None else bool(invert_probe)
 
     if cut_plot and pump_lim is not None and probe_lim is not None:
         p_min_v, p_max_v = min(pump_lim), max(pump_lim)
@@ -399,15 +403,15 @@ def plot_map(
     pump_lim = None if pump_lim is None else to_display(pump_lim)
     probe_lim = None if probe_lim is None else to_display(probe_lim)
 
-    def _order_pair(vals_d):
+    def _order_pair(vals_d, inv: bool):
         lo_v = float(np.nanmin(vals_d))
         hi_v = float(np.nanmax(vals_d))
         if lo_v == hi_v:
             lo_v, hi_v = lo_v - 0.5, hi_v + 0.5
-        return (hi_v, lo_v) if inv_axes else (lo_v, hi_v)
+        return (hi_v, lo_v) if inv else (lo_v, hi_v)
 
-    pu_lim_ordered = _order_pair(pump if pump_lim is None else pump_lim)
-    pr_lim_ordered = _order_pair(probe if probe_lim is None else probe_lim)
+    pu_lim_ordered = _order_pair(pump if pump_lim is None else pump_lim, inv_pump)
+    pr_lim_ordered = _order_pair(probe if probe_lim is None else probe_lim, inv_probe)
 
     flabel_delim = lstyle if lstyle in _FREQ_DELIMS else "()"
     pumpAll, probeAll = hlp.fmt2Dlabel(flabel_delim, flabel, freq_unit_ltx)
@@ -780,6 +784,9 @@ def plot_surface(
     probe_lim=None,
     zlim=None,
     freq_unit=None,
+    invert_axes: bool | None = None,
+    invert_pump: bool | None = None,
+    invert_probe: bool | None = None,
 ):
     """Plot the 2-D spectrum at population time ``t2`` as a true 3D surface plot.
 
@@ -915,19 +922,27 @@ def plot_surface(
 
     # Axis limits, mapped through the same orientation, so the surface shows the
     # same window as the embedded contour.
-    inv_axes = should_invert_2d_axes(data, freq_unit, s)
+    default_inv = (
+        should_invert_2d_axes(data, freq_unit, s)
+        if invert_axes is None
+        else bool(invert_axes)
+    )
+    inv_pump = default_inv if invert_pump is None else bool(invert_pump)
+    inv_probe = default_inv if invert_probe is None else bool(invert_probe)
+    inv_x = inv_probe if is_vertical else inv_pump
+    inv_y = inv_pump if is_vertical else inv_probe
     x_lim = probe_lim if is_vertical else pump_lim
     y_lim = pump_lim if is_vertical else probe_lim
     if x_lim is not None and None not in x_lim:
         x_lo, x_hi = sorted(float(v) for v in x_lim)
-        ax.set_xlim((x_hi, x_lo) if inv_axes else (x_lo, x_hi))
-    elif inv_axes:
+        ax.set_xlim((x_hi, x_lo) if inv_x else (x_lo, x_hi))
+    elif inv_x:
         x_lo, x_hi = sorted(float(v) for v in ax.get_xlim())
         ax.set_xlim(x_hi, x_lo)
     if y_lim is not None and None not in y_lim:
         y_lo, y_hi = sorted(float(v) for v in y_lim)
-        ax.set_ylim((y_hi, y_lo) if inv_axes else (y_lo, y_hi))
-    elif inv_axes:
+        ax.set_ylim((y_hi, y_lo) if inv_y else (y_lo, y_hi))
+    elif inv_y:
         y_lo, y_hi = sorted(float(v) for v in ax.get_ylim())
         ax.set_ylim(y_hi, y_lo)
     if zlim is not None and None not in zlim:
@@ -967,6 +982,9 @@ def plot_scan_map_array(
     quick: bool | None = None,
     freq_unit: str | None = None,
     settings=None,
+    invert_axes: bool | None = None,
+    invert_pump: bool | None = None,
+    invert_probe: bool | None = None,
 ):
     """Plot an array of 2D contour maps across individual (or binned) scans at population time ``t2``.
 
@@ -1138,6 +1156,9 @@ def plot_scan_map_array(
             quick=quick,
             freq_unit=freq_unit,
             secondary_axis=False,
+            invert_axes=invert_axes,
+            invert_pump=invert_pump,
+            invert_probe=invert_probe,
         )
 
         all_excl = (not p_info["is_average"]) and all(i in excluded for i in p_info["indices"])

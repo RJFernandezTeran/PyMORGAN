@@ -264,12 +264,23 @@ class TwoDIntegralDynamicsDialog(QDialog):
         self.ax_2d.clear()
 
         from pymorgan.twoD.plot import plot_map
+
+        pc = getattr(self.parent(), "twoD_plot_controls", None)
+        inv_kw = (
+            {
+                "invert_pump": pc.pump_descending(),
+                "invert_probe": pc.probe_descending(),
+            }
+            if pc is not None
+            else {}
+        )
         plot_map(
             self.dataset,
             t2=t2_val,
             ax=self.ax_2d,
             show_colorbar=True,
             t2_label=False,
+            **inv_kw,
         )
 
         is_vertical, pump_label, probe_label = self._get_axis_config()
