@@ -23,6 +23,7 @@ from typing import Any
 
 import numpy as np
 
+from .. import helpers as hlp
 from ..log import get_logger
 
 logger = get_logger(__name__)
@@ -1855,14 +1856,17 @@ def _extract_quickcontrol_2d_t2_ps(
     info_path: Path,
     info: dict[str, str],
     t_indices: list[int],
+    *,
+    footer_t2_raw: dict[int, float] | None = None,
 ) -> tuple[np.ndarray, bool]:
     """Resolve 2D population times in picoseconds and detect partial acquisitions.
 
     Priority:
     1. ``<prefix>.wts`` encoder waiting-time column (in ``Waiting Time Delay Units``).
-    2. ``Waiting Time Delays`` comma-separated schedule in ``.info``.
-    3. ``Waiting Time (fs)`` single float in ``.info``.
-    4. Zero-based index fallback.
+    2. Per-waiting-time ``.scan`` footer encoder timestamps when ``.wts`` is absent.
+    3. ``Waiting Time Delays`` or ``Waiting Time Delay List`` schedule in ``.info``.
+    4. ``Waiting Time (fs)`` single float in ``.info``.
+    5. Zero-based index fallback.
     """
     wt_unit = info.get("Waiting Time Delay Units", "fs").strip().lower()
     if wt_unit == "fs":
@@ -1871,6 +1875,16 @@ def _extract_quickcontrol_2d_t2_ps(
         scale_to_ps = 1000.0
     else:
         scale_to_ps = 1.0
+
+    sched_ps: np.ndarray | None = None
+    raw_sched = info.get("Waiting Time Delays") or info.get("Waiting Time Delay List") or ""
+    if raw_sched.strip():
+        try:
+            parts = [float(x.strip()) for x in raw_sched.split(",") if x.strip()]
+            if parts:
+                sched_ps = np.asarray(parts, dtype=np.float64) * scale_to_ps
+        except ValueError:
+            sched_ps = None
 
     full_t2_ps: np.ndarray | None = None
     wts_path = info_path.parent / f"{info_path.stem}.wts"
@@ -1882,34 +1896,175 @@ def _extract_quickcontrol_2d_t2_ps(
         except Exception:
             full_t2_ps = None
 
-    if full_t2_ps is None and info.get("Waiting Time Delays"):
-        try:
-            parts = [float(x.strip()) for x in info["Waiting Time Delays"].split(",") if x.strip()]
-            if parts:
-                full_t2_ps = np.asarray(parts, dtype=np.float64) * scale_to_ps
-        except ValueError:
-            full_t2_ps = None
-
-    if full_t2_ps is None and info.get("Waiting Time (fs)"):
-        try:
-            wt_fs = float(info["Waiting Time (fs)"])
-            full_t2_ps = np.asarray([wt_fs / 1000.0], dtype=np.float64)
-        except ValueError:
-            full_t2_ps = None
-
-    in_progress = False
     if full_t2_ps is not None and full_t2_ps.size > 0:
-        if len(t_indices) < full_t2_ps.size:
-            in_progress = True
+        expected_len = max(full_t2_ps.size, sched_ps.size if sched_ps is not None else 0)
+        in_progress = len(t_indices) < expected_len
         mapped = [
             float(full_t2_ps[t_idx - 1])
             if 0 <= (t_idx - 1) < full_t2_ps.size
+            else (
+                float(sched_ps[t_idx - 1])
+                if sched_ps is not None and 0 <= (t_idx - 1) < sched_ps.size
+                else float(t_idx - 1)
+            )
+            for t_idx in t_indices
+        ]
+        return np.asarray(mapped, dtype=np.float64), in_progress
+
+    if footer_t2_raw:
+        f_vals = [footer_t2_raw.get(t_idx, float("nan")) for t_idx in t_indices]
+        f_arr = np.asarray(f_vals, dtype=np.float64)
+        if np.all(np.isfinite(f_arr)) and not np.allclose(f_arr, 0.0, atol=1e-6):
+            in_progress = bool(sched_ps is not None and len(t_indices) < sched_ps.size)
+            return f_arr * scale_to_ps, in_progress
+
+    if sched_ps is not None and sched_ps.size > 0:
+        in_progress = len(t_indices) < sched_ps.size
+        mapped = [
+            float(sched_ps[t_idx - 1])
+            if 0 <= (t_idx - 1) < sched_ps.size
             else float(t_idx - 1)
             for t_idx in t_indices
         ]
         return np.asarray(mapped, dtype=np.float64), in_progress
 
+    if info.get("Waiting Time (fs)"):
+        try:
+            wt_fs = float(info["Waiting Time (fs)"])
+            full_t2_ps = np.asarray([wt_fs / 1000.0], dtype=np.float64)
+            return (
+                np.asarray(
+                    [
+                        float(full_t2_ps[t_idx - 1])
+                        if 0 <= (t_idx - 1) < full_t2_ps.size
+                        else float(t_idx - 1)
+                        for t_idx in t_indices
+                    ],
+                    dtype=np.float64,
+                ),
+                False,
+            )
+        except ValueError:
+            pass
+
     return np.asarray([float(t_idx - 1) for t_idx in t_indices], dtype=np.float64), False
+
+
+def _unfold_undersampled_shaper_w0(
+    w0_rf_cm1: float,
+    dt1_fs: float,
+    info: dict[str, str],
+    probe_cm1: np.ndarray,
+    raw_signal: np.ndarray,
+    probe_spectrum: np.ndarray | None = None,
+) -> tuple[float, bool]:
+    """Unfold an undersampled pulse-shaper rotating-frame offset into its optical Nyquist zone.
+
+    Returns ``(w0_effective_cm1, nyquist_invert)``. When ``w0_rf_cm1 + f_Nyquist``
+    already reaches ``min(probe_cm1)`` (e.g. standard mid-IR or fully shifted
+    rotating-frame acquisitions), ``(w0_rf_cm1, False)`` is returned unchanged.
+    """
+    c_0 = 2.99792458e-5  # cm/fs
+    thz_to_cm1 = 33.356409519815204
+    if dt1_fs <= 0.0 or probe_cm1.size == 0:
+        return w0_rf_cm1, False
+
+    f_s = 1.0 / (c_0 * dt1_fs)
+    f_nyq = 0.5 * f_s
+    probe_min = float(np.nanmin(probe_cm1))
+    probe_max = float(np.nanmax(probe_cm1))
+    if not np.isfinite(probe_min) or not np.isfinite(probe_max) or w0_rf_cm1 + f_nyq >= probe_min:
+        return w0_rf_cm1, False
+
+    band_lo = probe_min
+    band_hi = probe_max
+    band_centre = 0.5 * (probe_min + probe_max)
+
+    if probe_spectrum is not None and probe_spectrum.size == probe_cm1.size:
+        sp_max = float(np.nanmax(probe_spectrum))
+        if np.isfinite(sp_max) and sp_max > 0.0:
+            active_mask = probe_spectrum >= 0.02 * sp_max
+            if np.any(active_mask):
+                band_lo = float(np.nanmin(probe_cm1[active_mask]))
+                band_hi = float(np.nanmax(probe_cm1[active_mask]))
+                band_centre = 0.5 * (band_lo + band_hi)
+
+    try:
+        p1 = float(info.get("Shaper Calibration P1", "nan"))
+        p2 = float(info.get("Shaper Calibration P2", "nan"))
+        p3 = float(info.get("Shaper Calibration P3", "nan"))
+        mask_len = float(info.get("AWG Mask Length", "10000") or 10000.0)
+    except ValueError:
+        p1 = p2 = p3 = float("nan")
+        mask_len = 10000.0
+
+    if np.all(np.isfinite([p1, p2, p3])) and p3 > 0.0 and mask_len > 0.0:
+        x_grid = np.linspace(0.0, mask_len, 512)
+        w_shaper = (p1 * x_grid**2 + p2 * x_grid + p3) * thz_to_cm1
+        sh_lo = float(np.nanmin(w_shaper))
+        sh_hi = float(np.nanmax(w_shaper))
+        if sh_hi > sh_lo > 0.0 and sh_hi >= probe_min and sh_lo <= probe_max:
+            band_lo = max(band_lo, sh_lo)
+            band_hi = min(band_hi, sh_hi)
+            if band_lo >= band_hi:
+                band_lo, band_hi = max(probe_min, sh_lo), min(probe_max, sh_hi)
+            band_centre = 0.5 * (sh_lo + sh_hi)
+
+    n_bins = int(raw_signal.shape[0])
+    n_pos = max(1, n_bins // 2)
+    res_m = 1.0 / (max(1, n_bins) * dt1_fs * c_0)
+    with np.errstate(invalid="ignore"):
+        sig_zm = raw_signal - np.nanmean(raw_signal, axis=0, keepdims=True)
+        sig_zm = np.nan_to_num(sig_zm, nan=0.0)
+        ft_mag = np.mean(np.abs(np.fft.fft(sig_zm, axis=0)), axis=2)
+    diag_tol = max(200.0, 2.5 * res_m)
+
+    def _score_zone(pump_cand: np.ndarray, amp_half: np.ndarray) -> float:
+        z_lo = float(pump_cand[0])
+        z_hi = float(pump_cand[-1])
+        ov = max(0.0, min(z_hi, band_hi) - max(z_lo, band_lo))
+        if ov <= 0.0:
+            return -1.0
+        in_band = (probe_cm1 >= band_lo) & (probe_cm1 <= band_hi)
+        if not np.any(in_band):
+            in_band = np.ones_like(probe_cm1, dtype=bool)
+        pr_sub = probe_cm1[in_band]
+        amp_sub = amp_half[:, in_band]
+        diff = np.abs(pump_cand[:, np.newaxis] - pr_sub[np.newaxis, :])
+        mask = diff <= diag_tol
+        diag_energy = float(np.sum(amp_sub[mask])) if np.any(mask) else 0.0
+        centre_prox = 1.0 / (1.0 + abs(0.5 * (z_lo + z_hi) - band_centre) / max(1.0, f_nyq))
+        return diag_energy * (0.5 + 0.5 * centre_prox) + 1e-6 * ov * centre_prox
+
+    m_min = max(1, int(np.floor((band_lo - w0_rf_cm1 - f_nyq) / f_s)))
+    m_max = max(m_min, int(np.ceil((band_hi - w0_rf_cm1 + f_nyq) / f_s)) + 1)
+
+    best_w0 = w0_rf_cm1
+    best_inv = False
+    best_score = -1.0
+
+    f_pos = np.arange(n_pos, dtype=np.float64) * res_m
+    amp_pos = ft_mag[:n_pos, :]
+    for m in range(m_min, m_max + 1):
+        w0_cand = w0_rf_cm1 + m * f_s
+        sc = _score_zone(w0_cand + f_pos, amp_pos)
+        if sc > best_score:
+            best_score = sc
+            best_w0 = w0_cand
+            best_inv = False
+
+    if best_score <= 0.0 and n_bins >= 4:
+        f_neg = np.arange(n_bins - n_pos, n_bins, dtype=np.float64) * res_m
+        amp_neg = ft_mag[n_bins - n_pos :, :]
+        for m in range(m_min, m_max + 1):
+            w0_cand = w0_rf_cm1 + (m - 1) * f_s
+            sc = _score_zone(w0_cand + f_neg, amp_neg)
+            if sc > best_score:
+                best_score = sc
+                best_w0 = w0_cand
+                best_inv = True
+
+    return best_w0, best_inv
 
 
 @register_map_loader("QuickControl_2D")
@@ -1923,6 +2078,8 @@ def read_QuickControl_2D(path: str, progress_tracker=None):
     selected as the active state by default.
     """
     from ..oneD.load import (
+        _expected_quickcontrol_scan_rows,
+        _extract_quickcontrol_footer_probe_spectrum,
         _find_quickcontrol_2d_scans,
         _format_quickcontrol_sample_info,
         _quickcontrol_exp_kind,
@@ -1946,21 +2103,20 @@ def read_QuickControl_2D(path: str, progress_tracker=None):
     if not t_indices:
         raise ValueError(f"No 2D .scan files found for QuickControl dataset {info_path.stem!r}.")
 
-    t2delays_ps, in_progress = _extract_quickcontrol_2d_t2_ps(info_path, info, t_indices)
     n_t2 = len(t_indices)
+    expected_rows = _expected_quickcontrol_scan_rows(info, "2d")
 
     has_par_any = any(len(scans_by_t[t]["par"]) > 0 for t in t_indices)
     has_per_any = any(len(scans_by_t[t]["per"]) > 0 for t in t_indices)
     dual_pol = has_par_any and has_per_any
 
-    try:
-        target_avg = int(float(info.get("2D Average", "0") or 0))
-    except ValueError:
-        target_avg = 0
-
     axis0_ref: np.ndarray | None = None
     n_rows = 0
     n_pix = 0
+    footer_t2_by_idx: dict[int, float] = {}
+    footer_spec_parts: list[np.ndarray] = []
+    has_partial_any = False
+    in_progress = False
 
     if dual_pol:
         par_stacks: list[np.ndarray | None] = []
@@ -1978,12 +2134,20 @@ def read_QuickControl_2D(path: str, progress_tracker=None):
 
             p_files = scans_by_t[t_idx]["par"]
             s_files = scans_by_t[t_idx]["per"]
+            t_fcols: list[np.ndarray] = []
             if p_files:
-                ax0, p_st, _ = _stack_quickcontrol_scans(
+                ax0, p_st, p_fc, p_fr, p_part = _stack_quickcontrol_scans(
                     p_files,
                     n_rows_ref=n_rows or None,
                     n_pix_ref=n_pix or None,
+                    expected_n_rows=expected_rows,
                 )
+                if p_part:
+                    has_partial_any = True
+                if p_fc.size > 0 and np.any(np.isfinite(p_fc)):
+                    t_fcols.append(p_fc[np.isfinite(p_fc)])
+                if not footer_spec_parts and p_fr is not None:
+                    footer_spec_parts.append(p_fr)
                 if axis0_ref is None:
                     axis0_ref = ax0
                     n_rows, n_pix = p_st.shape[:2]
@@ -1993,11 +2157,18 @@ def read_QuickControl_2D(path: str, progress_tracker=None):
                 par_stacks.append(None)
 
             if s_files:
-                ax0, s_st, _ = _stack_quickcontrol_scans(
+                ax0, s_st, s_fc, s_fr, s_part = _stack_quickcontrol_scans(
                     s_files,
                     n_rows_ref=n_rows or None,
                     n_pix_ref=n_pix or None,
+                    expected_n_rows=expected_rows,
                 )
+                if s_part:
+                    has_partial_any = True
+                if s_fc.size > 0 and np.any(np.isfinite(s_fc)):
+                    t_fcols.append(s_fc[np.isfinite(s_fc)])
+                if not footer_spec_parts and s_fr is not None:
+                    footer_spec_parts.append(s_fr)
                 if axis0_ref is None:
                     axis0_ref = ax0
                     n_rows, n_pix = s_st.shape[:2]
@@ -2005,6 +2176,9 @@ def read_QuickControl_2D(path: str, progress_tracker=None):
                 max_per = max(max_per, int(s_st.shape[-1]))
             else:
                 per_stacks.append(None)
+
+            if t_fcols:
+                footer_t2_by_idx[t_idx] = float(np.mean(np.concatenate(t_fcols)))
 
         assert axis0_ref is not None and n_rows > 0 and n_pix > 0
 
@@ -2020,7 +2194,7 @@ def read_QuickControl_2D(path: str, progress_tracker=None):
                 with np.errstate(invalid="ignore"):
                     cube_par[:, :, m] = np.nanmean(pst, axis=-1)
                 ss_par_full[:, :, m, : pst.shape[-1]] = pst
-                if pst.shape[-1] < max_par or (target_avg > 0 and pst.shape[-1] < target_avg):
+                if pst.shape[-1] < max_par:
                     in_progress = True
             else:
                 in_progress = True
@@ -2028,7 +2202,7 @@ def read_QuickControl_2D(path: str, progress_tracker=None):
                 with np.errstate(invalid="ignore"):
                     cube_per[:, :, m] = np.nanmean(sst, axis=-1)
                 ss_per_full[:, :, m, : sst.shape[-1]] = sst
-                if sst.shape[-1] < max_per or (target_avg > 0 and sst.shape[-1] < target_avg):
+                if sst.shape[-1] < max_per:
                     in_progress = True
             else:
                 in_progress = True
@@ -2075,11 +2249,18 @@ def read_QuickControl_2D(path: str, progress_tracker=None):
                     progress_tracker.update(idx_m + 1, label=f"Loading T{t_idx:02d}...")
 
             c_files = scans_by_t[t_idx][chan_key]
-            ax0, c_st, _ = _stack_quickcontrol_scans(
+            ax0, c_st, c_fc, c_fr, c_part = _stack_quickcontrol_scans(
                 c_files,
                 n_rows_ref=n_rows or None,
                 n_pix_ref=n_pix or None,
+                expected_n_rows=expected_rows,
             )
+            if c_part:
+                has_partial_any = True
+            if c_fc.size > 0 and np.any(np.isfinite(c_fc)):
+                footer_t2_by_idx[t_idx] = float(np.mean(c_fc[np.isfinite(c_fc)]))
+            if not footer_spec_parts and c_fr is not None:
+                footer_spec_parts.append(c_fr)
             if axis0_ref is None:
                 axis0_ref = ax0
                 n_rows, n_pix = c_st.shape[:2]
@@ -2093,13 +2274,18 @@ def read_QuickControl_2D(path: str, progress_tracker=None):
             with np.errstate(invalid="ignore"):
                 raw_cube[:, :, m] = np.nan_to_num(np.nanmean(cst, axis=-1), nan=0.0)
             ss_ch_full[:, :, m, : cst.shape[-1]] = cst
-            if cst.shape[-1] < max_ch or (target_avg > 0 and cst.shape[-1] < target_avg):
+            if cst.shape[-1] < max_ch:
                 in_progress = True
 
         states_data = {}
         states_signal_ss = {}
         raw_signal_ss = ss_ch_full if max_ch > 1 else None
         n_scans_total = max(1, max_ch)
+
+    t2delays_ps, in_progress_t2 = _extract_quickcontrol_2d_t2_ps(
+        info_path, info, t_indices, footer_t2_raw=footer_t2_by_idx
+    )
+    in_progress = in_progress or in_progress_t2 or has_partial_any
 
     if n_t2 > 1 and not np.all(np.diff(t2delays_ps) >= 0):
         sort_idx = np.argsort(t2delays_ps)
@@ -2113,9 +2299,9 @@ def read_QuickControl_2D(path: str, progress_tracker=None):
             states_signal_ss[k_st] = states_signal_ss[k_st][:, :, sort_idx, :]
 
     probe, _unitsL, display_L, cal_source, _cal_level = _resolve_quickcontrol_probe_axis(
-        info, n_pix, info_path, check_csv_override=True
+        info, n_pix, info_path, check_csv_override=True, force_wavenumbers=True
     )
-    freq_units = display_L if display_L in ("cm-1", "nm") else "cm-1"
+    freq_units = "cm-1" if display_L in ("cm-1", "px") else display_L
 
     spec_arr: np.ndarray | None = None
     spec_first = info_path.parent / f"{info_path.stem}_{t_indices[0]:02d}.spec"
@@ -2128,6 +2314,10 @@ def read_QuickControl_2D(path: str, progress_tracker=None):
                 spec_arr = cand_spec
         except Exception:
             spec_arr = None
+    if spec_arr is None and footer_spec_parts:
+        spec_arr = _extract_quickcontrol_footer_probe_spectrum(
+            np.concatenate(footer_spec_parts, axis=-1)
+        )
 
     if probe.size > 1 and not np.all(np.diff(probe) >= 0):
         p_order = np.argsort(probe)
@@ -2144,9 +2334,29 @@ def read_QuickControl_2D(path: str, progress_tracker=None):
 
     domain_str = info.get("Domain", "Time").strip().lower()
     is_freq_domain = domain_str.startswith("freq")
+    nyquist_invert = False
 
     if is_freq_domain:
         pump = axis0_ref.copy()
+        if (
+            pump.size > 0
+            and np.all(np.isfinite(pump))
+            and np.all(pump > 0.0)
+            and 150.0 <= float(np.nanmean(pump)) <= 2000.0
+            and float(np.nanmax(probe)) > hlp.DISPLAY_SCALE_THRESHOLD
+        ):
+            pump = 1.0e7 / pump
+        if pump.size > 1 and not np.all(np.diff(pump) >= 0):
+            pu_order = np.argsort(pump)
+            pump = pump[pu_order]
+            raw_cube = raw_cube[pu_order, :, :]
+            if raw_signal_ss is not None:
+                raw_signal_ss = raw_signal_ss[pu_order, :, :, :]
+            for k_st in list(states_data.keys()):
+                states_data[k_st] = states_data[k_st][pu_order, :, :]
+            for k_st in list(states_signal_ss.keys()):
+                states_signal_ss[k_st] = states_signal_ss[k_st][pu_order, :, :, :]
+
         datatype_str = "FreqDomain"
         w0_cm1 = 0.0
         dt1_fs = 0.0
@@ -2167,19 +2377,19 @@ def read_QuickControl_2D(path: str, progress_tracker=None):
                 )
     else:
         t1 = axis0_ref.copy()
-        w0_cm1 = 0.0
+        w0_rf_cm1 = 0.0
         if "Rotating Frame (Scanned)" in info or "Rotating Frame (Fixed)" in info:
             try:
                 rf_scan = float(info.get("Rotating Frame (Scanned)", "0") or 0.0)
                 rf_fix = float(info.get("Rotating Frame (Fixed)", "0") or 0.0)
-                w0_cm1 = rf_scan - rf_fix
+                w0_rf_cm1 = rf_scan - rf_fix
             except ValueError:
-                w0_cm1 = 0.0
+                w0_rf_cm1 = 0.0
         elif "Rotating Frame" in info:
             try:
-                w0_cm1 = float(info.get("Rotating Frame", "0") or 0.0)
+                w0_rf_cm1 = float(info.get("Rotating Frame", "0") or 0.0)
             except ValueError:
-                w0_cm1 = 0.0
+                w0_rf_cm1 = 0.0
 
         dt1_fs = 0.0
         if "Step Size (fs)" in info:
@@ -2190,6 +2400,10 @@ def read_QuickControl_2D(path: str, progress_tracker=None):
         if dt1_fs <= 0.0 and len(t1) > 1:
             dt1_fs = float(np.nanmean(np.abs(np.diff(t1))))
 
+        w0_cm1, nyquist_invert = _unfold_undersampled_shaper_w0(
+            w0_rf_cm1, dt1_fs, info, probe, raw_cube, probe_spectrum=spec_arr
+        )
+
         raw_signal = raw_cube.copy()
         raw_interferogram = np.nanmean(raw_signal, axis=1)
         raw_t1delays = t1.copy()
@@ -2198,6 +2412,8 @@ def read_QuickControl_2D(path: str, progress_tracker=None):
         pump = t1.copy()
 
     units = _units_2d("ps", freq_units)
+    if probe.size > 0 and float(np.nanmax(probe)) > hlp.DISPLAY_SCALE_THRESHOLD:
+        units["unitsZ_lbl"] = r"S$_{\text{2DES}}$"
     if freq_units == "nm":
         units["unitsL_lbl"] = "Wavelength"
         units["unitsL_ltx"] = "nm"
@@ -2205,6 +2421,8 @@ def read_QuickControl_2D(path: str, progress_tracker=None):
     units["is_frequency_domain"] = is_freq_domain
     units["w0_cm1"] = w0_cm1
     units["dt1_fs"] = dt1_fs
+    if nyquist_invert:
+        units["nyquist_invert"] = True
     units["quickcontrol_info"] = info
     units["interferogram_from_signal"] = not is_freq_domain
     units["nscans"] = int(n_scans_total)
@@ -2212,7 +2430,11 @@ def read_QuickControl_2D(path: str, progress_tracker=None):
     if raw_signal_ss is not None:
         units["raw_signal_ss"] = raw_signal_ss
         if not is_freq_domain:
-            units["raw_interferogram_ss"] = np.nanmean(raw_signal_ss, axis=1)
+            import warnings
+
+            with warnings.catch_warnings(), np.errstate(invalid="ignore"):
+                warnings.simplefilter("ignore", RuntimeWarning)
+                units["raw_interferogram_ss"] = np.nanmean(raw_signal_ss, axis=1)
     if states_signal_ss:
         units["states_signal_ss"] = states_signal_ss
     if states_data:

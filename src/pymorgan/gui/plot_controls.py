@@ -794,6 +794,7 @@ _WIDGETS_2D = {
     "lines_every": "twoD_PC_contourLinesEvery",
     "lines_fmt": "twoD_PC_contourLinesFormat",
     "square_chk": "twoD_PC_square",
+    "dual_axis_chk": "twoD_PC_dualAxis",
     "text_white_bg_chk": "twoD_PC_textWhiteBg",
     "cut_plot_chk": "twoD_PC_cutPlot",
 }
@@ -811,6 +812,7 @@ class PlotControlsPanel2D(QObject):
         self._dataset = None
         self._active_delay_index = 0
         self._zabs = 1.0  # max |Z| at current delay
+        self._freq_scale = 1.0
 
         for attr, name in _WIDGETS_2D.items():
             setattr(self, attr, getattr(host, name, None))
@@ -932,7 +934,15 @@ class PlotControlsPanel2D(QObject):
                 line_edit.installEventFilter(self._twoD_n_contours_filter)
                 line_edit.returnPressed.connect(self._on_n_contours_return)
 
-        for chk in (self.filled_chk, self.showlines_chk, self.sym_chk, self.square_chk, self.text_white_bg_chk, self.cut_plot_chk):
+        for chk in (
+            self.filled_chk,
+            self.showlines_chk,
+            self.sym_chk,
+            self.square_chk,
+            self.dual_axis_chk,
+            self.text_white_bg_chk,
+            self.cut_plot_chk,
+        ):
             if chk is not None:
                 chk.toggled.connect(lambda *_: self.renderRequested.emit())
 
@@ -1018,20 +1028,65 @@ class PlotControlsPanel2D(QObject):
 
         pump = np.asarray(dataset.pump, dtype=float)
         probe = np.asarray(dataset.probe, dtype=float)
+        is_elec = bool(getattr(dataset, "is_electronic", False))
 
-        # Show the spectral unit on the limit spin boxes (defaults to cm-1 in the
-        # .ui; follow the dataset if it reports something else).
-        unit = str(getattr(dataset, "freq_units", "") or "").strip()
-        disp_unit = "cm⁻¹" if unit in ("cm-1", "cm^-1", "cm⁻¹") else unit
-        if disp_unit:
-            for w in (self.pump_min, self.pump_max, self.probe_min, self.probe_max):
-                if w is not None and w.suffix().strip() != disp_unit:
+        # Show the spectral unit on the limit spin boxes (10^3 cm-1 for electronic maps).
+        unit = str(getattr(dataset, "freq_units", "") or "cm-1").strip()
+        is_wn = unit in ("", "cm-1", "cm^-1", "cm⁻¹", "cm^{-1}")
+        self._freq_scale = 1000.0 if (is_elec and is_wn) else 1.0
+        if is_wn:
+            disp_unit = "10³ cm⁻¹" if self._freq_scale == 1000.0 else "cm⁻¹"
+        else:
+            disp_unit = unit
+        for w in (self.pump_min, self.pump_max, self.probe_min, self.probe_max):
+            if w is not None:
+                w._FMT = "%.2f" if self._freq_scale == 1000.0 else "%.1f"
+                w.setSingleStep(0.05 if self._freq_scale == 1000.0 else 1.0)
+                if disp_unit and w.suffix().strip() != disp_unit:
                     w.setSuffix(f" {disp_unit}")
+
+        if self.dual_axis_chk is not None:
+            s = pm.get_settings()
+            self.dual_axis_chk.blockSignals(True)
+            self.dual_axis_chk.setChecked(bool(is_elec or getattr(s, "secondary_axis", False)))
+            self.dual_axis_chk.blockSignals(False)
+
+        probe_min_val = float(np.nanmin(probe))
+        probe_max_val = float(np.nanmax(probe))
+        if is_elec and isinstance(getattr(dataset, "units", None), dict):
+            sp = dataset.units.get("probe_spectrum")
+            pr_1d = probe[:, 0] if probe.ndim > 1 else probe
+            if sp is not None:
+                sp_arr = np.asarray(sp, dtype=float).ravel()
+                if sp_arr.size == pr_1d.size and np.any(np.isfinite(sp_arr)):
+                    sp_peak = float(np.nanmax(sp_arr))
+                    if sp_peak > 0.0:
+                        act = sp_arr >= 0.01 * sp_peak
+                        if int(np.count_nonzero(act)) >= 4:
+                            probe_min_val = max(
+                                float(np.nanmin(probe)),
+                                min(float(np.nanmin(pr_1d[act])), float(np.nanmin(pump))),
+                            )
+                            probe_max_val = min(
+                                float(np.nanmax(probe)),
+                                max(float(np.nanmax(pr_1d[act])), float(np.nanmax(pump))),
+                            )
 
         # Set default pump limits dynamically
         if dataset.datatype == "shaper":
-            pump_min_val = float(probe.min())
-            pump_max_val = float(probe.max())
+            pu_full_span = float(np.nanmax(pump) - np.nanmin(pump))
+            pr_act_span = probe_max_val - probe_min_val
+            if pr_act_span < pu_full_span:
+                pump_min_val = probe_min_val
+                pump_max_val = probe_max_val
+            else:
+                ov_lo = max(float(np.nanmin(pump)), probe_min_val)
+                ov_hi = min(float(np.nanmax(pump)), probe_max_val)
+                if ov_lo < ov_hi:
+                    pump_min_val, pump_max_val = ov_lo, ov_hi
+                else:
+                    pump_min_val = float(np.nanmin(pump))
+                    pump_max_val = float(np.nanmax(pump))
         elif dataset.datatype == "interferometer" and hasattr(dataset, "proc_absFFT_ZPint") and dataset.proc_absFFT_ZPint is not None:
             spec = np.abs(dataset.proc_absFFT_ZPint[:len(dataset.pump), active_delay_index])
             threshold = 0.20 * np.max(spec)
@@ -1050,17 +1105,16 @@ class PlotControlsPanel2D(QObject):
         pump_min_val = max(float(pump.min()), min(float(pump.max()), pump_min_val))
         pump_max_val = max(float(pump.min()), min(float(pump.max()), pump_max_val))
 
-        # Set limits
-        for w, v in (
-            (self.pump_min, pump_min_val),
-            (self.pump_max, pump_max_val),
-            (self.probe_min, float(probe.min())),
-            (self.probe_max, float(probe.max())),
-        ):
-            if w is not None:
-                w.blockSignals(True)
-                w.setValue(v)
-                w.blockSignals(False)
+        if self.square_chk is not None:
+            pu_span = abs(pump_max_val - pump_min_val)
+            pr_span = abs(probe_max_val - probe_min_val)
+            span_ratio = max(pu_span, pr_span) / max(1.0e-6, min(pu_span, pr_span))
+            self.square_chk.blockSignals(True)
+            self.square_chk.setChecked(not (is_elec and span_ratio > 2.5))
+            self.square_chk.blockSignals(False)
+
+        self.set_pump_lim_native(pump_min_val, pump_max_val)
+        self.set_probe_lim_native(probe_min_val, probe_max_val)
 
         self.update_delay_index(active_delay_index, force_reset_pct=True)
 
@@ -1074,12 +1128,10 @@ class PlotControlsPanel2D(QObject):
                 pump = np.asarray(self._dataset.pump, dtype=float)
                 probe = np.asarray(self._dataset.probe, dtype=float)
 
-                pmin = self.pump_min.value() if self.pump_min is not None else pump.min()
-                pmax = self.pump_max.value() if self.pump_max is not None else pump.max()
+                pmin, pmax = self.pump_lim()
                 p_min_v, p_max_v = min(pmin, pmax), max(pmin, pmax)
 
-                prmin = self.probe_min.value() if self.probe_min is not None else probe.min()
-                prmax = self.probe_max.value() if self.probe_max is not None else probe.max()
+                prmin, prmax = self.probe_lim()
                 pr_min_v, pr_max_v = min(prmin, prmax), max(prmin, prmax)
 
                 pump_indices = np.nonzero((pump >= p_min_v) & (pump <= p_max_v))[0]
@@ -1121,14 +1173,7 @@ class PlotControlsPanel2D(QObject):
             probe = np.asarray(self._dataset.probe, dtype=float)
             if probe.ndim > 1:
                 det_probe = probe[:, min(det, probe.shape[1] - 1)]
-                for w, v in (
-                    (self.probe_min, float(det_probe.min())),
-                    (self.probe_max, float(det_probe.max())),
-                ):
-                    if w is not None:
-                        w.blockSignals(True)
-                        w.setValue(v)
-                        w.blockSignals(False)
+                self.set_probe_lim_native(float(det_probe.min()), float(det_probe.max()))
             self.update_delay_index(self._active_delay_index, force_reset_pct=True)
         self.renderRequested.emit()
 
@@ -1138,14 +1183,42 @@ class PlotControlsPanel2D(QObject):
             self.set_dataset(self._dataset, self._active_delay_index)
             self.renderRequested.emit()
 
+    def freq_scale(self) -> float:
+        return float(self._freq_scale)
+
+    def dual_axis(self) -> bool | None:
+        if self.dual_axis_chk is not None:
+            return bool(self.dual_axis_chk.isChecked())
+        return None
+
+    def set_pump_lim_native(self, lo: float, hi: float) -> None:
+        lo_v, hi_v = min(float(lo), float(hi)), max(float(lo), float(hi))
+        sc = self._freq_scale or 1.0
+        for w, v in ((self.pump_min, lo_v / sc), (self.pump_max, hi_v / sc)):
+            if w is not None:
+                w.blockSignals(True)
+                w.setValue(v)
+                w.blockSignals(False)
+
+    def set_probe_lim_native(self, lo: float, hi: float) -> None:
+        lo_v, hi_v = min(float(lo), float(hi)), max(float(lo), float(hi))
+        sc = self._freq_scale or 1.0
+        for w, v in ((self.probe_min, lo_v / sc), (self.probe_max, hi_v / sc)):
+            if w is not None:
+                w.blockSignals(True)
+                w.setValue(v)
+                w.blockSignals(False)
+
     def pump_lim(self) -> tuple[float, float]:
-        pmin = self.pump_min.value() if self.pump_min is not None else 0.0
-        pmax = self.pump_max.value() if self.pump_max is not None else 1.0
+        sc = self._freq_scale or 1.0
+        pmin = (self.pump_min.value() if self.pump_min is not None else 0.0) * sc
+        pmax = (self.pump_max.value() if self.pump_max is not None else 1.0) * sc
         return (pmin, pmax)
 
     def probe_lim(self) -> tuple[float, float]:
-        pmin = self.probe_min.value() if self.probe_min is not None else 0.0
-        pmax = self.probe_max.value() if self.probe_max is not None else 1.0
+        sc = self._freq_scale or 1.0
+        pmin = (self.probe_min.value() if self.probe_min is not None else 0.0) * sc
+        pmax = (self.probe_max.value() if self.probe_max is not None else 1.0) * sc
         return (pmin, pmax)
 
     def zlimits(self) -> tuple[float, float]:
@@ -1178,4 +1251,5 @@ class PlotControlsPanel2D(QObject):
             "probe_lim": self.probe_lim(),
             "Nlevels": int(self.n_contours.value()) if self.n_contours is not None else 40,
             "symmetric": self.sym_chk.isChecked() if self.sym_chk is not None else False,
+            "secondary_axis": self.dual_axis(),
         }

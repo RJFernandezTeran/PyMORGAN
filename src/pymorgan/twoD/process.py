@@ -180,6 +180,7 @@ def process(
     zeropad_next2k: bool = False,
     phase_method: str = "No fit",
     phase_points: int = 10,
+    shot_rotation: int = 0,
     pumpcorrection: bool = False,
     bkg_sub: bool = False,
     bkgIdx: int = 0,
@@ -232,6 +233,26 @@ def process(
 
     if dataset.raw_signal is None or dataset.raw_interferogram is None or dataset.raw_t1delays is None:
         return
+
+    # Snapshot unrotated time-domain arrays once so repeated shot_rotation changes
+    # always rotate relative to the original loaded data (never cumulatively).
+    base_sig = getattr(dataset, "_base_raw_signal", None)
+    if base_sig is None or base_sig.shape != np.asarray(dataset.raw_signal).shape:
+        base_sig = np.asarray(dataset.raw_signal, dtype=float).copy()
+        dataset._base_raw_signal = base_sig
+    base_int = getattr(dataset, "_base_raw_interferogram", None)
+    if base_int is None or base_int.shape != np.asarray(dataset.raw_interferogram).shape:
+        base_int = np.asarray(dataset.raw_interferogram, dtype=float).copy()
+        dataset._base_raw_interferogram = base_int
+
+    rot = int(shot_rotation or 0)
+    dataset.shot_rotation = rot
+    if rot != 0:
+        dataset.raw_signal = np.roll(base_sig, rot, axis=0)
+        dataset.raw_interferogram = np.roll(base_int, rot, axis=0)
+    else:
+        dataset.raw_signal = base_sig.copy()
+        dataset.raw_interferogram = base_int.copy()
 
     close_tracker = False
     if progress_tracker is None:
@@ -548,10 +569,18 @@ def process(
     scale_factor = np.sqrt(c_0 * dt1 / n_ft) * 2.0
     proc_2d = proc_2d * scale_factor
 
-    # 8. Slicing to Positive Half
+    # 8. Slicing to Positive Half (or inverted upper Nyquist half when aliased)
     n_pos = n_ft // 2
-    dataset.Z_R = proc_2d[:n_pos, :, :]
-    dataset.pump = dataset.proc_pump_full[:n_pos]
+    nyquist_invert = bool(
+        isinstance(getattr(dataset, "units", None), dict)
+        and dataset.units.get("nyquist_invert", False)
+    )
+    if nyquist_invert and n_ft - n_pos >= 1:
+        dataset.Z_R = proc_2d[n_ft - n_pos :, :, :]
+        dataset.pump = dataset.proc_pump_full[n_ft - n_pos :]
+    else:
+        dataset.Z_R = proc_2d[:n_pos, :, :]
+        dataset.pump = dataset.proc_pump_full[:n_pos]
 
     dataset.Z_C = None
     dataset._is_corrected = False

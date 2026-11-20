@@ -2556,6 +2556,32 @@ The magnitude sets the smoothing window width.</string>
                   </property>
                  </widget>
                 </item>
+                <item row="6" column="0">
+                 <widget class="QLabel" name="twoD_shot_rotation_lbl">
+                  <property name="text">
+                   <string>Shot rotation</string>
+                  </property>
+                 </widget>
+                </item>
+                <item row="6" column="1">
+                 <widget class="QSpinBox" name="twoD_shot_rotation">
+                  <property name="toolTip">
+                   <string>Circularly rotate time-domain t1 data by an integer number of shots before apodisation and Fourier transform (+k wraps end to t1=0; -k brings bin k to t1=0)</string>
+                  </property>
+                  <property name="keyboardTracking">
+                   <bool>false</bool>
+                  </property>
+                  <property name="minimum">
+                   <number>-9999</number>
+                  </property>
+                  <property name="maximum">
+                   <number>9999</number>
+                  </property>
+                  <property name="value">
+                   <number>0</number>
+                  </property>
+                 </widget>
+                </item>
                </layout>
               </item>
               <item>
@@ -2880,13 +2906,13 @@ The magnitude sets the smoothing window width.</string>
                </property>
                <property name="minimumSize">
                 <size>
-                 <width>88</width>
+                 <width>132</width>
                  <height>0</height>
                 </size>
                </property>
                <property name="maximumSize">
                 <size>
-                 <width>88</width>
+                 <width>132</width>
                  <height>16777215</height>
                 </size>
                </property>
@@ -2911,13 +2937,13 @@ The magnitude sets the smoothing window width.</string>
                </property>
                <property name="minimumSize">
                 <size>
-                 <width>88</width>
+                 <width>132</width>
                  <height>0</height>
                 </size>
                </property>
                <property name="maximumSize">
                 <size>
-                 <width>88</width>
+                 <width>132</width>
                  <height>16777215</height>
                 </size>
                </property>
@@ -2989,13 +3015,13 @@ The magnitude sets the smoothing window width.</string>
                </property>
                <property name="minimumSize">
                 <size>
-                 <width>88</width>
+                 <width>132</width>
                  <height>0</height>
                 </size>
                </property>
                <property name="maximumSize">
                 <size>
-                 <width>88</width>
+                 <width>132</width>
                  <height>16777215</height>
                 </size>
                </property>
@@ -3020,13 +3046,13 @@ The magnitude sets the smoothing window width.</string>
                </property>
                <property name="minimumSize">
                 <size>
-                 <width>88</width>
+                 <width>132</width>
                  <height>0</height>
                 </size>
                </property>
                <property name="maximumSize">
                 <size>
-                 <width>88</width>
+                 <width>132</width>
                  <height>16777215</height>
                 </size>
                </property>
@@ -3216,6 +3242,16 @@ The magnitude sets the smoothing window width.</string>
                 <bool>true</bool>
                </property>
               <property name="maximumSize"><size><width>80</width><height>16777215</height></size></property></widget>
+             </item>
+             <item row="3" column="2">
+              <widget class="QCheckBox" name="twoD_PC_dualAxis">
+               <property name="toolTip">
+                <string>Show complementary wavelength/wavenumber secondary axes (top and right)</string>
+               </property>
+               <property name="text">
+                <string>Dual axis</string>
+               </property>
+              </widget>
              </item>
              <item row="3" column="3">
               <widget class="QCheckBox" name="twoD_PC_square">

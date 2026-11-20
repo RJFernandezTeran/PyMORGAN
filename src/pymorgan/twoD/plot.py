@@ -26,15 +26,12 @@ Map2DAxes = namedtuple("Map2DAxes", ["ax", "top", "cbar"])
 _FREQ_DELIMS = ("()", "[]", "/")
 
 
-def _display_axes(data, units, freq_unit, settings):
-    """Conversion of the spectral axes into the display unit.
-
-    Returns ``(convert, unit_ltx)`` where ``convert`` maps native pump/probe
-    values (and anything sharing those axes: limits, overlay points, top
-    spectra) into the display unit, applying the 1e3 rescaling of
-    :func:`helpers.to_display_axis` when the axis is large enough to need it.
-    """
-    native = _freq_unit_token(data, units)
+def _display_axes_meta(data, units, freq_unit, settings):
+    """Return ``(convert, unconvert, unit_ltx, native, target, factor)`` for 2-D axes."""
+    raw_native = _freq_unit_token(data, units)
+    native = "cm-1" if raw_native in ("cm-1", "cm^{-1}", "cm^-1") else raw_native
+    if native not in hlp.SPECTRAL_UNITS:
+        native = "cm-1"
     target = freq_unit if freq_unit is not None else getattr(settings, "twoD_freq_unit", native)
     target = target.value if hasattr(target, "value") else str(target)
     if target in (None, "", "native"):
@@ -49,6 +46,24 @@ def _display_axes(data, units, freq_unit, settings):
         arr = hlp.convert_spectral(np.asarray(values, dtype=float), native, target) / factor
         return arr
 
+    def unconvert(values):
+        if values is None:
+            return None
+        arr = np.asarray(values, dtype=float) * factor
+        return hlp.convert_spectral(arr, target, native)
+
+    return convert, unconvert, unit_ltx, native, target, factor
+
+
+def _display_axes(data, units, freq_unit, settings):
+    """Conversion of the spectral axes into the display unit.
+
+    Returns ``(convert, unit_ltx)`` where ``convert`` maps native pump/probe
+    values (and anything sharing those axes: limits, overlay points, top
+    spectra) into the display unit, applying the 1e3 rescaling of
+    :func:`helpers.to_display_axis` when the axis is large enough to need it.
+    """
+    convert, _, unit_ltx, _, _, _ = _display_axes_meta(data, units, freq_unit, settings)
     return convert, unit_ltx
 
 
@@ -63,6 +78,58 @@ def display_converter(data, freq_unit=None, settings=None):
     s = settings or get_settings()
     convert, _ = _display_axes(data, getattr(data, "units", None), freq_unit, s)
     return convert
+
+
+def native_converter(data, freq_unit=None, settings=None):
+    """Callable mapping displayed 2-D axis coordinates back to native ``cm-1``."""
+    from ..settings import get_settings
+
+    s = settings or get_settings()
+    _, unconvert, _, _, _, _ = _display_axes_meta(
+        data, getattr(data, "units", None), freq_unit, s
+    )
+    return unconvert
+
+
+def should_invert_2d_axes(data, freq_unit=None, settings=None) -> bool:
+    """Return True when displayed 2-D axes should run from high to low value.
+
+    For electronic 2-D spectra (``data.is_electronic``) displayed in energy-like
+    units (``10^3 cm-1``, ``eV``, ``THz``, ``in-1``), wavenumbers/energies
+    decrease left-to-right and bottom-to-top so wavelength (``nm``) increases.
+    """
+    from ..settings import get_settings
+
+    s = settings or get_settings()
+    _, _, _, _, target, _ = _display_axes_meta(
+        data, getattr(data, "units", None), freq_unit, s
+    )
+    return bool(getattr(data, "is_electronic", False)) and target != "nm"
+
+
+def ordered_display_limits(
+    lim_native,
+    data,
+    freq_unit=None,
+    settings=None,
+    *,
+    invert_axes: bool | None = None,
+) -> tuple[float, float]:
+    """Convert native ``(min, max)`` limits to ordered display ``(lo_or_hi, hi_or_lo)``."""
+    from ..settings import get_settings
+
+    s = settings or get_settings()
+    conv, _, _, _, _, _ = _display_axes_meta(
+        data, getattr(data, "units", None), freq_unit, s
+    )
+    d = np.asarray(conv(lim_native), dtype=float).ravel()
+    lo, hi = float(min(d[0], d[1])), float(max(d[0], d[1]))
+    inv = (
+        should_invert_2d_axes(data, freq_unit, s)
+        if invert_axes is None
+        else bool(invert_axes)
+    )
+    return (hi, lo) if inv else (lo, hi)
 
 
 def _freq_unit_token(data, units, default: str = "cm-1") -> str:
@@ -130,6 +197,8 @@ def plot_map(
     freq_unit=None,
     detector: int = 0,
     filled: bool = True,
+    secondary_axis: bool | None = None,
+    invert_axes: bool | None = None,
 ):
     """Plot the 2-D map nearest population time ``t2``.
 
@@ -266,7 +335,21 @@ def plot_map(
 
     # Everything below works in display units; the cropping just above uses the
     # native axes, so convert once the crop has been applied.
-    to_display, freq_unit_ltx = _display_axes(data, units, freq_unit, s)
+    to_display, _to_native, freq_unit_ltx, native_u, target_u, disp_factor = (
+        _display_axes_meta(data, units, freq_unit, s)
+    )
+    use_sec = (
+        bool(secondary_axis)
+        if secondary_axis is not None
+        else bool(getattr(data, "is_electronic", False) or getattr(s, "secondary_axis", False))
+    )
+    comp_u = hlp.complementary_unit(target_u) if use_sec else target_u
+    has_sec = bool(use_sec and comp_u != target_u)
+    inv_axes = (
+        should_invert_2d_axes(data, freq_unit, s)
+        if invert_axes is None
+        else bool(invert_axes)
+    )
 
     if cut_plot and pump_lim is not None and probe_lim is not None:
         p_min_v, p_max_v = min(pump_lim), max(pump_lim)
@@ -281,7 +364,7 @@ def plot_map(
             Zmap = Zmap[np.ix_(pump_indices, probe_indices)]
 
     if ax is None:
-        _, ax = plt.subplots(figsize=(6, 6))
+        _, ax = plt.subplots(figsize=(6.8, 6.2) if has_sec else (6, 6))
     if aspect:
         ax.set_aspect(aspect)
 
@@ -293,7 +376,7 @@ def plot_map(
         ax_top = divider.append_axes("top", top_height, pad=0.2, sharex=ax)
         ax_top.xaxis.set_tick_params(labelbottom=False)
     if show_colorbar:
-        cax = divider.append_axes("right", 0.15, pad=0.1)
+        cax = divider.append_axes("right", 0.15, pad=1.08 if has_sec else 0.1)
 
     if vmin is not None and vmax is not None:
         Zmin = vmin
@@ -316,6 +399,16 @@ def plot_map(
     pump_lim = None if pump_lim is None else to_display(pump_lim)
     probe_lim = None if probe_lim is None else to_display(probe_lim)
 
+    def _order_pair(vals_d):
+        lo_v = float(np.nanmin(vals_d))
+        hi_v = float(np.nanmax(vals_d))
+        if lo_v == hi_v:
+            lo_v, hi_v = lo_v - 0.5, hi_v + 0.5
+        return (hi_v, lo_v) if inv_axes else (lo_v, hi_v)
+
+    pu_lim_ordered = _order_pair(pump if pump_lim is None else pump_lim)
+    pr_lim_ordered = _order_pair(probe if probe_lim is None else probe_lim)
+
     flabel_delim = lstyle if lstyle in _FREQ_DELIMS else "()"
     pumpAll, probeAll = hlp.fmt2Dlabel(flabel_delim, flabel, freq_unit_ltx)
 
@@ -325,16 +418,16 @@ def plot_map(
         Z_contour = Zmap
         xlabel_str = probeAll
         ylabel_str = pumpAll
-        default_xlim = (probe[0], probe[-1])
-        default_ylim = (pump[0], pump[-1])
+        default_xlim = pr_lim_ordered
+        default_ylim = pu_lim_ordered
     else:
         X = pump
         Y = probe
         Z_contour = Zmap.T
         xlabel_str = pumpAll
         ylabel_str = probeAll
-        default_xlim = (pump[0], pump[-1])
-        default_ylim = (probe[0], probe[-1])
+        default_xlim = pu_lim_ordered
+        default_ylim = pr_lim_ordered
 
     NctrF = Nlevels if Nlevels is not None else getattr(s, "n_contours", 40)
     if NctrF % 2 != 0:
@@ -521,7 +614,7 @@ def plot_map(
         sx = to_display(sx)
         ax_top.plot(sx, sy, color="k", linewidth=2, label=top_label or slabel)
         ax_top.axhline(y=0, linestyle="-", color="0.5", linewidth=0.5)
-        ax_top.set_xlim(pump[0], pump[-1])
+        ax_top.set_xlim(default_xlim[0], default_xlim[1])
         if top_label or slabel:
             ax_top.legend(
                 loc="upper left",
@@ -531,12 +624,66 @@ def plot_map(
                 handlelength=0.75,
             )
 
+    if has_sec:
+        span_native = np.concatenate(
+            [np.asarray(data.pump, dtype=float), np.asarray(data.probe, dtype=float)]
+        )
+        _, comp_factor, comp_unit_ltx = hlp.to_display_axis(span_native, native_u, comp_u)
+
+        def _sec_fwd(v, _t=target_u, _c=comp_u, _f=disp_factor, _cf=comp_factor):
+            arr = np.maximum(np.asarray(v, dtype=float) * _f, 1.0e-6)
+            return hlp.convert_spectral(arr, _t, _c) / _cf
+
+        def _sec_inv(v, _t=target_u, _c=comp_u, _f=disp_factor, _cf=comp_factor):
+            arr = np.maximum(np.asarray(v, dtype=float) * _cf, 1.0e-6)
+            return hlp.convert_spectral(arr, _c, _t) / _f
+
+        if comp_u == "nm":
+            sec_pump_lbl, sec_probe_lbl = hlp.fmt2Dlabel_wavelength(
+                flabel_delim, flabel, comp_unit_ltx
+            )
+        else:
+            sec_pump_lbl, sec_probe_lbl = hlp.fmt2Dlabel(
+                flabel_delim, flabel, comp_unit_ltx
+            )
+        sec_xlabel = sec_probe_lbl if is_vertical else sec_pump_lbl
+        sec_ylabel = sec_pump_lbl if is_vertical else sec_probe_lbl
+
+        ax.tick_params(top=False, right=False)
+        host_top = ax_top if ax_top is not None else ax
+        if ax_top is not None:
+            ax_top.tick_params(top=False)
+
+        sec_x = host_top.secondary_xaxis("top", functions=(_sec_fwd, _sec_inv))
+        sec_x.tick_params(axis="x", top=True, labeltop=True, direction="out")
+        sec_x.xaxis.set_major_locator(tkr.MaxNLocator(nbins=6, steps=[1, 2, 2.5, 5, 10]))
+        if show_xlabel:
+            sec_x.set_xlabel(sec_xlabel, labelpad=6)
+
+        sec_y = ax.secondary_yaxis("right", functions=(_sec_fwd, _sec_inv))
+        sec_y.tick_params(axis="y", right=True, labelright=True, direction="out")
+        sec_y.yaxis.set_major_locator(tkr.MaxNLocator(nbins=6, steps=[1, 2, 2.5, 5, 10]))
+        if show_ylabel:
+            sec_y.set_ylabel(sec_ylabel, labelpad=6)
+
+        ax._pymorgan_sec_axes = (sec_x, sec_y)
+    else:
+        ax._pymorgan_sec_axes = None
+
     _x_arr = np.asarray(X, dtype=float)
     _y_arr = np.asarray(Y, dtype=float)
     _z_grid = np.asarray(Z_contour)
 
     def _format_coord(x, y):
         try:
+            sec_x_str = ""
+            sec_y_str = ""
+            if has_sec and comp_u == "nm" and x > 0 and y > 0:
+                nx = float(hlp.convert_spectral(x * disp_factor, target_u, "nm"))
+                ny = float(hlp.convert_spectral(y * disp_factor, target_u, "nm"))
+                if np.isfinite(nx) and np.isfinite(ny):
+                    sec_x_str = f" ({nx:.1f} nm)"
+                    sec_y_str = f" ({ny:.1f} nm)"
             if (
                 _x_arr.size == 0
                 or _y_arr.size == 0
@@ -545,13 +692,13 @@ def plot_map(
                 or y < np.nanmin(_y_arr)
                 or y > np.nanmax(_y_arr)
             ):
-                return f"x={x:.4g}, y={y:.4g}"
+                return f"x={x:.4g}{sec_x_str}, y={y:.4g}{sec_y_str}"
             ix = int(np.nanargmin(np.abs(_x_arr - x)))
             iy = int(np.nanargmin(np.abs(_y_arr - y)))
             val = _z_grid[iy, ix]
             if np.ma.is_masked(val) or np.isnan(val):
-                return f"x={x:.4g}, y={y:.4g}, z=NaN"
-            return f"x={x:.4g}, y={y:.4g}, z={val:.4g}"
+                return f"x={x:.4g}{sec_x_str}, y={y:.4g}{sec_y_str}, z=NaN"
+            return f"x={x:.4g}{sec_x_str}, y={y:.4g}{sec_y_str}, z={val:.4g}"
         except Exception:
             return f"x={x:.4g}, y={y:.4g}"
 
@@ -768,12 +915,15 @@ def plot_surface(
 
     # Axis limits, mapped through the same orientation, so the surface shows the
     # same window as the embedded contour.
+    inv_axes = should_invert_2d_axes(data, freq_unit, s)
     x_lim = probe_lim if is_vertical else pump_lim
     y_lim = pump_lim if is_vertical else probe_lim
     if x_lim is not None and None not in x_lim:
-        ax.set_xlim(sorted(float(v) for v in x_lim))
+        x_lo, x_hi = sorted(float(v) for v in x_lim)
+        ax.set_xlim((x_hi, x_lo) if inv_axes else (x_lo, x_hi))
     if y_lim is not None and None not in y_lim:
-        ax.set_ylim(sorted(float(v) for v in y_lim))
+        y_lo, y_hi = sorted(float(v) for v in y_lim)
+        ax.set_ylim((y_hi, y_lo) if inv_axes else (y_lo, y_hi))
     if zlim is not None and None not in zlim:
         ax.set_zlim(sorted(float(v) for v in zlim))
 
@@ -981,6 +1131,7 @@ def plot_scan_map_array(
             probe_lim=probe_lim,
             quick=quick,
             freq_unit=freq_unit,
+            secondary_axis=False,
         )
 
         all_excl = (not p_info["is_average"]) and all(i in excluded for i in p_info["indices"])
