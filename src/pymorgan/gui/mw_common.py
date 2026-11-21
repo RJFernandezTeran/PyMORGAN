@@ -38,6 +38,8 @@ _DATASET_WIDGETS = [
     "PP_plotCounts_btn",
     "PPaxes",
     "PC_box",
+    "PP_SampleInfo_text",
+    "PP_sampleInfo_bar",
 ]
 
 _DATASET_WIDGETS_2D = [
@@ -45,6 +47,9 @@ _DATASET_WIDGETS_2D = [
     "twoDaxes",
     "twoD_PC_box",
     "twoD_subtabs",
+    "twoD_analysis_grp",
+    "twoD_SampleInfo_text",
+    "twoD_sampleInfo_bar",
 ]
 
 # Display-to-shortname & shortname-to-display mappings for 1D and 2D data selection

@@ -16,16 +16,19 @@ os.environ.setdefault("QT_API", "pyqt6")
 import numpy as np
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
     QGridLayout,
+    QHBoxLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -346,3 +349,48 @@ def ask_values(
     if not values:
         QMessageBox.information(parent, title, "No valid numbers entered.")
     return values
+
+
+class SampleInfoDialog(QDialog):
+    """Resizable, read-only pop-up displaying complete sample/measurement metadata."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Sample Info")
+        self.setWindowFlag(Qt.WindowType.WindowMaximizeButtonHint, True)
+        self.setMinimumSize(420, 300)
+        self.resize(660, 520)
+
+        layout = QVBoxLayout(self)
+
+        self.text_edit = QTextEdit(self)
+        self.text_edit.setReadOnly(True)
+        self.text_edit.setUndoRedoEnabled(False)
+        self.text_edit.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+            | Qt.TextInteractionFlag.TextSelectableByKeyboard
+        )
+        layout.addWidget(self.text_edit, stretch=1)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+        self.copy_btn = QPushButton("Copy All", self)
+        self.copy_btn.setToolTip("Copy complete sample info text to clipboard")
+        self.copy_btn.clicked.connect(self._copy_all)
+        btn_row.addWidget(self.copy_btn)
+
+        self.close_btn = QPushButton("Close", self)
+        self.close_btn.clicked.connect(self.close)
+        btn_row.addWidget(self.close_btn)
+        layout.addLayout(btn_row)
+
+    def _copy_all(self):
+        cb = QApplication.clipboard()
+        if cb is not None:
+            cb.setText(self.text_edit.toPlainText())
+
+    def set_content(self, title: str, html_text: str) -> None:
+        """Populate the read-only text viewer with formatted metadata HTML."""
+        clean_title = str(title or "").strip()
+        self.setWindowTitle(f"Sample Info \u2014 {clean_title}" if clean_title else "Sample Info")
+        self.text_edit.setHtml(html_text or "")

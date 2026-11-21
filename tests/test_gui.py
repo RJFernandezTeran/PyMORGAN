@@ -2029,3 +2029,172 @@ def test_transient_spectra_dialogs_display_delay_units(qapp, tmp_path, monkeypat
         win.close()
 
 
+def test_sample_info_visibility_and_popup_dialogs(qapp, tmp_path, monkeypatch):
+    """Sample info boxes and 2D Analysis Subroutines stay hidden until load; 1D/2D pop-up icons open copyable read-only metadata windows."""
+    import h5py
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtWidgets import QMessageBox
+
+    from pymorgan.gui.dialogs import SampleInfoDialog
+
+    def _fail_on_modal(_parent, title, msg, *_a, **_kw):
+        raise AssertionError(f"Unexpected modal dialog ({title}): {msg}")
+
+    monkeypatch.setattr(QMessageBox, "warning", _fail_on_modal)
+    monkeypatch.setattr(QMessageBox, "critical", _fail_on_modal)
+    monkeypatch.setattr(QMessageBox, "information", _fail_on_modal)
+
+    pdat_info = synthetic.make_synthetic_pdat(tmp_path / "syn.pdat")
+    p2dat_info = synthetic.make_synthetic_p2dat(tmp_path / "syn.p2dat")
+
+    # 1D PyMESS_PP with extended sample metadata
+    pp_h5 = tmp_path / "rich_pp.h5"
+    with h5py.File(pp_h5, "w") as f:
+        meta = f.create_group("metadata")
+        meta.attrs["measurement_type"] = "pump_probe"
+        meta.attrs["sample_id"] = "RichPP"
+        meta.attrs["num_scans"] = 2
+        meta.attrs["num_batches"] = 25
+        meta.attrs["shots_per_batch"] = 500
+        meta.attrs["rep_rate_hz"] = 1000
+        meta.attrs["setup_id"] = "TRIR_UniGE"
+        meta.attrs["pymess_version"] = "1.261121.2"
+        meta.attrs["timestamp"] = "20261121_011500"
+        grp = f.create_group("data")
+        grp.create_dataset("delays_fs", data=np.array([-2000.0, 0.0, 5000.0]))
+        grp.create_dataset("wavelengths", data=np.linspace(1950.0, 2050.0, 16))
+        grp.create_dataset("delta_A", data=np.ones((3, 16)) * 0.1)
+
+    # 2D PyMESS_2D with extended sample metadata
+    h5_2d = tmp_path / "rich_2d.h5"
+    with h5py.File(h5_2d, "w") as f:
+        meta = f.create_group("metadata")
+        meta.attrs["measurement_type"] = "2d_spectra"
+        meta.attrs["domain_mode"] = "time_domain"
+        meta.attrs["sample_id"] = "Rich2D"
+        meta.attrs["num_scans"] = 2
+        meta.attrs["num_batches"] = 40
+        meta.attrs["shots_per_batch"] = 500
+        meta.attrs["rep_rate_hz"] = 1000
+        meta.attrs["setup_id"] = "TRIR-2DIR_UniGE"
+        meta.attrs["setup_laboratory"] = "MEOW Lab"
+        meta.attrs["pymess_version"] = "1.261121.2"
+        shaper = meta.create_group("shaper")
+        shaper.attrs["mode"] = "Time"
+        shaper.attrs["step_fs"] = 30.0
+        shaper.attrs["effective_rotating_frame_cm1"] = 1800.0
+        shaper.attrs["dispersion_correct"] = 1
+        shaper.attrs["dispersion_gvd_fs2"] = -85000.0
+        grp = f.create_group("data")
+        grp.create_dataset("t1_delays_fs", data=np.arange(10, dtype=float) * 30.0)
+        grp.create_dataset("t2_delays_fs", data=np.array([500.0, 1000.0]))
+        grp.create_dataset("omega3_axis", data=np.linspace(1950.0, 2050.0, 16))
+        grp.create_dataset("interferograms_raw", data=np.ones((2, 10, 16)) * 0.5)
+
+    bad_file = tmp_path / "corrupt.pdat"
+    bad_file.write_text("not a valid pdat", encoding="utf-8")
+
+    win = MainWindow(init_rootdir=False)
+    try:
+        # 1. Before any dataset is loaded, Sample Info and 2D Analysis Subroutines are hidden
+        assert win.PP_SampleInfo_text.isHidden() is True
+        assert win.PP_sampleInfo_bar.isHidden() is True
+        assert win.PP_show_all_info_chk.isHidden() is True
+        assert win.twoD_SampleInfo_text.isHidden() is True
+        assert win.twoD_sampleInfo_bar.isHidden() is True
+        assert win.twoD_show_all_info_chk.isHidden() is True
+        assert win.twoD_analysis_grp.isHidden() is True
+
+        # Crisp vector icons are attached on both pop-up buttons
+        assert not win.PP_sampleInfo_popup_btn.icon().isNull()
+        assert not win.twoD_sampleInfo_popup_btn.icon().isNull()
+
+        # 2. Load 1D PDAT (no extended info): info box + bar visible, show-all toggle stays hidden
+        win.load_path(pdat_info["path"], "PDAT")
+        qapp.processEvents()
+        assert win.PP_SampleInfo_text.isHidden() is False
+        assert win.PP_sampleInfo_bar.isHidden() is False
+        assert win.PP_show_all_info_chk.isHidden() is True
+        assert win.PP_sampleInfo_popup_btn.isHidden() is False
+
+        # 3. Load 1D PyMESS_PP (extended info): toggle & inline full switch + read-only copyable pop-up
+        win.load_path(str(pp_h5), "PyMESS_PP")
+        qapp.processEvents()
+        assert win.PP_show_all_info_chk.isHidden() is False
+        assert win.PP_show_all_info_chk.isChecked() is False
+        assert "Recorded:" not in win.PP_SampleInfo_text.toPlainText()
+
+        win.PP_sampleInfo_popup_btn.click()
+        qapp.processEvents()
+        dlg_1d = win._oneD_sample_info_dlg
+        assert isinstance(dlg_1d, SampleInfoDialog)
+        assert dlg_1d.isVisible() is True
+        assert dlg_1d.text_edit.isReadOnly() is True
+        flags_1d = dlg_1d.text_edit.textInteractionFlags()
+        assert bool(flags_1d & Qt.TextInteractionFlag.TextSelectableByMouse)
+        assert not bool(flags_1d & Qt.TextInteractionFlag.TextEditable)
+        popup_plain_1d = dlg_1d.text_edit.toPlainText()
+        assert "Recorded:" in popup_plain_1d
+        assert "TRIR_UniGE" in popup_plain_1d
+
+        dlg_1d.copy_btn.click()
+        qapp.processEvents()
+        assert QApplication.clipboard().text() == popup_plain_1d
+
+        win.PP_show_all_info_chk.setChecked(True)
+        qapp.processEvents()
+        assert "Recorded:" in win.PP_SampleInfo_text.toPlainText()
+
+        # 4. Load 2D P2DAT then PyMESS_2D: 2D Analysis Subroutines, Sample Info, and pop-up work
+        win.MainTabs.setCurrentIndex(1)
+        win.twoD_load_path(str(p2dat_info["path"]), data_type="P2DAT")
+        qapp.processEvents()
+        assert win.twoD_analysis_grp.isHidden() is False
+        assert win.twoD_SampleInfo_text.isHidden() is False
+        assert win.twoD_sampleInfo_bar.isHidden() is False
+        assert win.twoD_show_all_info_chk.isHidden() is True
+        assert win.twoD_sampleInfo_popup_btn.isHidden() is False
+
+        win.twoD_load_path(str(h5_2d), data_type="PyMESS_2D")
+        qapp.processEvents()
+        assert win.twoD_show_all_info_chk.isHidden() is False
+        assert "Laboratory:" not in win.twoD_SampleInfo_text.toPlainText()
+
+        win.twoD_sampleInfo_popup_btn.click()
+        qapp.processEvents()
+        dlg_2d = win._twoD_sample_info_dlg
+        assert isinstance(dlg_2d, SampleInfoDialog)
+        assert dlg_2d.isVisible() is True
+        assert dlg_2d.text_edit.isReadOnly() is True
+        popup_plain_2d = dlg_2d.text_edit.toPlainText()
+        assert "Shaper Dispersion:" in popup_plain_2d
+        assert "Laboratory: MEOW Lab" in popup_plain_2d
+
+        # 5. Failed loads hide the 1D and 2D info panels and 2D Analysis Subroutines again
+        errors: list[tuple[str, str]] = []
+
+        def _record_modal(_parent, title, msg, *_a, **_kw):
+            errors.append((str(title), str(msg)))
+
+        monkeypatch.setattr(QMessageBox, "warning", _record_modal)
+        monkeypatch.setattr(QMessageBox, "critical", _record_modal)
+        win.load_path(str(bad_file), "PDAT")
+        qapp.processEvents()
+        assert len(errors) >= 1
+        assert win.PP_SampleInfo_text.isHidden() is True
+        assert win.PP_sampleInfo_bar.isHidden() is True
+        assert dlg_1d.isVisible() is False
+
+        prev_errors = len(errors)
+        win.twoD_load_path(str(bad_file), data_type="P2DAT")
+        qapp.processEvents()
+        assert len(errors) > prev_errors
+        assert win.twoD_SampleInfo_text.isHidden() is True
+        assert win.twoD_sampleInfo_bar.isHidden() is True
+        assert win.twoD_analysis_grp.isHidden() is True
+        assert dlg_2d.isVisible() is False
+    finally:
+        win.close()
+
+
+

@@ -149,6 +149,8 @@ class MainWindow(
         self._twoD_overlay = None
         self._twoD_current_path = None
         self._twoD_pop_window = None
+        self._oneD_sample_info_dlg = None
+        self._twoD_sample_info_dlg = None
         self._current_path = None
         self._picker = None
 
@@ -315,6 +317,8 @@ class MainWindow(
             "twoD_integral_dynamics_btn": "Integrate 2D spectral volume ROI across population delays",
             "twoD_PC_restore": "Restore default zoom and axis limits for 2D preview",
             "twoD_PC_sync": "Synchronize 2D plot axis limits across subtabs",
+            "PP_sampleInfo_popup_btn": "Open full sample info in a larger window (read-only, copyable)",
+            "twoD_sampleInfo_popup_btn": "Open full sample info in a larger window (read-only, copyable)",
         }
         for btn_name, tooltip in tooltips.items():
             btn = getattr(self, btn_name, None)
@@ -1178,7 +1182,60 @@ class MainWindow(
             "#60a5fa",
             "#1d4ed8",
         )
+
+        # Compact icon-only pop-out buttons for 1D & 2D Sample Info panels
+        popup_fg = "#e2e8f0" if dark else "#334155"
+        popup_bg = "#334155" if dark else "#f1f5f9"
+        popup_border = "#64748b" if dark else "#cbd5e1"
+        popup_hover = "#475569" if dark else "#e2e8f0"
+        popup_pressed = "#64748b" if dark else "#cbd5e1"
+        popup_style = (
+            f"QToolButton {{ color: {popup_fg}; background-color: {popup_bg}; border: 1px solid {popup_border}; border-radius: 4px; padding: 1px; }}"
+            f"QToolButton:hover:enabled {{ background-color: {popup_hover}; border-color: {popup_fg}; }}"
+            f"QToolButton:pressed {{ background-color: {popup_pressed}; }}"
+        )
+        popup_icon = self._make_popup_icon(popup_fg)
+        from PyQt6.QtCore import QSize
+
+        for _pbtn_name in ("PP_sampleInfo_popup_btn", "twoD_sampleInfo_popup_btn"):
+            _pbtn = getattr(self, _pbtn_name, None)
+            if _pbtn is not None:
+                _pbtn.setStyleSheet(popup_style)
+                _pbtn.setIcon(popup_icon)
+                _pbtn.setIconSize(QSize(14, 14))
+                _pbtn.setText("")
+
         self._update_adv_scatter_btn_style()
+
+    @staticmethod
+    def _make_popup_icon(color: str):
+        """Render a crisp 16x16 vector pop-out / open-in-window icon."""
+        from PyQt6.QtCore import QPointF
+        from PyQt6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
+
+        pix = QPixmap(16, 16)
+        pix.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pix)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        pen = QPen(QColor(color), 1.5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+        # Open frame on bottom-left
+        painter.drawPolyline([
+            QPointF(7.0, 3.5),
+            QPointF(3.0, 3.5),
+            QPointF(3.0, 13.0),
+            QPointF(12.5, 13.0),
+            QPointF(12.5, 9.0),
+        ])
+        # Diagonal arrow pointing top-right
+        painter.drawLine(QPointF(7.0, 9.0), QPointF(13.0, 3.0))
+        painter.drawPolyline([
+            QPointF(9.2, 3.0),
+            QPointF(13.0, 3.0),
+            QPointF(13.0, 6.8),
+        ])
+        painter.end()
+        return QIcon(pix)
 
     def _update_adv_scatter_btn_style(self):
         """Highlight ``PP_advScatter_btn`` while advanced scatter removal is active."""
@@ -1220,6 +1277,12 @@ class MainWindow(
             pop_win.close()
             pop_win.deleteLater()
             self._twoD_pop_window = None
+        for _attr in ("_oneD_sample_info_dlg", "_twoD_sample_info_dlg"):
+            info_dlg = getattr(self, _attr, None)
+            if info_dlg is not None:
+                info_dlg.close()
+                info_dlg.deleteLater()
+                setattr(self, _attr, None)
         file_open_filter = getattr(self, "_file_open_filter", None)
         if file_open_filter is not None:
             app_inst = QApplication.instance()
@@ -1527,11 +1590,22 @@ class MainWindow(
         if _auto_cal_chk is not None:
             _auto_cal_chk.toggled.connect(self._on_twoD_auto_cal_toggled)
 
-        # Connect 2D sample info "show all available info" toggle
+        # Connect 1D & 2D sample info "show all available info" toggles and pop-up buttons
+        _pp_show_all_chk = getattr(self, "PP_show_all_info_chk", None)
+        if _pp_show_all_chk is not None:
+            _pp_show_all_chk.setVisible(False)
+            _pp_show_all_chk.toggled.connect(self._update_sample_info)
+        _pp_popup_btn = getattr(self, "PP_sampleInfo_popup_btn", None)
+        if _pp_popup_btn is not None:
+            _pp_popup_btn.clicked.connect(lambda *_: self._show_sample_info_popup("1D"))
+
         _show_all_info_chk = getattr(self, "twoD_show_all_info_chk", None)
         if _show_all_info_chk is not None:
             _show_all_info_chk.setVisible(False)
             _show_all_info_chk.toggled.connect(self._update_twoD_sample_info)
+        _twoD_popup_btn = getattr(self, "twoD_sampleInfo_popup_btn", None)
+        if _twoD_popup_btn is not None:
+            _twoD_popup_btn.clicked.connect(lambda *_: self._show_sample_info_popup("2D"))
 
         self._connect("twoD_contour_btn", lambda: self._plot_twoD_cut("contour"))
         self._connect("twoD_kinetics_btn", self._on_twoD_kinetics_clicked)
@@ -2149,6 +2223,42 @@ class MainWindow(
                 widget.setVisible(visible)
         if not visible and hasattr(self, "twoD_singleScan_box") and self.twoD_singleScan_box is not None:
             self.twoD_singleScan_box.setVisible(False)
+
+    def _sample_info_popup_title(self, mode: str, ds) -> str:
+        path = self._current_path if mode == "1D" else self._twoD_current_path
+        src = path or getattr(ds, "source", None)
+        if src:
+            return Path(str(src)).name
+        return f"{mode} Dataset"
+
+    def _show_sample_info_popup(self, mode: str):
+        """Open a large, read-only, copyable pop-up with the full sample info text."""
+        from .dialogs import SampleInfoDialog
+
+        ds = self.dataset if mode == "1D" else self.twoD_dataset
+        if ds is None:
+            return
+        attr = "_oneD_sample_info_dlg" if mode == "1D" else "_twoD_sample_info_dlg"
+        dlg = getattr(self, attr, None)
+        if dlg is None:
+            dlg = SampleInfoDialog(self)
+            setattr(self, attr, dlg)
+        dlg.set_content(self._sample_info_popup_title(mode, ds), ds.sample_info(show_all=True))
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
+
+    def _sync_sample_info_popup(self, mode: str, ds) -> None:
+        """Keep an open Sample Info pop-up window synchronized with the active dataset."""
+        attr = "_oneD_sample_info_dlg" if mode == "1D" else "_twoD_sample_info_dlg"
+        dlg = getattr(self, attr, None)
+        if dlg is None:
+            return
+        if ds is None:
+            dlg.close()
+            return
+        if dlg.isVisible():
+            dlg.set_content(self._sample_info_popup_title(mode, ds), ds.sample_info(show_all=True))
 
     def _init_plot_controls(self):
         """Bind the plot-controls panel (``PC_box``, declared in the .ui)."""

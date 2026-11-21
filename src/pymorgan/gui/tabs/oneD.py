@@ -261,12 +261,27 @@ class OneDTabMixin:
         if hasattr(self, "_update_embed_cal_h5_action_state"):
             self._update_embed_cal_h5_action_state()
 
-    def _update_sample_info(self):
-        """Refresh the sample-info box from the active dataset (clear if none)."""
+    def _update_sample_info(self, _checked: bool = False):
+        """Refresh the 1D sample-info box and toggle visibility."""
         widget = getattr(self, "PP_SampleInfo_text", None)
-        if widget is None:
+        chk = getattr(self, "PP_show_all_info_chk", None)
+        ds = self.dataset
+        if ds is None:
+            if chk is not None:
+                chk.setVisible(False)
+            if widget is not None:
+                widget.setHtml("")
+            if hasattr(self, "_sync_sample_info_popup"):
+                self._sync_sample_info_popup("1D", None)
             return
-        widget.setHtml("" if self.dataset is None else self.dataset.sample_info())
+        has_full = bool(getattr(ds, "has_extended_sample_info", False))
+        if chk is not None:
+            chk.setVisible(has_full)
+        show_all = bool(chk is not None and chk.isChecked() and has_full)
+        if widget is not None:
+            widget.setHtml(ds.sample_info(show_all=show_all))
+        if hasattr(self, "_sync_sample_info_popup"):
+            self._sync_sample_info_popup("1D", ds)
 
     def _apply_view_limits(self):
         """Apply the panel X/Y limits to the embedded axis without re-plotting."""

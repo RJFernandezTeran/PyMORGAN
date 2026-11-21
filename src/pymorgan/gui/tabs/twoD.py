@@ -836,6 +836,8 @@ class TwoDTabMixin:
                 chk.setVisible(False)
             if widget is not None:
                 widget.setHtml("")
+            if hasattr(self, "_sync_sample_info_popup"):
+                self._sync_sample_info_popup("2D", None)
             return
         has_full = bool(getattr(ds, "has_extended_sample_info", False))
         if chk is not None:
@@ -843,6 +845,8 @@ class TwoDTabMixin:
         show_all = bool(chk is not None and chk.isChecked() and has_full)
         if widget is not None:
             widget.setHtml(ds.sample_info(show_all=show_all))
+        if hasattr(self, "_sync_sample_info_popup"):
+            self._sync_sample_info_popup("2D", ds)
 
     def _on_twoD_include_ftir_toggled(self, checked: bool):
         if checked and self.twoD_dataset is not None:
