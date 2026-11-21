@@ -128,18 +128,21 @@ As in 1D, formats are resolved through a registry (:mod:`pymorgan.twoD.load`). C
    * - ``P2DAT``
      - PyMORGAN standard
      - Comma-separated processed signal cube (``.p2dat``)
+   * - ``HDF5_2D``
+     - PyMORGAN FAIR HDF5
+     - Gzip-compressed FAIR 2D HDF5 archive (``.h5`` / ``.hdf5``) storing cubes, detectors, phasing parameters, and provenance history
    * - ``MESS_2DIR``
      - MESS 2D
      - Multi-file directory with raw/signal states, count, probe, and ref files
    * - ``UoS_2DIR``
      - Univ. of Sheffield
-     - Sheffield 2D acquisition files
+     - Sheffield 2D-IR directories (``.2D`` + ``.DT`` / ``.LG`` / ``CalibratedProbe.csv`` / ``w0.csv``) with dual-detector switching
    * - ``RAL_RAW``
      - STFC / Central Laser Facility
-     - Raw Ultra 2D interferograms (phased & Fourier-transformed on load)
+     - Raw Ultra/LIFEtime 2D-IR interferograms with multi-detector (``DET1`` / ``DET2`` / combined) switching
    * - ``RAL_Proc``
      - STFC / Central Laser Facility
-     - Processed Ultra 2D signal cubes
+     - Processed Ultra/LIFEtime 2D-IR delay slices with multi-detector channel switching
    * - ``PyMESS_2D``
      - PyMESS HDF5
      - Unified PyMESS 2D HDF5 datasets (``.h5``, alias ``PyMESS_2DIR``)
@@ -151,6 +154,14 @@ As in 1D, formats are resolved through a registry (:mod:`pymorgan.twoD.load`). C
   times); each subsequent row is ``pump, probe, S(t2^(1)), ...``. The flat pump/probe ordering is
   reshaped with zero-copy Fortran order directly into the ``Z[pump, probe, t2]`` cube in
   :math:`\text{mOD}`.
+- **UoS & RAL multi-detector 2D-IR (**\ ``UoS_2DIR``, ``RAL_RAW``, ``RAL_Proc``\ **):** Paired
+  dual-array detectors (``DET1``, ``DET2``, and concatenated ``Combined (DET1+DET2)``) are loaded
+  with independent calibrated probe vectors. Switching the active detector via
+  :meth:`~pymorgan.twoD.dataset.Dataset2D.set_active_detector` (or the top *Detector* selector in
+  the GUI) updates ``probe``, ``Z``, and processing history with full Undo/Redo support.
+- **FAIR 2D HDF5 (**\ ``HDF5_2D``\ **):** ``Dataset2D.to_hdf5()`` and
+  :func:`pymorgan.twoD.load.load_2D_hdf5` persist raw/processed cubes, detector channels, active
+  detector/state, shot rotation, and JSON processing history (``history_json``).
 - **The MESS 2DIR & PyMESS_2D formats:** Automatically detect wobbler and chopper modulation
   modes, perform interferogram normalisation (:math:`I / \text{counts}`), and compute optical
   density :math:`\Delta\mathrm{OD} = -1000 \log_{10}(I_{\text{probe}} / I_{\text{ref}})`. For

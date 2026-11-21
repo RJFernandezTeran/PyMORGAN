@@ -14,5 +14,6 @@ application.
    twoD
    calibration
    steady_state
+   workflows
    settings
    extending

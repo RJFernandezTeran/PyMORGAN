@@ -19,8 +19,10 @@ import numpy as np
 from PyQt6 import uic
 from PyQt6.QtCore import QEvent, Qt, QTimer, QUrl
 from PyQt6.QtGui import (
+    QAction,
     QDesktopServices,
     QKeySequence,
+    QShortcut,
     QStandardItemModel,
 )
 from PyQt6.QtWidgets import (
@@ -29,6 +31,7 @@ from PyQt6.QtWidgets import (
     QDialogButtonBox,
     QFileDialog,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPushButton,
     QVBoxLayout,
@@ -156,13 +159,21 @@ class MainWindow(
 
         self._ss_abs = None
         self._ss_abs_spectrum = None
+        self._ss_abs_path = None
         self._ss_em = None
         self._ss_em_spectrum = None
+        self._ss_em_path = None
+        self._twoD_overlay_path = None
+        self._current_project_path = None
+        self._project_dirty = False
+        self._restoring_session = False
+        self._base_window_title = self.windowTitle() or "PyMORGAN"
 
         self._wire()
 
         self._build_menus()
         self._init_state_controls()
+        self._setup_browser_controls()
         if init_rootdir:
             self._init_rootdir()
         self._init_plot_controls()
@@ -176,6 +187,7 @@ class MainWindow(
 
         self._apply_button_aesthetics()
         self._apply_button_tooltips_and_states()
+        self._update_edit_menu_state()
         if (
             "PYTEST_CURRENT_TEST" not in os.environ
             and os.environ.get("QT_QPA_PLATFORM", "").lower() != "offscreen"
@@ -1571,10 +1583,10 @@ class MainWindow(
         # Connect scatter delay subtraction widgets
         _scat_chk = getattr(self, "twoD_sub_scat_chk", None)
         if _scat_chk is not None:
-            _scat_chk.toggled.connect(self._twoD_rerender_preview)
+            _scat_chk.toggled.connect(self._on_twoD_scat_controls_changed)
         _scat_delay = getattr(self, "twoD_sub_scat_delay", None)
         if _scat_delay is not None:
-            _scat_delay.valueChanged.connect(self._twoD_rerender_preview)
+            _scat_delay.valueChanged.connect(self._on_twoD_scat_controls_changed)
 
         # Initialize Phasing/FT tab visibility
         if combo_2d is not None:
@@ -1657,7 +1669,10 @@ class MainWindow(
                 _box.editingFinished.connect(self._on_bkg_limit_entered)
         _sub = getattr(self, "PP_SubtactBkg_chk", None)
         if _sub is not None and hasattr(_sub, "toggled"):
-            _sub.toggled.connect(self._rerender_preview)
+            _sub.toggled.connect(self._on_bkg_controls_changed)
+
+        self._filter_shortcut = QShortcut(QKeySequence("Ctrl+F"), self)
+        self._filter_shortcut.activated.connect(self._focus_dataset_filter)
 
         _quick = getattr(self, "PP_QuickPlots_chk", None)
         if _quick is not None and hasattr(_quick, "toggled"):
@@ -1744,10 +1759,27 @@ class MainWindow(
             if action is not None:
                 action.triggered.connect(slot)
 
-        menu_help = getattr(self, "menuHelp", None)
-        if menu_help is not None and not hasattr(self, "actionCheckUpdates"):
+        menu_export = getattr(self, "menuExport", None)
+        if menu_export is not None and not hasattr(self, "actionExportHDF5"):
             from PyQt6.QtGui import QAction
 
+            act_h5 = QAction("Export HDF5 (.h5)...", self)
+            act_h5.setToolTip("Export the active 1D or 2D dataset in FAIR/NeXus HDF5 format")
+            act_h5.triggered.connect(self._export_hdf5)
+            menu_export.addAction(act_h5)
+            self.actionExportHDF5 = act_h5
+
+            act_glot = QAction("Export Glotaran (.ascii / .nc)...", self)
+            act_glot.setToolTip(
+                "Export the active 1D dataset to Glotaran ASCII or NetCDF4 (.nc)"
+            )
+            act_glot.triggered.connect(self._export_glotaran)
+            menu_export.addAction(act_glot)
+            self.actionExportGlotaran = act_glot
+            self._update_export_actions_state()
+
+        menu_help = getattr(self, "menuHelp", None)
+        if menu_help is not None and not hasattr(self, "actionCheckUpdates"):
             about_act = getattr(self, "actionAbout", None)
 
             act_sphinx = QAction("Web Documentation (Sphinx)...", self)
@@ -1780,6 +1812,346 @@ class MainWindow(
 
         if hasattr(self, "actionReload") and self.actionReload is not None:
             self.actionReload.setShortcut(QKeySequence(Qt.Key.Key_F5))
+
+        self._build_workflow_menus()
+
+    def _build_workflow_menus(self):
+        """Inject File workflow actions (Recent Folders, Batch, Sessions) and Edit menu."""
+        menu_file = getattr(self, "menuFile", None)
+        if menu_file is not None and not hasattr(self, "menuRecentFolders"):
+            ss_menu = getattr(self, "menuSteadyState", None)
+            anchor = ss_menu.menuAction() if ss_menu is not None else getattr(self, "actionQuit", None)
+
+            self.menuRecentFolders = QMenu("Recent Folders", self)
+            if anchor is not None:
+                menu_file.insertMenu(anchor, self.menuRecentFolders)
+                menu_file.insertSeparator(anchor)
+            else:
+                menu_file.addMenu(self.menuRecentFolders)
+
+            self.actionOpenProject = QAction("Open Project (.pmproj)...", self)
+            self.actionOpenProject.triggered.connect(self._open_project_dialog)
+
+            self.actionSaveProject = QAction("Save Project", self)
+            self.actionSaveProject.setShortcut(QKeySequence("Ctrl+S"))
+            self.actionSaveProject.triggered.connect(self._save_project)
+
+            self.actionSaveProjectAs = QAction("Save Project As...", self)
+            self.actionSaveProjectAs.setShortcut(QKeySequence("Ctrl+Shift+S"))
+            self.actionSaveProjectAs.triggered.connect(self._save_project_as)
+
+            self.actionBatchProcess = QAction("Batch Process Folder...", self)
+            self.actionBatchProcess.triggered.connect(self._open_batch_dialog)
+
+            for act in (
+                self.actionOpenProject,
+                self.actionSaveProject,
+                self.actionSaveProjectAs,
+            ):
+                if anchor is not None:
+                    menu_file.insertAction(anchor, act)
+                else:
+                    menu_file.addAction(act)
+            if anchor is not None:
+                menu_file.insertSeparator(anchor)
+                menu_file.insertAction(anchor, self.actionBatchProcess)
+                menu_file.insertSeparator(anchor)
+            else:
+                menu_file.addAction(self.actionBatchProcess)
+
+            self._rebuild_recent_dirs_menu()
+
+        menubar = self.menuBar() if hasattr(self, "menuBar") else None
+        preproc_menu = getattr(self, "menuPreProcessing", None)
+        if menubar is not None and not hasattr(self, "menuEdit"):
+            self.menuEdit = QMenu("&Edit", self)
+            if preproc_menu is not None:
+                menubar.insertMenu(preproc_menu.menuAction(), self.menuEdit)
+            else:
+                menubar.addMenu(self.menuEdit)
+
+            self.actionUndo = QAction("Undo", self)
+            self.actionUndo.setShortcut(QKeySequence("Ctrl+Z"))
+            self.actionUndo.triggered.connect(self._edit_undo)
+
+            self.actionRedo = QAction("Redo", self)
+            self.actionRedo.setShortcuts([QKeySequence("Ctrl+Shift+Z"), QKeySequence("Ctrl+Y")])
+            self.actionRedo.triggered.connect(self._edit_redo)
+
+            self.actionResetToRaw = QAction("Reset Dataset to Raw", self)
+            self.actionResetToRaw.triggered.connect(self._edit_reset_to_raw)
+
+            self.actionProcessingHistory = QAction("Processing History...", self)
+            self.actionProcessingHistory.triggered.connect(self._open_processing_history_dialog)
+
+            self.actionCopyPythonScript = QAction("Copy Python Script to Clipboard", self)
+            self.actionCopyPythonScript.triggered.connect(self._copy_python_script)
+
+            self.actionExportPythonScript = QAction("Export Python Script (.py)...", self)
+            self.actionExportPythonScript.triggered.connect(self._export_python_script)
+
+            self.menuEdit.addAction(self.actionUndo)
+            self.menuEdit.addAction(self.actionRedo)
+            self.menuEdit.addSeparator()
+            self.menuEdit.addAction(self.actionResetToRaw)
+            self.menuEdit.addAction(self.actionProcessingHistory)
+            self.menuEdit.addSeparator()
+            self.menuEdit.addAction(self.actionCopyPythonScript)
+            self.menuEdit.addAction(self.actionExportPythonScript)
+
+    def _rebuild_recent_dirs_menu(self):
+        """Populate File -> Recent Folders submenu from ``settings.recent_dirs``."""
+        menu = getattr(self, "menuRecentFolders", None)
+        if menu is None:
+            return
+        menu.clear()
+        dirs = list(getattr(pm.get_settings(), "recent_dirs", []) or [])
+        if not dirs:
+            empty_act = QAction("(Empty)", self)
+            empty_act.setEnabled(False)
+            menu.addAction(empty_act)
+        else:
+            for d in dirs:
+                act = QAction(str(d), self)
+                act.triggered.connect(lambda _=False, path=str(d): self._open_recent_dir(path))
+                menu.addAction(act)
+        menu.addSeparator()
+        clear_act = QAction("Clear Recent", self)
+        clear_act.setEnabled(bool(dirs))
+        clear_act.triggered.connect(self._clear_recent_dirs)
+        menu.addAction(clear_act)
+
+    def _open_recent_dir(self, folder_path: str):
+        if not Path(folder_path).is_dir():
+            QMessageBox.warning(self, "Recent Folder Missing", f"Folder no longer exists:\n{folder_path}")
+            return
+        if hasattr(self, "RootDir_field") and self.RootDir_field is not None:
+            self.RootDir_field.setText(folder_path)
+            self._on_rootdir_changed()
+
+    def _clear_recent_dirs(self):
+        pm.settings.clear_recent_dirs()
+        self._sync_rootdir_completer()
+        self._rebuild_recent_dirs_menu()
+
+    def _active_history_dataset(self):
+        tabs = getattr(self, "MainTabs", None)
+        idx = tabs.currentIndex() if tabs is not None else 0
+        if idx == 1:
+            return getattr(self, "twoD_dataset", None)
+        if idx == 0:
+            return getattr(self, "dataset", None)
+        return None
+
+    def _update_edit_menu_state(self):
+        if not hasattr(self, "actionUndo"):
+            return
+        ds = self._active_history_dataset()
+        hist = getattr(ds, "_history", None) if ds is not None else None
+        can_undo = bool(ds is not None and getattr(ds, "can_undo", False))
+        can_redo = bool(ds is not None and getattr(ds, "can_redo", False))
+        has_steps = bool(ds is not None and getattr(ds, "history", []))
+
+        undo_lbl = hist.undo_label if hist is not None else ""
+        redo_lbl = hist.redo_label if hist is not None else ""
+        self.actionUndo.setText(f"Undo {undo_lbl}" if (can_undo and undo_lbl) else "Undo")
+        self.actionUndo.setEnabled(can_undo)
+        self.actionRedo.setText(f"Redo {redo_lbl}" if (can_redo and redo_lbl) else "Redo")
+        self.actionRedo.setEnabled(can_redo)
+        self.actionResetToRaw.setEnabled(has_steps)
+        self.actionProcessingHistory.setEnabled(ds is not None)
+        self.actionCopyPythonScript.setEnabled(ds is not None)
+        self.actionExportPythonScript.setEnabled(ds is not None)
+
+    def _sync_active_history_ui(self, ds):
+        if ds is None:
+            return
+        if ds is getattr(self, "twoD_dataset", None):
+            self._sync_twoD_ui_after_history_change()
+        else:
+            self._sync_oneD_ui_after_history_change()
+
+    def _edit_undo(self):
+        ds = self._active_history_dataset()
+        if ds is None or not getattr(ds, "can_undo", False):
+            return
+        if ds.undo():
+            self._sync_active_history_ui(ds)
+
+    def _edit_redo(self):
+        ds = self._active_history_dataset()
+        if ds is None or not getattr(ds, "can_redo", False):
+            return
+        if ds.redo():
+            self._sync_active_history_ui(ds)
+
+    def _edit_reset_to_raw(self):
+        ds = self._active_history_dataset()
+        if ds is None:
+            return
+        ds.reset_to_raw()
+        self._sync_active_history_ui(ds)
+
+    def _open_processing_history_dialog(self):
+        ds = self._active_history_dataset()
+        if ds is None:
+            return
+        from .history_dialog import ProcessingHistoryDialog
+
+        dlg = ProcessingHistoryDialog(
+            ds,
+            self,
+            on_reverted=lambda: self._sync_active_history_ui(ds),
+            default_dir=self._rootdir_text(),
+        )
+        dlg.exec()
+        self._update_edit_menu_state()
+
+    def _copy_python_script(self):
+        ds = self._active_history_dataset()
+        if ds is None or not hasattr(ds, "to_python_script"):
+            return
+        script = ds.to_python_script()
+        cb = QApplication.clipboard()
+        if cb is not None:
+            cb.setText(script)
+        self.statusBar().showMessage("Copied reproducible Python script to clipboard.")
+
+    def _export_python_script(self):
+        ds = self._active_history_dataset()
+        if ds is None or not hasattr(ds, "to_python_script"):
+            return
+        src = getattr(ds, "source", None)
+        default_path = str(Path(src).with_suffix(".py")) if src else str(Path(self._rootdir_text() or ".") / "reproduce.py")
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Python Script",
+            default_path,
+            "Python Scripts (*.py);;All Files (*)",
+        )
+        if not path:
+            return
+        Path(path).write_text(ds.to_python_script(), encoding="utf-8")
+        self.statusBar().showMessage(f"Saved Python script to {path}")
+
+    def _open_batch_dialog(self, recipe_path: str | Path | None = None):
+        from .batch_dialog import BatchProcessDialog
+
+        default_dir = self._rootdir_text()
+        if not default_dir and recipe_path is not None:
+            default_dir = str(Path(recipe_path).parent)
+        dlg = BatchProcessDialog(
+            self,
+            active_dataset=self._active_history_dataset(),
+            default_dir=default_dir,
+            initial_recipe=recipe_path,
+        )
+        dlg.exec()
+
+    def open_recipe(self, path: str | Path) -> None:
+        """Open the batch processing dialog pre-loaded with a ``.pmrecipe.toml`` file."""
+        self._open_batch_dialog(recipe_path=Path(path))
+
+    def _set_project_dirty(self, dirty: bool):
+        self._project_dirty = bool(dirty)
+        base = getattr(self, "_base_window_title", "PyMORGAN")
+        proj = getattr(self, "_current_project_path", None)
+        suffix = f" - {Path(proj).name}" if proj is not None else ""
+        star = "*" if self._project_dirty else ""
+        self.setWindowTitle(f"{base}{suffix}{star}")
+
+    def _interactive_relocate_path(self, role: str, missing_path: Path) -> Path | None:
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Missing Project File")
+        msg.setIcon(QMessageBox.Icon.Warning)
+        msg.setText(f"Could not locate {role}:\n{missing_path}")
+        btn_relocate = msg.addButton("Relocate...", QMessageBox.ButtonRole.AcceptRole)
+        msg.addButton("Skip", QMessageBox.ButtonRole.RejectRole)
+        msg.exec()
+        if msg.clickedButton() is not btn_relocate:
+            return None
+        if role == "root_dir":
+            chosen = QFileDialog.getExistingDirectory(self, f"Relocate {role}", str(missing_path.parent))
+        else:
+            chosen, _ = QFileDialog.getOpenFileName(self, f"Relocate {role}", str(missing_path.parent), "All Files (*)")
+        return Path(chosen) if chosen else None
+
+    def open_project(
+        self,
+        path: str | Path,
+        *,
+        relocate_callback=None,
+        interactive: bool = True,
+    ) -> list[str]:
+        """Load and restore a ``.pmproj`` session file."""
+        from ..project import ProjectSession
+
+        cb = relocate_callback if relocate_callback is not None else (
+            self._interactive_relocate_path if interactive else None
+        )
+        session = ProjectSession.load(path)
+        warnings_list = session.apply_to_main_window(self, relocate_callback=cb)
+        if warnings_list:
+            self.statusBar().showMessage(
+                f"Opened project {Path(path).name} ({len(warnings_list)} warning(s))"
+            )
+        else:
+            self.statusBar().showMessage(f"Opened project {Path(path).name}")
+        return warnings_list
+
+    def _open_project_dialog(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Open Project Session",
+            self._rootdir_text(),
+            "PyMORGAN Projects (*.pmproj);;All Files (*)",
+        )
+        if not path:
+            return
+        try:
+            self.open_project(path, interactive=True)
+        except Exception as exc:
+            QMessageBox.critical(self, "Open Project Failed", str(exc))
+
+    def _save_project(self):
+        proj = getattr(self, "_current_project_path", None)
+        if proj is None:
+            self._save_project_as()
+            return
+        from ..project import ProjectSession
+
+        target = Path(proj)
+        session = ProjectSession.from_main_window(self, base_dir=target.parent)
+        session.save(target)
+        self._current_project_path = target
+        self._set_project_dirty(False)
+        self.statusBar().showMessage(f"Saved project to {target}")
+
+    def _save_project_as(self):
+        from ..project import ProjectSession
+
+        default_dir = self._rootdir_text() or ""
+        default_name = (
+            Path(self._current_project_path).name
+            if getattr(self, "_current_project_path", None)
+            else "session.pmproj"
+        )
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save Project Session As",
+            str(Path(default_dir) / default_name) if default_dir else default_name,
+            "PyMORGAN Projects (*.pmproj);;All Files (*)",
+        )
+        if not path:
+            return
+        target = Path(path)
+        if target.suffix.lower() != ".pmproj":
+            target = target.with_suffix(".pmproj")
+        session = ProjectSession.from_main_window(self, base_dir=target.parent)
+        session.save(target)
+        self._current_project_path = target
+        self._set_project_dirty(False)
+        self.statusBar().showMessage(f"Saved project to {target}")
 
     # --- Menu slots ---------------------------------------------------- #
     def _restore_default_window_size(self):
@@ -1908,7 +2280,6 @@ class MainWindow(
         if not path:
             return
         try:
-            self._apply_background()
             z = np.asarray(self.dataset.Z)[:, :, 0]  # [Ndelays x Npixels]
             probe = np.asarray(self.dataset.probe, dtype=float)
             delays = np.asarray(self.dataset.delays, dtype=float)
@@ -1958,7 +2329,6 @@ class MainWindow(
         if not path:
             return
         try:
-            self._apply_background()
             exported_paths = self.dataset.to_pdat(path, use_corrected=True)
             msg_path = "\n".join(str(p) for p in exported_paths)
             QMessageBox.information(
@@ -2016,6 +2386,117 @@ class MainWindow(
         except Exception as exc:
             QMessageBox.warning(self, "Export failed", str(exc))
 
+    def _export_hdf5(self):
+        """Export the active 1D or 2D dataset as a FAIR/NeXus HDF5 (.h5) file."""
+        tabs = getattr(self, "MainTabs", None)
+        index = tabs.currentIndex() if tabs is not None else 0
+        default_dir = self._rootdir_text() or ""
+
+        if index == 1:
+            ds_2d = getattr(self, "twoD_dataset", None)
+            if ds_2d is None:
+                QMessageBox.information(self, "Export HDF5", "Load a 2D dataset first.")
+                return
+            default_name = (
+                f"{Path(self._twoD_current_path).stem}_2D.h5"
+                if getattr(self, "_twoD_current_path", None)
+                else "dataset_2D.h5"
+            )
+            path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Export 2D HDF5",
+                os.path.join(default_dir, default_name),
+                "HDF5 (*.h5 *.hdf5);;All files (*)",
+            )
+            if not path:
+                return
+            try:
+                out_path = ds_2d.to_hdf5(path)
+                QMessageBox.information(
+                    self, "Export complete", f"2D HDF5 file exported at: {out_path}"
+                )
+                self.statusBar().showMessage(f"Exported 2D HDF5 to {out_path}")
+            except Exception as exc:
+                QMessageBox.warning(self, "Export failed", str(exc))
+            return
+
+        ds_1d = getattr(self, "dataset", None)
+        if ds_1d is None:
+            QMessageBox.information(self, "Export HDF5", "Load a 1D dataset first.")
+            return
+        default_name = (
+            f"{Path(self._current_path).stem}.h5"
+            if getattr(self, "_current_path", None)
+            else "dataset.h5"
+        )
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export 1D HDF5",
+            os.path.join(default_dir, default_name),
+            "HDF5 (*.h5 *.hdf5);;All files (*)",
+        )
+        if not path:
+            return
+        try:
+            out_path = pm.save_1D_hdf5(ds_1d, path)
+            QMessageBox.information(
+                self, "Export complete", f"1D HDF5 file exported at: {out_path}"
+            )
+            self.statusBar().showMessage(f"Exported 1D HDF5 to {out_path}")
+        except Exception as exc:
+            QMessageBox.warning(self, "Export failed", str(exc))
+
+    def _export_glotaran(self):
+        """Export the active 1D dataset to Glotaran ASCII (.ascii) or NetCDF4 (.nc)."""
+        ds_1d = getattr(self, "dataset", None)
+        if ds_1d is None:
+            QMessageBox.information(self, "Export Glotaran", "Load a 1D dataset first.")
+            return
+        default_dir = self._rootdir_text() or ""
+        default_name = (
+            f"{Path(self._current_path).stem}.ascii"
+            if getattr(self, "_current_path", None)
+            else "dataset.ascii"
+        )
+        path, selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "Export Glotaran",
+            os.path.join(default_dir, default_name),
+            "Glotaran ASCII (*.ascii);;Glotaran NetCDF4 (*.nc);;All files (*)",
+        )
+        if not path:
+            return
+        try:
+            suffix = Path(path).suffix.lower()
+            if suffix == ".nc" or (not suffix and "NetCDF" in (selected_filter or "")):
+                if suffix != ".nc":
+                    path = f"{path}.nc"
+                out_path = ds_1d.to_glotaran_nc(path)
+            else:
+                if suffix not in (".ascii", ".dat", ".txt"):
+                    path = f"{path}.ascii"
+                out_path = ds_1d.to_glotaran_ascii(path)
+            QMessageBox.information(
+                self, "Export complete", f"Glotaran file exported at: {out_path}"
+            )
+            self.statusBar().showMessage(f"Exported Glotaran file to {out_path}")
+        except Exception as exc:
+            QMessageBox.warning(self, "Export failed", str(exc))
+
+    def _update_export_actions_state(self):
+        """Enable/disable Export HDF5 and Export Glotaran actions for current tab & dataset."""
+        tabs = getattr(self, "MainTabs", None)
+        index = tabs.currentIndex() if tabs is not None else 0
+        has_1d = index == 0 and getattr(self, "dataset", None) is not None
+        has_2d = index == 1 and getattr(self, "twoD_dataset", None) is not None
+
+        act_h5 = getattr(self, "actionExportHDF5", None)
+        if act_h5 is not None:
+            act_h5.setEnabled(bool(has_1d or has_2d))
+        act_glot = getattr(self, "actionExportGlotaran", None)
+        if act_glot is not None:
+            act_glot.setEnabled(bool(has_1d))
+
     def _update_embed_cal_h5_action_state(self):
         """Enable the embed-calibration action only when an .h5 dataset is active."""
         act = getattr(self, "actionEmbedProbeCalH5", None)
@@ -2066,6 +2547,7 @@ class MainWindow(
                 act.setEnabled(has_1d_ds)
 
         self._update_embed_cal_h5_action_state()
+        self._update_export_actions_state()
 
         menu_aniso = getattr(self, "_aniso_menu", None)
         if menu_aniso is not None:
@@ -2100,6 +2582,7 @@ class MainWindow(
         # Keep the dataset browser of the newly shown tab in sync with the
         # (shared) root folder and its current contents on disk.
         self._sync_dataset_lists(index)
+        self._update_edit_menu_state()
 
     def _open_manual(self):
         """Open the bundled manual PDF with the system default application."""

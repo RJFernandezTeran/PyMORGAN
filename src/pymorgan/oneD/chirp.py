@@ -106,6 +106,7 @@ class ChirpFit:
     omega_w: float = float("nan")  # Wavelet oscillation period (ps); NaN if not a wavelet fit
     gamma_w: float = float("nan")  # Wavelet width (ps); NaN if not a wavelet fit
     source: str | None = None
+    chirp_file: str | None = None
     created: str = field(default_factory=lambda: datetime.now().strftime("%Y%m%d-%H%M%S"))
 
     def __call__(self, probe):
@@ -386,6 +387,7 @@ def save_chirp_fit(fit: ChirpFit, path, n_detectors: int = 1) -> None:
         import scipy.io as sio
 
         sio.savemat(str(path), fit.to_dict(), do_compression=True)
+    fit.chirp_file = str(path)
 
 
 def load_chirp_fit(path) -> ChirpFit:
@@ -423,13 +425,13 @@ def load_chirp_fit(path) -> ChirpFit:
 
         with h5py.File(path, "r") as f:
             data = load_group(f)
-        return ChirpFit.from_dict(data)
+        fit = ChirpFit.from_dict(data)
     elif suffix == ".json":
         import json
 
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
-        return ChirpFit.from_dict(data)
+        fit = ChirpFit.from_dict(data)
     else:
         import scipy.io as sio
 
@@ -445,14 +447,19 @@ def load_chirp_fit(path) -> ChirpFit:
         except ImportError:
             logger.debug(
                 "scipy.io.matlab types unavailable; MATLAB function/opaque entries "
-                "will not be skipped.", exc_info=True
+                "will not be skipped.",
+                exc_info=True,
             )
         data = {
             k: v
             for k, v in mat.items()
             if not any(k.startswith(p) for p in _SKIP_PREFIXES) and not isinstance(v, _SKIP_TYPES)
         }
-        return ChirpFit.from_dict(data)
+        fit = ChirpFit.from_dict(data)
+    fit.chirp_file = str(path)
+    if not fit.source:
+        fit.source = str(path)
+    return fit
 
 
 # --------------------------------------------------------------------------- #

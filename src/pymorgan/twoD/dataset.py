@@ -10,11 +10,15 @@ Presentation defaults come from the shared :class:`pymorgan.settings.Settings`
 from __future__ import annotations
 
 import html
+from collections.abc import Sequence
 from os import PathLike
+from pathlib import Path
+from typing import Any
 
 import numpy as np
 
 from ..log import get_logger
+from ..provenance import HistoryManager, ProcessingStep, generate_python_script
 from ..settings import Settings, get_settings
 from .load import get_map_loader
 
@@ -63,6 +67,11 @@ class Dataset2D:
         states_data: dict[str, np.ndarray] | None = None,
         states_signal_ss: dict[str, np.ndarray] | None = None,
         active_state: str | None = None,
+        detector_names: list[str] | None = None,
+        detector_probes: dict[str, np.ndarray] | None = None,
+        detector_data: dict[str, np.ndarray] | None = None,
+        detector_signal_ss: dict[str, np.ndarray] | None = None,
+        active_detector: str | None = None,
         raw_signal_ss: np.ndarray | None = None,
         raw_interferogram_ss: np.ndarray | None = None,
         nscans: int | None = None,
@@ -159,46 +168,232 @@ class Dataset2D:
         )
         self.active_state = active_state or self.units.get("active_state")
 
+        self.detector_names = (
+            list(detector_names)
+            if detector_names is not None
+            else list(self.units.get("detector_names", []))
+        )
+        raw_dp = (
+            detector_probes
+            if detector_probes is not None
+            else self.units.get("detector_probes")
+        )
+        self.detector_probes = (
+            {str(k): np.asarray(v, dtype=float) for k, v in raw_dp.items()}
+            if raw_dp
+            else None
+        )
+        raw_dd = (
+            detector_data
+            if detector_data is not None
+            else self.units.get("detector_data")
+        )
+        self.detector_data = (
+            {str(k): np.asarray(v, dtype=float) for k, v in raw_dd.items()}
+            if raw_dd
+            else None
+        )
+        raw_dss = (
+            detector_signal_ss
+            if detector_signal_ss is not None
+            else self.units.get("detector_signal_ss")
+        )
+        self.detector_signal_ss = (
+            {str(k): np.asarray(v, dtype=float) for k, v in raw_dss.items()}
+            if raw_dss
+            else None
+        )
+        self.active_detector = (
+            active_detector
+            or self.units.get("active_detector")
+            or (self.detector_names[0] if self.detector_names else None)
+        )
+
         self.Z_C = None  # populated by background_correct()
         self._is_corrected = False
         self.subtracted_spectrum = None
+        self._bkg_params: dict[str, Any] | None = None
+        self._process_params: dict[str, Any] | None = None
+        self._history = HistoryManager()
+
+    # ----------------------------------------------------------------- #
+    #                       Provenance & Undo/Redo                      #
+    # ----------------------------------------------------------------- #
+    @property
+    def history(self) -> list[ProcessingStep]:
+        """Ordered list of recorded processing steps applied to this dataset."""
+        return self._history.steps
+
+    @property
+    def can_undo(self) -> bool:
+        """Whether an undo snapshot is available."""
+        return self._history.can_undo
+
+    @property
+    def can_redo(self) -> bool:
+        """Whether a redo snapshot is available."""
+        return self._history.can_redo
+
+    def undo(self) -> bool:
+        """Undo the most recent processing step (or coalesced tweak)."""
+        return self._history.undo(self)
+
+    def redo(self) -> bool:
+        """Redo the most recently undone processing step."""
+        return self._history.redo(self)
+
+    def reset_to_raw(self) -> bool:
+        """Restore the raw initial dataset state and clear processing history."""
+        return self._history.reset_to_raw(self)
+
+    def revert_to_step(self, step_index: int) -> bool:
+        """Revert the dataset to the state immediately after ``step_index`` (``-1`` = raw)."""
+        return self._history.revert_to(self, step_index)
+
+    def history_to_dicts(self) -> list[dict[str, Any]]:
+        """Serialize processing history to JSON/TOML-friendly dictionaries."""
+        return self._history.to_dicts()
+
+    def load_history_from_dicts(self, items: Sequence[dict[str, Any]]) -> None:
+        """Restore processing history metadata from serialized dictionaries."""
+        self._history.load_dicts(items)
+
+    def to_python_script(
+        self,
+        *,
+        include_plot: bool = True,
+        include_settings: bool = True,
+        plot_kwargs: dict | None = None,
+    ) -> str:
+        """Generate a standalone Python script reproducing this dataset's pipeline."""
+        return generate_python_script(
+            self,
+            include_plot=include_plot,
+            include_settings=include_settings,
+            plot_kwargs=plot_kwargs,
+        )
+
+    def set_active_detector(self, name: str) -> bool:
+        """Switch the active 2-D detector channel (probe + signal cube) if available."""
+        if not self.detector_data or name not in self.detector_data:
+            return False
+
+        def _do():
+            cube = np.asarray(self.detector_data[name], dtype=float)
+            if self.detector_probes and name in self.detector_probes:
+                self.probe = np.asarray(self.detector_probes[name], dtype=float).copy()
+            self.active_detector = name
+
+            if self.detector_signal_ss and name in self.detector_signal_ss:
+                ss_cube = np.asarray(self.detector_signal_ss[name], dtype=float)
+                self.raw_signal_ss = ss_cube.copy()
+                self.nscans = int(ss_cube.shape[-1])
+                valid_active = [
+                    i for i in getattr(self, "active_scan_indices", []) if 0 <= i < self.nscans
+                ]
+                if valid_active and len(valid_active) < self.nscans:
+                    with np.errstate(divide="ignore", invalid="ignore"):
+                        cube = np.nan_to_num(
+                            np.nanmean(ss_cube[:, :, :, valid_active], axis=-1), nan=0.0
+                        )
+                    self.active_scan_indices = valid_active
+                else:
+                    self.active_scan_indices = list(range(self.nscans))
+
+            if self.is_frequency_domain or self.datatype in ("FreqDomain", "processed"):
+                self.Z_R = cube.copy()
+                if self.raw_signal is not None:
+                    self.raw_signal = cube.copy()
+            else:
+                self.raw_signal = cube.copy()
+                self._base_raw_signal = self.raw_signal
+                self.Z_R = cube.copy()
+                if self.raw_t1delays is not None and cube.shape[0] == len(self.raw_t1delays):
+                    self.pump = np.asarray(self.raw_t1delays, dtype=float).copy()
+                if self.units.get("interferogram_from_signal"):
+                    with np.errstate(invalid="ignore"):
+                        self.raw_interferogram = np.nanmean(self.raw_signal, axis=1)
+                    self._base_raw_interferogram = self.raw_interferogram
+                self.shot_rotation = 0
+
+            det_cals = (
+                self.units.get("detector_cal_sources") if isinstance(self.units, dict) else None
+            )
+            if isinstance(det_cals, dict) and name in det_cals:
+                self.cal_source = det_cals[name]
+            det_lvls = (
+                self.units.get("detector_cal_levels") if isinstance(self.units, dict) else None
+            )
+            if isinstance(det_lvls, dict) and name in det_lvls:
+                self.cal_level = det_lvls[name]
+
+            self.Z_C = None
+            self._is_corrected = False
+            self._bkg_params = None
+            for cache_attr in ("_cls_cache", "_ivcls_cache", "_nls_cache", "_sd_results"):
+                if hasattr(self, cache_attr):
+                    delattr(self, cache_attr)
+            return True
+
+        return bool(
+            self._history.record_call(
+                self,
+                "set_active_detector",
+                _do,
+                params={"name": str(name)},
+                should_record=lambda ok: bool(ok),
+            )
+        )
 
     def set_active_state(self, state_name: str) -> bool:
         """Switch the active slow-modulation / polarization state cube if available."""
         if not self.states_data or state_name not in self.states_data:
             return False
-        cube = np.asarray(self.states_data[state_name], dtype=float)
-        self.active_state = state_name
-        if self.states_signal_ss and state_name in self.states_signal_ss:
-            ss_cube = np.asarray(self.states_signal_ss[state_name], dtype=float)
-            self.raw_signal_ss = ss_cube.copy()
-            self.nscans = int(ss_cube.shape[-1])
-            valid_active = [
-                i for i in getattr(self, "active_scan_indices", []) if 0 <= i < self.nscans
-            ]
-            if valid_active and len(valid_active) < self.nscans:
-                with np.errstate(divide="ignore", invalid="ignore"):
-                    cube = np.nan_to_num(
-                        np.nanmean(ss_cube[:, :, :, valid_active], axis=-1), nan=0.0
-                    )
-                self.active_scan_indices = valid_active
+
+        def _do():
+            cube = np.asarray(self.states_data[state_name], dtype=float)
+            self.active_state = state_name
+            if self.states_signal_ss and state_name in self.states_signal_ss:
+                ss_cube = np.asarray(self.states_signal_ss[state_name], dtype=float)
+                self.raw_signal_ss = ss_cube.copy()
+                self.nscans = int(ss_cube.shape[-1])
+                valid_active = [
+                    i for i in getattr(self, "active_scan_indices", []) if 0 <= i < self.nscans
+                ]
+                if valid_active and len(valid_active) < self.nscans:
+                    with np.errstate(divide="ignore", invalid="ignore"):
+                        cube = np.nan_to_num(
+                            np.nanmean(ss_cube[:, :, :, valid_active], axis=-1), nan=0.0
+                        )
+                    self.active_scan_indices = valid_active
+                else:
+                    self.active_scan_indices = list(range(self.nscans))
+            if self.is_frequency_domain or self.datatype in ("FreqDomain", "processed"):
+                self.Z_R = cube.copy()
+                if self.raw_signal is not None:
+                    self.raw_signal = cube.copy()
             else:
-                self.active_scan_indices = list(range(self.nscans))
-        if self.is_frequency_domain or self.datatype in ("FreqDomain", "processed"):
-            self.Z_R = cube.copy()
-            if self.raw_signal is not None:
                 self.raw_signal = cube.copy()
-        else:
-            self.raw_signal = cube.copy()
-            self._base_raw_signal = self.raw_signal
-            if self.units.get("interferogram_from_signal"):
-                with np.errstate(invalid="ignore"):
-                    self.raw_interferogram = np.nanmean(self.raw_signal, axis=1)
-                self._base_raw_interferogram = self.raw_interferogram
-            self.shot_rotation = 0
-        self.Z_C = None
-        self._is_corrected = False
-        return True
+                self._base_raw_signal = self.raw_signal
+                if self.units.get("interferogram_from_signal"):
+                    with np.errstate(invalid="ignore"):
+                        self.raw_interferogram = np.nanmean(self.raw_signal, axis=1)
+                    self._base_raw_interferogram = self.raw_interferogram
+                self.shot_rotation = 0
+            self.Z_C = None
+            self._is_corrected = False
+            self._bkg_params = None
+            return True
+
+        return bool(
+            self._history.record_call(
+                self,
+                "set_active_state",
+                _do,
+                params={"state_name": str(state_name)},
+                should_record=lambda ok: bool(ok),
+            )
+        )
 
     # ----------------------------------------------------------------- #
     #                          Load (construction)                      #
@@ -208,13 +403,31 @@ class Dataset2D:
         cls, path: str | PathLike, data_type: str = "P2DAT", progress_tracker=None
     ) -> Dataset2D:
         """Load a 2-D dataset from ``path`` using the loader for ``data_type``."""
+        if data_type == "HDF5_2D":
+            from .load import load_2D_hdf5
+
+            ds = load_2D_hdf5(path)
+            if ds.data_type and "original_data_type" not in ds.units:
+                ds.units["original_data_type"] = ds.data_type
+            ds.data_type = data_type
+            ds.source = str(path)
+            return ds
+
         loader = get_map_loader(data_type)
-        if data_type in ("MESS_2DIR", "PyMESS_2D", "QuickControl_2D") or getattr(
-            loader, "__name__", None
-        ) in (
+        if data_type in (
+            "MESS_2DIR",
+            "PyMESS_2D",
+            "QuickControl_2D",
+            "UoS_2DIR",
+            "RAL_RAW",
+            "RAL_Proc",
+        ) or getattr(loader, "__name__", None) in (
             "read_MESS_2DIR",
             "read_PyMESS_2D",
             "read_QuickControl_2D",
+            "read_UoS_2DIR",
+            "read_RAL_RAW",
+            "read_RAL_Proc",
         ):
             res = loader(str(path), progress_tracker=progress_tracker)
         else:
@@ -272,9 +485,18 @@ class Dataset2D:
         cal_source = units.get("cal_source")
 
         loader_name = getattr(loader, "__name__", None)
-        if data_type not in ("PyMESS_2D", "QuickControl_2D") and loader_name not in (
+        if data_type not in (
+            "PyMESS_2D",
+            "QuickControl_2D",
+            "UoS_2DIR",
+            "RAL_RAW",
+            "RAL_Proc",
+        ) and loader_name not in (
             "read_PyMESS_2D",
             "read_QuickControl_2D",
+            "read_UoS_2DIR",
+            "read_RAL_RAW",
+            "read_RAL_Proc",
         ):
             cal_path = None
             if folder.is_dir():
@@ -323,6 +545,10 @@ class Dataset2D:
                 cal_source = "PyMESS spectral calibration (cm-1)"
             elif data_type == "QuickControl_2D":
                 cal_source = "QuickControl monochromator calibration"
+            elif data_type == "RAL_Proc":
+                cal_source = "Dataset probe axis (RAL_Proc CSV)"
+            elif data_type in ("UoS_2DIR", "RAL_RAW"):
+                cal_source = f"Dataset probe axis ({data_type})"
 
         return cls(
             Z,
@@ -358,6 +584,8 @@ class Dataset2D:
     @property
     def n_detectors(self) -> int:
         """Number of detector channels in the signal."""
+        if getattr(self, "detector_names", None):
+            return len(self.detector_names)
         if self.Z_R.ndim == 4:
             return self.Z_R.shape[3]
         if self.probe.ndim == 2:
@@ -554,6 +782,8 @@ class Dataset2D:
             line_type = f"<b>Data type:</b> {self.datatype}"
 
         lines = [line_pump, line_probe, line_t2]
+        if getattr(self, "active_detector", None) and len(getattr(self, "detector_names", [])) > 1:
+            lines.append(f"<b>Detector:</b> {html.escape(str(self.active_detector))}")
         if self.has_single_scans:
             lines.append(f"<b>Scans:</b> {self._format_active_scans_str()}")
         lines.extend([line_cal, line_type])
@@ -631,6 +861,8 @@ class Dataset2D:
             line_type = f"Data type: {self.datatype}"
 
         lines = [line_pump, line_probe, line_t2]
+        if getattr(self, "active_detector", None) and len(getattr(self, "detector_names", [])) > 1:
+            lines.append(f"Detector: {self.active_detector}")
         if self.has_single_scans:
             lines.append(f"Scans: {self._format_active_scans_str()}")
         lines.extend([line_cal, line_type])
@@ -719,6 +951,25 @@ class Dataset2D:
                 else None
             ),
             active_state=getattr(self, "active_state", None),
+            detector_names=(
+                list(self.detector_names) if getattr(self, "detector_names", None) else None
+            ),
+            detector_probes=(
+                {k: _dup(v) for k, v in self.detector_probes.items()}
+                if getattr(self, "detector_probes", None)
+                else None
+            ),
+            detector_data=(
+                {k: _dup(v) for k, v in self.detector_data.items()}
+                if getattr(self, "detector_data", None)
+                else None
+            ),
+            detector_signal_ss=(
+                {k: _dup(v) for k, v in self.detector_signal_ss.items()}
+                if getattr(self, "detector_signal_ss", None)
+                else None
+            ),
+            active_detector=getattr(self, "active_detector", None),
             raw_signal_ss=_dup(getattr(self, "raw_signal_ss", None)),
             raw_interferogram_ss=_dup(getattr(self, "raw_interferogram_ss", None)),
             nscans=getattr(self, "nscans", 1),
@@ -738,10 +989,20 @@ class Dataset2D:
         )
         new_ds.shot_rotation = int(getattr(self, "shot_rotation", 0) or 0)
         new_ds.Z_C = _dup(self.Z_C)
+        new_ds._is_corrected = bool(getattr(self, "_is_corrected", False))
         sub_spec = getattr(self, "subtracted_spectrum", None)
-        new_ds.subtracted_spectrum = (
-            _copy.deepcopy(sub_spec) if deep else sub_spec
-        )
+        new_ds.subtracted_spectrum = _copy.deepcopy(sub_spec) if deep else sub_spec
+        new_ds._subtraction_ref = getattr(self, "_subtraction_ref", None)
+        new_ds._subtraction_scale = getattr(self, "_subtraction_scale", 1.0)
+        new_ds._subtraction_ref_t2_idx = getattr(self, "_subtraction_ref_t2_idx", None)
+        bkg_p = getattr(self, "_bkg_params", None)
+        new_ds._bkg_params = _copy.deepcopy(bkg_p) if deep else bkg_p
+        proc_p = getattr(self, "_process_params", None)
+        new_ds._process_params = _copy.deepcopy(proc_p) if deep else proc_p
+        if hasattr(self, "active_detector"):
+            new_ds.active_detector = getattr(self, "active_detector", None)
+        hist = getattr(self, "_history", None)
+        new_ds._history = hist.copy(deep=deep) if hist is not None else HistoryManager()
         return new_ds
 
     def crop(
@@ -758,40 +1019,64 @@ class Dataset2D:
         Mutates the dataset in-place and returns ``self`` for chaining.
         To keep the original dataset intact, call ``dataset.copy().crop(...)``.
         """
-        if t2_min is not None or t2_max is not None:
-            t_low = -np.inf if t2_min is None else float(t2_min)
-            t_high = np.inf if t2_max is None else float(t2_max)
-            t_mask = (self.delays >= t_low) & (self.delays <= t_high)
-            if not np.any(t_mask):
-                raise ValueError(f"No t2 delays fall in range [{t_low}, {t_high}]")
-            self.delays = self.delays[t_mask]
-            self.Z_R = self.Z_R[:, :, t_mask]
-            if self.Z_C is not None:
-                self.Z_C = self.Z_C[:, :, t_mask]
+        if (
+            t2_min is None
+            and t2_max is None
+            and pump_min is None
+            and pump_max is None
+            and probe_min is None
+            and probe_max is None
+        ):
+            return self
 
-        if pump_min is not None or pump_max is not None:
-            p_low = -np.inf if pump_min is None else float(pump_min)
-            p_high = np.inf if pump_max is None else float(pump_max)
-            pu_mask = (self.pump >= p_low) & (self.pump <= p_high)
-            if not np.any(pu_mask):
-                raise ValueError(f"No pump frequencies fall in range [{p_low}, {p_high}]")
-            self.pump = self.pump[pu_mask]
-            self.Z_R = self.Z_R[pu_mask, :, :]
-            if self.Z_C is not None:
-                self.Z_C = self.Z_C[pu_mask, :, :]
+        def _do():
+            if t2_min is not None or t2_max is not None:
+                t_low = -np.inf if t2_min is None else float(t2_min)
+                t_high = np.inf if t2_max is None else float(t2_max)
+                t_mask = (self.delays >= t_low) & (self.delays <= t_high)
+                if not np.any(t_mask):
+                    raise ValueError(f"No t2 delays fall in range [{t_low}, {t_high}]")
+                self.delays = self.delays[t_mask]
+                self.Z_R = self.Z_R[:, :, t_mask]
+                if self.Z_C is not None:
+                    self.Z_C = self.Z_C[:, :, t_mask]
 
-        if probe_min is not None or probe_max is not None:
-            pr_low = -np.inf if probe_min is None else float(probe_min)
-            pr_high = np.inf if probe_max is None else float(probe_max)
-            pr_probe = self.probe[:, 0] if self.probe.ndim > 1 else self.probe
-            pr_mask = (pr_probe >= pr_low) & (pr_probe <= pr_high)
-            if not np.any(pr_mask):
-                raise ValueError(f"No probe frequencies fall in range [{pr_low}, {pr_high}]")
-            self.probe = self.probe[pr_mask] if self.probe.ndim == 1 else self.probe[pr_mask, :]
-            self.Z_R = self.Z_R[:, pr_mask, :]
-            if self.Z_C is not None:
-                self.Z_C = self.Z_C[:, pr_mask, :]
+            if pump_min is not None or pump_max is not None:
+                p_low = -np.inf if pump_min is None else float(pump_min)
+                p_high = np.inf if pump_max is None else float(pump_max)
+                pu_mask = (self.pump >= p_low) & (self.pump <= p_high)
+                if not np.any(pu_mask):
+                    raise ValueError(f"No pump frequencies fall in range [{p_low}, {p_high}]")
+                self.pump = self.pump[pu_mask]
+                self.Z_R = self.Z_R[pu_mask, :, :]
+                if self.Z_C is not None:
+                    self.Z_C = self.Z_C[pu_mask, :, :]
 
+            if probe_min is not None or probe_max is not None:
+                pr_low = -np.inf if probe_min is None else float(probe_min)
+                pr_high = np.inf if probe_max is None else float(probe_max)
+                pr_probe = self.probe[:, 0] if self.probe.ndim > 1 else self.probe
+                pr_mask = (pr_probe >= pr_low) & (pr_probe <= pr_high)
+                if not np.any(pr_mask):
+                    raise ValueError(f"No probe frequencies fall in range [{pr_low}, {pr_high}]")
+                self.probe = self.probe[pr_mask] if self.probe.ndim == 1 else self.probe[pr_mask, :]
+                self.Z_R = self.Z_R[:, pr_mask, :]
+                if self.Z_C is not None:
+                    self.Z_C = self.Z_C[:, pr_mask, :]
+
+        params = {
+            k: float(v)
+            for k, v in (
+                ("t2_min", t2_min),
+                ("t2_max", t2_max),
+                ("pump_min", pump_min),
+                ("pump_max", pump_max),
+                ("probe_min", probe_min),
+                ("probe_max", probe_max),
+            )
+            if v is not None
+        }
+        self._history.record_call(self, "crop", _do, params=params)
         return self
 
     def _repr_html_(self) -> str:
@@ -860,23 +1145,55 @@ class Dataset2D:
         """
         from . import process
 
-        return process.process(
+        proc_params: dict[str, Any] = {
+            "apodise_method": str(apodise_method),
+            "zeropad_enable": bool(zeropad_enable),
+            "zeropad_factor": int(zeropad_factor),
+            "zeropad_next2k": bool(zeropad_next2k),
+            "phase_method": str(phase_method),
+            "phase_points": int(phase_points),
+            "shot_rotation": int(shot_rotation),
+            "pumpcorrection": bool(pumpcorrection),
+            "bkg_sub": bool(bkg_sub),
+            "bkgIdx": int(bkgIdx),
+            "autocalibrate_probe": bool(autocalibrate_probe),
+        }
+        if w0 is not None:
+            proc_params["w0"] = float(w0)
+        if dt1 is not None:
+            proc_params["dt1"] = float(dt1)
+        if cal_probe_vector is not None:
+            proc_params["cal_probe_vector"] = np.asarray(cal_probe_vector, dtype=float).tolist()
+
+        def _do():
+            res = process.process(
+                self,
+                apodise_method=apodise_method,
+                zeropad_enable=zeropad_enable,
+                zeropad_factor=zeropad_factor,
+                zeropad_next2k=zeropad_next2k,
+                phase_method=phase_method,
+                phase_points=phase_points,
+                shot_rotation=shot_rotation,
+                pumpcorrection=pumpcorrection,
+                bkg_sub=bkg_sub,
+                bkgIdx=bkgIdx,
+                w0=w0,
+                dt1=dt1,
+                autocalibrate_probe=autocalibrate_probe,
+                cal_probe_vector=cal_probe_vector,
+                progress_tracker=progress_tracker,
+            )
+            self._process_params = dict(proc_params)
+            self._bkg_params = None
+            return res
+
+        return self._history.record_call(
             self,
-            apodise_method=apodise_method,
-            zeropad_enable=zeropad_enable,
-            zeropad_factor=zeropad_factor,
-            zeropad_next2k=zeropad_next2k,
-            phase_method=phase_method,
-            phase_points=phase_points,
-            shot_rotation=shot_rotation,
-            pumpcorrection=pumpcorrection,
-            bkg_sub=bkg_sub,
-            bkgIdx=bkgIdx,
-            w0=w0,
-            dt1=dt1,
-            autocalibrate_probe=autocalibrate_probe,
-            cal_probe_vector=cal_probe_vector,
-            progress_tracker=progress_tracker,
+            "process",
+            _do,
+            params=proc_params,
+            coalesce=True,
         )
 
     # ----------------------------------------------------------------- #
@@ -904,8 +1221,25 @@ class Dataset2D:
         from . import process
 
         ref = self.map_index(t2) if t2 is not None else reference
-        self.Z_C = process.background_correct(self.Z_R, ref, do_correct=do_correct)
-        self._is_corrected = do_correct and ref is not None
+        do_c = bool(do_correct)
+
+        def _do():
+            self.Z_C = process.background_correct(self.Z_R, ref, do_correct=do_c)
+            self._is_corrected = do_c and ref is not None
+            self._bkg_params = {
+                "reference": int(ref) if ref is not None else None,
+                "t2": float(t2) if t2 is not None else None,
+                "do_correct": do_c,
+            }
+
+        params: dict[str, Any] = {"do_correct": do_c}
+        if t2 is not None:
+            params["t2"] = float(t2)
+        elif ref is not None:
+            params["reference"] = int(ref)
+        self._history.record_call(
+            self, "background_correct", _do, params=params, coalesce=True
+        )
         return self
 
     def recalc_average(self, scan_indices) -> Dataset2D:
@@ -927,33 +1261,42 @@ class Dataset2D:
         if any(k < 0 or k >= self.nscans for k in indices):
             raise ValueError(f"Scan indices must be between 0 and {self.nscans - 1}.")
 
-        with np.errstate(divide="ignore", invalid="ignore"):
-            sig_avg = np.nanmean(self.raw_signal_ss[:, :, :, indices], axis=-1)
-            sig_avg = np.nan_to_num(sig_avg, nan=0.0)
-            self.raw_signal = sig_avg
-            self._base_raw_signal = self.raw_signal
+        def _do():
+            with np.errstate(divide="ignore", invalid="ignore"):
+                sig_avg = np.nanmean(self.raw_signal_ss[:, :, :, indices], axis=-1)
+                sig_avg = np.nan_to_num(sig_avg, nan=0.0)
+                self.raw_signal = sig_avg
+                self._base_raw_signal = self.raw_signal
 
-            if (
-                self.raw_interferogram_ss is not None
-                and self.raw_interferogram_ss.ndim == 3
-                and self.raw_interferogram_ss.shape[-1] == self.nscans
-            ):
-                int_avg = np.nanmean(self.raw_interferogram_ss[:, :, indices], axis=-1)
-                int_avg = np.nan_to_num(int_avg, nan=0.0)
-                self.raw_interferogram = int_avg
-                self._base_raw_interferogram = self.raw_interferogram
-            elif self.units.get("interferogram_from_signal"):
-                int_avg = np.nan_to_num(np.nanmean(sig_avg, axis=1), nan=0.0)
-                self.raw_interferogram = int_avg
-                self._base_raw_interferogram = self.raw_interferogram
-            self.shot_rotation = 0
+                if (
+                    self.raw_interferogram_ss is not None
+                    and self.raw_interferogram_ss.ndim == 3
+                    and self.raw_interferogram_ss.shape[-1] == self.nscans
+                ):
+                    int_avg = np.nanmean(self.raw_interferogram_ss[:, :, indices], axis=-1)
+                    int_avg = np.nan_to_num(int_avg, nan=0.0)
+                    self.raw_interferogram = int_avg
+                    self._base_raw_interferogram = self.raw_interferogram
+                elif self.units.get("interferogram_from_signal"):
+                    int_avg = np.nan_to_num(np.nanmean(sig_avg, axis=1), nan=0.0)
+                    self.raw_interferogram = int_avg
+                    self._base_raw_interferogram = self.raw_interferogram
+                self.shot_rotation = 0
 
-        if self.is_frequency_domain or self.datatype in ("FreqDomain", "processed"):
-            self.Z_R = self.raw_signal.copy()
+            if self.is_frequency_domain or self.datatype in ("FreqDomain", "processed"):
+                self.Z_R = self.raw_signal.copy()
 
-        self.active_scan_indices = sorted(set(indices))
-        self.Z_C = None
-        self._is_corrected = False
+            self.active_scan_indices = sorted(set(indices))
+            self.Z_C = None
+            self._is_corrected = False
+            self._bkg_params = None
+
+        self._history.record_call(
+            self,
+            "recalc_average",
+            _do,
+            params={"scan_indices": indices},
+        )
         return self
 
     def compute_scan_maps_at_t2(
@@ -1099,52 +1442,69 @@ class Dataset2D:
         """
         from scipy.interpolate import RegularGridInterpolator
 
-        sample_Z = np.copy(self.Z_R if self.Z_C is None else self.Z_C)
-        ref_Z = ref_dataset.Z
+        scale_f = float(scale)
 
-        # Check grid matching
-        pump_match = np.array_equal(self.pump, ref_dataset.pump)
-        probe_match = np.array_equal(self.probe, ref_dataset.probe)
+        def _do():
+            sample_Z = np.copy(self.Z_R if self.Z_C is None else self.Z_C)
+            ref_Z = ref_dataset.Z
 
-        _, _, Nt2 = sample_Z.shape
-        subtracted = np.zeros_like(sample_Z)
+            # Check grid matching
+            pump_match = np.array_equal(self.pump, ref_dataset.pump)
+            probe_match = np.array_equal(self.probe, ref_dataset.probe)
 
-        for i_t2 in range(Nt2):
-            t2_val = self.delays[i_t2]
-            if ref_t2_idx is not None:
-                r_map = ref_Z[:, :, ref_t2_idx]
-            else:
-                r_idx = ref_dataset.map_index(t2_val)
-                r_map = ref_Z[:, :, r_idx]
+            _, _, Nt2 = sample_Z.shape
+            subtracted = np.zeros_like(sample_Z)
 
-            if pump_match and probe_match:
-                ref_map_interp = r_map
-            else:
-                interp = RegularGridInterpolator(
-                    (ref_dataset.pump, ref_dataset.probe),
-                    r_map,
-                    bounds_error=False,
-                    fill_value=0.0,
-                )
-                P_grid, R_grid = np.meshgrid(self.pump, self.probe, indexing="ij")
-                ref_map_interp = interp((P_grid, R_grid))
+            for i_t2 in range(Nt2):
+                t2_val = self.delays[i_t2]
+                if ref_t2_idx is not None:
+                    r_map = ref_Z[:, :, ref_t2_idx]
+                else:
+                    r_idx = ref_dataset.map_index(t2_val)
+                    r_map = ref_Z[:, :, r_idx]
 
-            subtracted[:, :, i_t2] = sample_Z[:, :, i_t2] - scale * ref_map_interp
+                if pump_match and probe_match:
+                    ref_map_interp = r_map
+                else:
+                    interp = RegularGridInterpolator(
+                        (ref_dataset.pump, ref_dataset.probe),
+                        r_map,
+                        bounds_error=False,
+                        fill_value=0.0,
+                    )
+                    P_grid, R_grid = np.meshgrid(self.pump, self.probe, indexing="ij")
+                    ref_map_interp = interp((P_grid, R_grid))
 
-        self.Z_C = subtracted
-        self._is_corrected = True
-        self._subtraction_ref = ref_dataset
-        self._subtraction_scale = scale
-        self._subtraction_ref_t2_idx = ref_t2_idx
+                subtracted[:, :, i_t2] = sample_Z[:, :, i_t2] - scale_f * ref_map_interp
+
+            self.Z_C = subtracted
+            self._is_corrected = True
+            self._subtraction_ref = ref_dataset
+            self._subtraction_scale = scale_f
+            self._subtraction_ref_t2_idx = ref_t2_idx
+
+        params: dict[str, Any] = {
+            "ref_file": getattr(ref_dataset, "source", None),
+            "ref_data_type": getattr(ref_dataset, "data_type", None),
+            "scale": scale_f,
+        }
+        if ref_t2_idx is not None:
+            params["ref_t2_idx"] = int(ref_t2_idx)
+        self._history.record_call(self, "subtract_spectrum", _do, params=params)
         return self
 
     def reset_subtraction(self) -> Dataset2D:
         """Reset subtracted spectrum and restore un-subtracted data."""
-        self._subtraction_ref = None
-        self._subtraction_scale = 1.0
-        self._subtraction_ref_t2_idx = None
-        self.Z_C = None
-        self._is_corrected = False
+
+        def _do():
+            self._subtraction_ref = None
+            self._subtraction_scale = 1.0
+            self._subtraction_ref_t2_idx = None
+            self.Z_C = None
+            self._is_corrected = False
+            self._bkg_params = None
+
+        self._history.record_call(self, "reset_subtraction", _do, params={})
         return self
 
 
@@ -1326,12 +1686,99 @@ class Dataset2D:
 
         return analyse.get_slice_integrate_probe(self, probe_min, probe_max)
 
-    def to_p2dat(self, path: str | PathLike, use_corrected: bool = True) -> None:
-        """Write this 2D dataset to a P2DAT file."""
+    def to_p2dat(
+        self,
+        path: str | PathLike,
+        use_corrected: bool = True,
+        detector: str | int | None = None,
+    ):
+        """Write this 2D dataset to a P2DAT file (or per-detector files when ``detector='all'``)."""
+        import re
+        from pathlib import Path
+
         from .load import write_P2DAT
 
-        Z_data = self.Z if use_corrected else self.Z_R
-        write_P2DAT(path, self.pump, self.probe, self.delays, Z_data)
+        if detector is None:
+            Z_data = self.Z if use_corrected else self.Z_R
+            write_P2DAT(path, self.pump, self.probe, self.delays, Z_data)
+            return None
+
+        if not getattr(self, "detector_data", None):
+            if isinstance(detector, int) and detector != 0:
+                raise IndexError(f"Detector index {detector} out of range for single-detector dataset.")
+            if isinstance(detector, str) and detector != "all" and detector != self.active_detector:
+                raise KeyError(f"Detector {detector!r} not found.")
+            Z_data = self.Z if use_corrected else self.Z_R
+            write_P2DAT(path, self.pump, self.probe, self.delays, Z_data)
+            return [Path(path)] if detector == "all" else Path(path)
+
+        def _extract_det(det_name: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+            if det_name == self.active_detector:
+                return self.pump, self.probe, (self.Z if use_corrected else self.Z_R)
+            probe_d = (
+                self.detector_probes[det_name]
+                if self.detector_probes and det_name in self.detector_probes
+                else self.probe
+            )
+            cube_d = self.detector_data[det_name]
+            is_fd = self.is_frequency_domain or self.datatype in ("FreqDomain", "processed")
+            if is_fd:
+                return self.pump, probe_d, cube_d
+            # If active dataset has been Fourier transformed, transform the requested detector too
+            was_transformed = (
+                self.raw_t1delays is not None and self.Z_R.shape[0] != len(self.raw_t1delays)
+            )
+            if was_transformed:
+                tmp = self.copy(deep=True)
+                tmp.set_active_detector(det_name)
+                tmp.process()
+                return tmp.pump, tmp.probe, tmp.Z_R
+            return self.pump, probe_d, cube_d
+
+        names = self.detector_names or list(self.detector_data.keys())
+        if isinstance(detector, str) and detector.lower() == "all":
+            base_path = Path(path)
+            if base_path.suffix.lower() != ".p2dat":
+                base_path = base_path.with_suffix(".p2dat")
+            written: list[Path] = []
+            for det_name in names:
+                if det_name.lower().startswith("combined"):
+                    suffix_tag = "Combined"
+                else:
+                    suffix_tag = re.sub(r"[^A-Za-z0-9]+", "_", det_name).strip("_") or "DET"
+                stem = base_path.stem
+                if re.search(r"_DET\d+$", stem, flags=re.IGNORECASE) and suffix_tag.upper().startswith("DET"):
+                    target_stem = re.sub(r"_DET\d+$", f"_{suffix_tag}", stem, flags=re.IGNORECASE)
+                else:
+                    target_stem = f"{stem}_{suffix_tag}"
+                out_p = base_path.with_name(f"{target_stem}.p2dat")
+                pu, pr, z_d = _extract_det(det_name)
+                write_P2DAT(out_p, pu, pr, self.delays, z_d)
+                written.append(out_p)
+            return written
+
+        if isinstance(detector, int):
+            if detector < 0 or detector >= len(names):
+                raise IndexError(f"Detector index {detector} out of range (0..{len(names) - 1}).")
+            det_name = names[detector]
+        else:
+            det_name = str(detector)
+            if det_name not in self.detector_data:
+                raise KeyError(f"Unknown detector {det_name!r}; available: {names}")
+
+        pu, pr, z_d = _extract_det(det_name)
+        write_P2DAT(path, pu, pr, self.delays, z_d)
+        return Path(path)
+
+    def to_hdf5(self, path: str | PathLike) -> Path:
+        """Save this 2-D dataset to a FAIR/NeXus HDF5 archive."""
+        from .load import save_2D_hdf5
+
+        return save_2D_hdf5(self, path)
+
+    def save_hdf5(self, path: str | PathLike) -> Path:
+        """Alias of :meth:`to_hdf5`."""
+        return self.to_hdf5(path)
 
     def embed_calibrated_probe(
         self,

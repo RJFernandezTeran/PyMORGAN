@@ -59,11 +59,17 @@ _EXPORTS: dict[str, str] = {
     "load_1D": ".oneD",
     "load_1D_hdf5": ".oneD",
     "load_pymess_anisotropy": ".oneD",
+    "parse_ufs": ".oneD",
     "read_1D_hdf5": ".oneD",
+    "read_Helios_UFS": ".oneD",
+    "read_glotaran_ascii": ".oneD",
+    "read_glotaran_nc": ".oneD",
     "register_loader": ".oneD",
     "save_1D_hdf5": ".oneD",
     "stitch_time": ".oneD",
     "stitch_wavelength": ".oneD",
+    "write_glotaran_ascii": ".oneD",
+    "write_glotaran_nc": ".oneD",
     "write_pdat": ".oneD",
     # 2-D pipeline
     "Dataset2D": ".twoD",
@@ -71,8 +77,15 @@ _EXPORTS: dict[str, str] = {
     "is_map_dataset_dir": ".twoD",
     "is_map_dataset_file": ".twoD",
     "load_2D": ".twoD",
+    "load_2D_hdf5": ".twoD",
     "map_dataset_glob": ".twoD",
+    "read_2D_hdf5": ".twoD",
     "register_map_loader": ".twoD",
+    "save_2D_hdf5": ".twoD",
+    # auto-detection
+    "FormatMatch": ".detect",
+    "detect_format": ".detect",
+    "load_auto": ".detect",
     # steady state
     "Spectrum": ".steadyState",
     "SpectrumKind": ".steadyState",
@@ -106,13 +119,35 @@ _EXPORTS: dict[str, str] = {
     "close_plots": ".display",
     "show": ".display",
     "show_plots": ".display",
+    # workflows, provenance, recipes, batch, and sessions
+    "ProcessingStep": ".provenance",
+    "Recipe": ".recipe",
+    "BatchReport": ".batch",
+    "run_batch": ".batch",
+    "ProjectSession": ".project",
 }
 
 # Submodules reachable as attributes (``pm.twoD.plot_map``) without an import.
-_SUBMODULES = ("oneD", "twoD", "steadyState", "settings", "display", "helpers", "cal", "log")
+_SUBMODULES = (
+    "oneD",
+    "twoD",
+    "steadyState",
+    "settings",
+    "display",
+    "helpers",
+    "cal",
+    "log",
+    "detect",
+    "provenance",
+    "recipe",
+    "batch",
+    "project",
+)
 
 if TYPE_CHECKING:  # keeps type checkers and IDE completion fully informed
+    from .batch import BatchReport, run_batch
     from .cal import available_calibration_types
+    from .detect import FormatMatch, detect_format, load_auto
     from .display import add_subplot_labels, close_plots, show, show_plots
     from .oneD import (
         Dataset1D,
@@ -132,13 +167,22 @@ if TYPE_CHECKING:  # keeps type checkers and IDE completion fully informed
         load_1D,
         load_1D_hdf5,
         load_pymess_anisotropy,
+        parse_ufs,
         read_1D_hdf5,
+        read_glotaran_ascii,
+        read_glotaran_nc,
+        read_Helios_UFS,
         register_loader,
         save_1D_hdf5,
         stitch_time,
         stitch_wavelength,
+        write_glotaran_ascii,
+        write_glotaran_nc,
         write_pdat,
     )
+    from .project import ProjectSession
+    from .provenance import ProcessingStep
+    from .recipe import Recipe
     from .settings import (
         DeltaAUnits,
         FreqLabel,
@@ -173,8 +217,11 @@ if TYPE_CHECKING:  # keeps type checkers and IDE completion fully informed
         is_map_dataset_dir,
         is_map_dataset_file,
         load_2D,
+        load_2D_hdf5,
         map_dataset_glob,
+        read_2D_hdf5,
         register_map_loader,
+        save_2D_hdf5,
     )
 
 
@@ -222,14 +269,27 @@ __all__ = [
     "save_1D_hdf5",
     "load_1D_hdf5",
     "read_1D_hdf5",
+    "parse_ufs",
+    "read_Helios_UFS",
+    "read_glotaran_ascii",
+    "write_glotaran_ascii",
+    "read_glotaran_nc",
+    "write_glotaran_nc",
     # 2-D pipeline
     "Dataset2D",
     "load_2D",
+    "save_2D_hdf5",
+    "load_2D_hdf5",
+    "read_2D_hdf5",
     "register_map_loader",
     "available_map_loaders",
     "map_dataset_glob",
     "is_map_dataset_dir",
     "is_map_dataset_file",
+    # auto-detection
+    "FormatMatch",
+    "detect_format",
+    "load_auto",
     # steady-state
     "Spectrum",
     "SpectrumSeries",
@@ -264,6 +324,12 @@ __all__ = [
     "show_plots",
     "show",
     "close_plots",
+    # workflows, recipes, batch, and sessions
+    "ProcessingStep",
+    "Recipe",
+    "BatchReport",
+    "run_batch",
+    "ProjectSession",
 ]
 
 

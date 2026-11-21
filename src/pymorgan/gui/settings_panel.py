@@ -107,10 +107,14 @@ class SettingsPanel(QTabWidget):
 
 
         for name, spec in pm.Settings.field_specs().items():
+            if spec.get("kind") == "list":
+                continue
             tab_key = spec.get("tab", "common")
             form = forms.get(tab_key, forms["common"])
 
             current = getattr(settings, name)
+            if isinstance(current, list):
+                continue
             value = current.value if hasattr(current, "value") else current
             widget = self._make_widget(name, spec, value)
             tooltip = spec.get("tooltip")

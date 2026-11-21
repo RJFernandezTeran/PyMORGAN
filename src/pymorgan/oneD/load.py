@@ -406,72 +406,152 @@ def export_pdat(
 
 def _json_safe_value(val: Any) -> tuple[bool, Any]:
     """Recursively convert JSON-safe values and drop non-serializable arrays."""
-    if val is None or isinstance(val, (str, int, float, bool)):
-        return True, val
-    if isinstance(val, np.generic):
-        return True, val.item()
-    if isinstance(val, (list, tuple)):
-        items = []
-        for item in val:
-            ok, clean = _json_safe_value(item)
-            if not ok:
-                return False, None
-            items.append(clean)
-        return True, items
-    if isinstance(val, dict):
-        out: dict[str, Any] = {}
-        for dk, dv in val.items():
-            ok, clean = _json_safe_value(dv)
-            if ok:
-                out[str(dk)] = clean
-        return True, out
-    return False, None
+    from ..hdf5_meta import json_safe_value
+
+    return json_safe_value(val)
 
 
 def _json_safe_units(mapping: dict[str, Any]) -> dict[str, Any]:
     """Filter a units dictionary so nested dicts containing ndarrays never break json.dumps."""
-    _, cleaned = _json_safe_value(dict(mapping))
-    return cleaned if isinstance(cleaned, dict) else {}
+    from ..hdf5_meta import json_safe_units
+
+    return json_safe_units(mapping)
 
 
 def save_1D_hdf5(dataset, path: str | PathLike) -> Path:
-    """Save a :class:`pymorgan.oneD.Dataset1D` instance to a self-contained HDF5 file."""
+    """Save a :class:`pymorgan.oneD.Dataset1D` instance to a FAIR/NeXus HDF5 archive."""
     import json
+
+    from ..hdf5_meta import (
+        create_compressed_dataset,
+        json_safe_units,
+        serialize_chirp_fit,
+        write_fair_root_attrs,
+    )
 
     target = Path(path)
     if target.suffix.lower() not in (".h5", ".hdf5"):
         target = target.with_suffix(".h5")
     target.parent.mkdir(parents=True, exist_ok=True)
 
+    units_dict = dataset.units if isinstance(dataset.units, dict) else {}
+    t_unit = str(units_dict.get("unitsT_ltx", "ps")).replace("$", "")
+    l_unit = str(units_dict.get("unitsL_ltx", "cm-1")).replace("$", "")
+    l_lbl = str(units_dict.get("unitsL_lbl", "Probe"))
+    z_unit = str(units_dict.get("unitsZ_ltx", "mOD")).replace("$", "")
+
     with h5py.File(target, "w") as f:
-        f.create_dataset("delays", data=np.asarray(dataset.delays, dtype=float))
-        f.create_dataset("probe", data=np.asarray(dataset.probe, dtype=float))
+        write_fair_root_attrs(
+            f,
+            pymorgan_format="1D",
+            source=getattr(dataset, "source", None),
+            original_data_type=getattr(dataset, "data_type", None),
+            units=units_dict,
+            dataset=dataset,
+            format_version="2.0",
+        )
+
+        create_compressed_dataset(
+            f,
+            "delays",
+            np.asarray(dataset.delays, dtype=float),
+            units=t_unit,
+            long_name=str(units_dict.get("unitsT_lbl", "Delay")),
+        )
+        create_compressed_dataset(
+            f,
+            "probe",
+            np.asarray(dataset.probe, dtype=float),
+            units=l_unit,
+            long_name=l_lbl,
+        )
         if dataset.Zavg_R is not None:
-            f.create_dataset("Zavg_R", data=np.asarray(dataset.Zavg_R, dtype=float))
+            create_compressed_dataset(
+                f,
+                "Zavg_R",
+                np.asarray(dataset.Zavg_R, dtype=float),
+                units=z_unit,
+                long_name="Raw averaged signal",
+            )
         if dataset.Zavg_C is not None:
-            f.create_dataset("Zavg_C", data=np.asarray(dataset.Zavg_C, dtype=float))
+            create_compressed_dataset(
+                f,
+                "Zavg_C",
+                np.asarray(dataset.Zavg_C, dtype=float),
+                units=z_unit,
+                long_name="Background-corrected averaged signal",
+            )
         if dataset.Zss_R is not None:
-            f.create_dataset("Zss_R", data=np.asarray(dataset.Zss_R, dtype=float))
+            create_compressed_dataset(
+                f,
+                "Zss_R",
+                np.asarray(dataset.Zss_R, dtype=float),
+                units=z_unit,
+                long_name="Raw single-scan signal",
+            )
         if dataset.Zss_C is not None:
-            f.create_dataset("Zss_C", data=np.asarray(dataset.Zss_C, dtype=float))
+            create_compressed_dataset(
+                f,
+                "Zss_C",
+                np.asarray(dataset.Zss_C, dtype=float),
+                units=z_unit,
+                long_name="Background-corrected single-scan signal",
+            )
         if dataset.Zstdv is not None:
-            f.create_dataset("Zstdv", data=np.asarray(dataset.Zstdv, dtype=float))
+            create_compressed_dataset(
+                f,
+                "Zstdv",
+                np.asarray(dataset.Zstdv, dtype=float),
+                units=z_unit,
+                long_name="Signal standard deviation",
+            )
         if dataset.bkg_avg is not None:
-            f.create_dataset("bkg_avg", data=np.asarray(dataset.bkg_avg, dtype=float))
+            create_compressed_dataset(
+                f,
+                "bkg_avg",
+                np.asarray(dataset.bkg_avg, dtype=float),
+                units=z_unit,
+                long_name="Subtracted averaged background spectrum",
+            )
         if dataset.bkg_ss is not None:
-            f.create_dataset("bkg_ss", data=np.asarray(dataset.bkg_ss, dtype=float))
+            create_compressed_dataset(
+                f,
+                "bkg_ss",
+                np.asarray(dataset.bkg_ss, dtype=float),
+                units=z_unit,
+                long_name="Subtracted single-scan background spectra",
+            )
+        counts = getattr(dataset, "counts", None)
+        if counts is not None:
+            create_compressed_dataset(
+                f,
+                "counts",
+                np.asarray(counts, dtype=float),
+                units="counts",
+                long_name="Detector probe counts / intensity",
+            )
 
         f.attrs["nscans"] = float(dataset.nscans) if np.isfinite(dataset.nscans) else -1.0
         f.attrs["data_type"] = str(dataset.data_type or "PDAT")
-        f.attrs["source"] = str(dataset.source or "")
-        f.attrs["format_version"] = "1.0"
 
-        units_serializable = _json_safe_units(dataset.units)
+        units_serializable = json_safe_units(units_dict, drop_keys={"counts"})
         f.attrs["units_json"] = json.dumps(units_serializable)
         if getattr(dataset, "mask_ranges", None):
-            f.attrs["mask_ranges_json"] = json.dumps(dataset.mask_ranges)
+            f.attrs["mask_ranges_json"] = json.dumps(
+                [[float(a), float(b)] for a, b in dataset.mask_ranges]
+            )
         if getattr(dataset, "scan_ids", None):
             f.attrs["scan_ids_json"] = json.dumps(list(dataset.scan_ids))
+        chirp_json = serialize_chirp_fit(getattr(dataset, "chirp_fit", None))
+        if chirp_json is not None:
+            f.attrs["chirp_fit_json"] = chirp_json
+        scatter_params = getattr(dataset, "_scatter_removal_params", None)
+        if scatter_params is not None:
+            from ..hdf5_meta import json_safe_value
+
+            ok_sc, clean_sc = json_safe_value(scatter_params)
+            if ok_sc:
+                f.attrs["scatter_params_json"] = json.dumps(clean_sc)
 
     return target
 
@@ -483,6 +563,10 @@ def read_1D_hdf5(path: str | PathLike) -> LoaderResult:
 
     p = Path(path)
     with h5py.File(p, "r") as f:
+        if f.attrs.get("pymorgan_format") == "2D" or ("pump" in f and "Z_R" in f and "delays" in f):
+            raise ValueError(
+                f"File {p.name} is a 2D PyMORGAN HDF5 archive; use load_2D / load_2D_hdf5."
+            )
         # Auto-delegate if this is a PyMESS acquisition file opened via HDF5 loader
         if "delays" not in f and "data" in f and (
             "data/delays_fs" in f or classify_pymess_h5(p) in ("pump_probe", "shaper_t2_scan")
@@ -495,6 +579,7 @@ def read_1D_hdf5(path: str | PathLike) -> LoaderResult:
 
         Zss_R = np.asarray(f["Zss_R"][:], dtype=float) if "Zss_R" in f else None
         Zstdv = np.asarray(f["Zstdv"][:], dtype=float) if "Zstdv" in f else np.zeros_like(Zavg_R)
+        counts = np.asarray(f["counts"][:], dtype=float) if "counts" in f else None
 
         nscans_attr = f.attrs.get("nscans", -1.0)
         nscans = float(nscans_attr) if nscans_attr > 0 else np.nan
@@ -504,6 +589,9 @@ def read_1D_hdf5(path: str | PathLike) -> LoaderResult:
             Units = json.loads(units_json)
         except Exception:
             Units = hlp.units2dic("cm^{-1}", "ps", "x1E3")
+        orig_dt = f.attrs.get("original_data_type")
+        if orig_dt and "original_data_type" not in Units:
+            Units["original_data_type"] = str(orig_dt)
 
         scan_ids = None
         if "scan_ids_json" in f.attrs:
@@ -512,17 +600,22 @@ def read_1D_hdf5(path: str | PathLike) -> LoaderResult:
             except Exception:
                 pass
 
-    return Zavg_R, delays, probe, Units, nscans, Zss_R, Zstdv, scan_ids
+    return Zavg_R, delays, probe, Units, nscans, Zss_R, Zstdv, scan_ids, counts
 
 
 def load_1D_hdf5(path: str | PathLike):
     """Load an HDF5 archive into a fully restored :class:`pymorgan.oneD.Dataset1D`."""
     import json
 
+    from ..hdf5_meta import deserialize_chirp_fit, restore_dataset_history
     from .dataset import Dataset1D
 
     p = Path(path)
     with h5py.File(p, "r") as f:
+        if f.attrs.get("pymorgan_format") == "2D" or ("pump" in f and "Z_R" in f and "delays" in f):
+            raise ValueError(
+                f"File {p.name} is a 2D PyMORGAN HDF5 archive; use load_2D_hdf5."
+            )
         delays = np.asarray(f["delays"][:], dtype=float)
         probe = np.asarray(f["probe"][:], dtype=float)
         Zavg_R = np.asarray(f["Zavg_R"][:], dtype=float) if "Zavg_R" in f else None
@@ -532,6 +625,7 @@ def load_1D_hdf5(path: str | PathLike):
         Zstdv = np.asarray(f["Zstdv"][:], dtype=float) if "Zstdv" in f else None
         bkg_avg = np.asarray(f["bkg_avg"][:], dtype=float) if "bkg_avg" in f else None
         bkg_ss = np.asarray(f["bkg_ss"][:], dtype=float) if "bkg_ss" in f else None
+        counts = np.asarray(f["counts"][:], dtype=float) if "counts" in f else None
 
         nscans_attr = f.attrs.get("nscans", -1.0)
         nscans = float(nscans_attr) if nscans_attr > 0 else np.nan
@@ -543,6 +637,9 @@ def load_1D_hdf5(path: str | PathLike):
             units = json.loads(units_json)
         except Exception:
             units = hlp.units2dic("cm^{-1}", "ps", "x1E3")
+        orig_dt = f.attrs.get("original_data_type")
+        if orig_dt and "original_data_type" not in units:
+            units["original_data_type"] = str(orig_dt)
 
         scan_ids = None
         if "scan_ids_json" in f.attrs:
@@ -558,32 +655,63 @@ def load_1D_hdf5(path: str | PathLike):
             except Exception:
                 pass
 
-    ds = Dataset1D(
-        Zavg_R,
-        delays,
-        probe,
-        units,
-        nscans=nscans,
-        Zss_R=Zss_R,
-        Zstdv=Zstdv,
-        source=source,
-        data_type=data_type,
-        scan_ids=scan_ids,
-    )
-    ds.Zavg_C = Zavg_C
-    ds.Zss_C = Zss_C
-    ds.bkg_avg = bkg_avg
-    ds.bkg_ss = bkg_ss
-    ds.mask_ranges = mask_ranges
+        chirp_fit = None
+        if "chirp_fit_json" in f.attrs:
+            try:
+                chirp_fit = deserialize_chirp_fit(f.attrs["chirp_fit_json"])
+            except Exception:
+                pass
+
+        scatter_params = None
+        if "scatter_params_json" in f.attrs:
+            try:
+                scatter_params = json.loads(f.attrs["scatter_params_json"])
+            except Exception:
+                pass
+
+        ds = Dataset1D(
+            Zavg_R,
+            delays,
+            probe,
+            units,
+            nscans=nscans,
+            Zss_R=Zss_R,
+            Zstdv=Zstdv,
+            source=source,
+            data_type=data_type,
+            scan_ids=scan_ids,
+            counts=counts,
+        )
+        ds.Zavg_C = Zavg_C
+        ds.Zss_C = Zss_C
+        ds.bkg_avg = bkg_avg
+        ds.bkg_ss = bkg_ss
+        ds.mask_ranges = mask_ranges
+        ds.chirp_fit = chirp_fit
+        ds._scatter_removal_params = scatter_params
+        restore_dataset_history(f, ds)
     return ds
 
 
 register_dataset_glob("HDF5", "*.h5")
-register_dataset_glob("HDF5", "*.hdf5")
 
 
 def _pymorgan_hdf5_is_file(p: Path) -> bool:
-    return p.is_file() and p.suffix.lower() in {".h5", ".hdf5"}
+    if not p.is_file() or p.suffix.lower() not in {".h5", ".hdf5"}:
+        return False
+    try:
+        if not h5py.is_hdf5(p):
+            return False
+        with h5py.File(p, "r") as f:
+            if f.attrs.get("pymorgan_format") == "2D":
+                return False
+            if "delays" in f and "probe" in f and "Zavg_R" in f:
+                return True
+            if "pump" in f and "Z_R" in f:
+                return False
+    except Exception:
+        return False
+    return classify_pymess_h5(p) in ("pump_probe", "shaper_t2_scan")
 
 
 register_dataset_file_filter("HDF5")(_pymorgan_hdf5_is_file)
@@ -4703,9 +4831,10 @@ def mess_recalc_average(
 
 
 # --------------------------------------------------------------------------- #
-#                             Helios TA reader                                #
+#                             Helios TA & UFS readers                         #
 # --------------------------------------------------------------------------- #
 register_dataset_glob("Helios_TA", "*.csv")
+register_dataset_glob("Helios_UFS", "*.ufs")
 
 
 def _is_helios_main_file(path: Path) -> bool:
@@ -4713,6 +4842,8 @@ def _is_helios_main_file(path: Path) -> bool:
     if not path.is_file() or not path.name.lower().endswith(".csv"):
         return False
     stem = path.stem
+    if stem.lower() in ("calibratedprobe", "w0", "calibratedpump"):
+        return False
     if re.search(r"_scan\d+$", stem, re.IGNORECASE):
         return False
     if re.search(r"(-bg|-chirp|-CORRECTED)$", stem, re.IGNORECASE):
@@ -4720,10 +4851,46 @@ def _is_helios_main_file(path: Path) -> bool:
     return True
 
 
+def _has_valid_ufs_header(path: Path) -> bool:
+    """Return True if ``path`` begins with a Surface Xplorer ``Version1``/``Version2`` header."""
+    import struct
+
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(24)
+        if len(head) < 12:
+            return False
+        (ver_len,) = struct.unpack_from(">i", head, 0)
+        if ver_len < 8 or ver_len > 20 or len(head) < 4 + ver_len:
+            return False
+        ver = head[4 : 4 + ver_len].decode("utf-8", errors="ignore")
+        return ver.startswith(("Version1", "Version2"))
+    except OSError:
+        return False
+
+
+def _is_helios_ufs_main_file(path: Path) -> bool:
+    """Whether ``path`` is a main averaged Surface Xplorer ``.ufs`` file."""
+    if not path.is_file() or path.suffix.lower() != ".ufs":
+        return False
+    stem = path.stem
+    if re.search(r"_scan\d+$", stem, re.IGNORECASE):
+        return False
+    if re.search(r"(-bg|-chirp|-CORRECTED)$", stem, re.IGNORECASE):
+        return False
+    return _has_valid_ufs_header(path)
+
+
 @register_dataset_file_filter("Helios_TA")
 def _helios_file_filter(path: Path) -> bool:
     """Filter files for dataset listing so only averaged dataset files are shown."""
     return _is_helios_main_file(Path(path))
+
+
+@register_dataset_file_filter("Helios_UFS")
+def _helios_ufs_file_filter(path: Path) -> bool:
+    """Filter ``.ufs`` files so only averaged Surface Xplorer datasets are shown."""
+    return _is_helios_ufs_main_file(Path(path))
 
 
 def _find_helios_main_csv(folder: Path, dataset_name: str | None = None) -> Path:
@@ -4750,6 +4917,243 @@ def _find_helios_main_csv(folder: Path, dataset_name: str | None = None) -> Path
     raise FileNotFoundError(f"No valid Helios TA averaged dataset (.csv) found in {folder}.")
 
 
+def _find_helios_main_ufs(folder: Path, dataset_name: str | None = None) -> Path:
+    """Find the main averaged Surface Xplorer ``.ufs`` file in ``folder``."""
+    folder = Path(folder)
+    if dataset_name:
+        cand = folder / dataset_name
+        if not cand.suffix:
+            cand = cand.with_suffix(".ufs")
+        if cand.is_file() and _has_valid_ufs_header(cand):
+            return cand
+
+    default_cand = folder / f"{folder.name}.ufs"
+    if _is_helios_ufs_main_file(default_cand):
+        return default_cand
+
+    main_files = sorted(
+        [f for f in folder.glob("*.ufs") if _is_helios_ufs_main_file(f)],
+        key=lambda f: f.name.lower(),
+    )
+    if main_files:
+        return main_files[0]
+
+    raise FileNotFoundError(f"No valid Surface Xplorer dataset (.ufs) found in {folder}.")
+
+
+def _parse_ufs_metadata_string(raw_meta: str) -> tuple[dict[str, str], str, str]:
+    """Parse trailing Surface Xplorer metadata text into ``(fields, compact_info, full_info)``."""
+    fields: dict[str, str] = {}
+    if not raw_meta:
+        return fields, "", ""
+
+    normalized = raw_meta.replace("\r\n", "\r").replace("\r", "\n")
+    lines = [ln.strip() for ln in normalized.splitlines() if ln.strip()]
+    comments: list[str] = []
+    in_comments = False
+    for line in lines:
+        if line.lower().startswith("comments:"):
+            in_comments = True
+            rest = line.split(":", 1)[1].strip()
+            if rest:
+                comments.append(rest)
+            continue
+        if ":" in line and not in_comments:
+            key, val = line.split(":", 1)
+            fields[key.strip()] = val.strip()
+        elif in_comments:
+            comments.append(line)
+        elif ":" in line:
+            key, val = line.split(":", 1)
+            fields[key.strip()] = val.strip()
+
+    if comments:
+        fields["Comments"] = "\n".join(comments)
+
+    compact_parts: list[str] = []
+    for k in (
+        "Sample",
+        "Solvent",
+        "Pump wavelength (nm)",
+        "Pump energy (uJ)",
+        "Cuvette length (mm)",
+        "Date",
+    ):
+        if fields.get(k):
+            compact_parts.append(f"{k}: {fields[k]}")
+    if not compact_parts:
+        for k, v in fields.items():
+            if k != "Comments" and v:
+                compact_parts.append(f"{k}: {v}")
+
+    compact = "\n".join(compact_parts)
+    full_parts = list(compact_parts)
+    for k, v in fields.items():
+        if k != "Comments" and k not in {
+            "Sample",
+            "Solvent",
+            "Pump wavelength (nm)",
+            "Pump energy (uJ)",
+            "Cuvette length (mm)",
+            "Date",
+        } and v:
+            full_parts.append(f"{k}: {v}")
+    if comments:
+        full_parts.append("Comments:\n" + "\n".join(f"  {c}" for c in comments))
+    full = "\n".join(full_parts)
+    return fields, compact, full
+
+
+def parse_ufs(file_path: Path | str) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]:
+    """Parse a Surface Xplorer ``.ufs`` binary file into ``(delays, probe, sig_mod, meta)``.
+
+    Supports ``Version2`` (64-bit big-endian IEEE floats ``>f8``) and ``Version1``
+    (32-bit big-endian floats ``>f4``). Converts ``DA`` / ``OD`` signal values to
+    ``mOD`` (``* 1000.0``) unless ``z_unit`` already indicates ``mOD``, and
+    transposes ``[Nwl x Ndelays]`` into ``[Ndelays x Npixels]``.
+    """
+    import struct
+
+    p = Path(file_path)
+    buf = p.read_bytes()
+    pos = 0
+    total = len(buf)
+
+    def _read_str() -> str:
+        nonlocal pos
+        if pos + 4 > total:
+            raise ValueError(f"Truncated UFS string header in {p}")
+        (n_bytes,) = struct.unpack_from(">i", buf, pos)
+        pos += 4
+        if n_bytes < 0 or pos + n_bytes > total:
+            raise ValueError(f"Invalid UFS string length {n_bytes} in {p}")
+        text = buf[pos : pos + n_bytes].decode("utf-8", errors="replace")
+        pos += n_bytes
+        return text
+
+    def _read_farray(float_dtype: str) -> np.ndarray:
+        nonlocal pos
+        if pos + 4 > total:
+            raise ValueError(f"Truncated UFS array header in {p}")
+        (count,) = struct.unpack_from(">i", buf, pos)
+        pos += 4
+        item_sz = 8 if float_dtype == ">f8" else 4
+        if count < 0 or pos + count * item_sz > total:
+            raise ValueError(f"Invalid UFS array count {count} in {p}")
+        arr = np.frombuffer(buf, dtype=float_dtype, count=count, offset=pos).astype(np.float64)
+        pos += count * item_sz
+        return arr
+
+    ver = _read_str()
+    if ver.startswith("Version2"):
+        float_dtype = ">f8"
+    elif ver.startswith("Version1"):
+        float_dtype = ">f4"
+    else:
+        raise ValueError(f"Unsupported Surface Xplorer UFS version {ver!r} in {p}")
+
+    item_sz = 8 if float_dtype == ">f8" else 4
+    ax1_lbl = _read_str()
+    ax1_unit = _read_str()
+    ax1 = _read_farray(float_dtype)
+    ax2_lbl = _read_str()
+    ax2_unit = _read_str()
+    ax2 = _read_farray(float_dtype)
+    z_lbl = _read_str()
+    z_unit = _read_str()
+
+    if pos + 8 > total:
+        raise ValueError(f"Truncated UFS matrix dimensions in {p}")
+    n1, n2 = struct.unpack_from(">ii", buf, pos)
+    pos += 8
+    if n1 < 0 or n2 < 0 or pos + n1 * n2 * item_sz > total:
+        raise ValueError(f"Invalid UFS matrix shape ({n1}, {n2}) in {p}")
+    mat = (
+        np.frombuffer(buf, dtype=float_dtype, count=n1 * n2, offset=pos)
+        .astype(np.float64)
+        .reshape((n1, n2))
+    )
+    pos += n1 * n2 * item_sz
+
+    raw_meta = ""
+    if pos + 4 <= total:
+        (meta_len,) = struct.unpack_from(">i", buf, pos)
+        if 0 <= meta_len <= total - (pos + 4):
+            raw_meta = _read_str()
+
+    # Determine spectral (probe) vs delay axis
+    ax1_is_time = "time" in ax1_lbl.lower() or ax1_unit.strip().lower() in ("ps", "ns", "fs")
+    ax2_is_time = "time" in ax2_lbl.lower() or ax2_unit.strip().lower() in ("ps", "ns", "fs")
+    if ax1_is_time and not ax2_is_time:
+        delays = ax1
+        probe = ax2
+        sig = mat if mat.shape == (len(delays), len(probe)) else mat.T
+        probe_lbl, probe_unit = ax2_lbl, ax2_unit
+        time_unit = ax1_unit or "ps"
+    else:
+        probe = ax1
+        delays = ax2
+        sig = mat.T if mat.shape == (len(probe), len(delays)) else mat
+        probe_lbl, probe_unit = ax1_lbl, ax1_unit
+        time_unit = ax2_unit or "ps"
+
+    if sig.shape != (len(delays), len(probe)):
+        raise ValueError(
+            f"UFS signal dimensions {sig.shape} do not match delays ({len(delays)}) x probe ({len(probe)}) in {p}"
+        )
+
+    is_mod = "mod" in z_unit.lower() or "mod" in z_lbl.lower()
+    sig_mod = _interpolate_nonfinite_2d(sig.copy() if is_mod else sig * 1000.0)
+
+    fields, compact_info, full_info = _parse_ufs_metadata_string(raw_meta)
+
+    pu_low = (probe_unit or "").strip().lower()
+    if "cm" in pu_low or "wavenumber" in probe_lbl.lower():
+        units_L = "cm^{-1}"
+    elif "ev" in pu_low or "energy" in probe_lbl.lower():
+        units_L = "eV"
+    else:
+        units_L = "nm"
+
+    tu_low = (time_unit or "ps").strip().lower()
+    if tu_low in ("fs", "ps", "ns", "us"):
+        units_T = tu_low
+    else:
+        units_T = "ps"
+
+    meta = {
+        "version": ver,
+        "ax1_lbl": ax1_lbl,
+        "ax1_unit": ax1_unit,
+        "ax2_lbl": ax2_lbl,
+        "ax2_unit": ax2_unit,
+        "z_lbl": z_lbl,
+        "z_unit": z_unit,
+        "unitsL": units_L,
+        "unitsT": units_T,
+        "raw_metadata": raw_meta,
+        "fields": fields,
+        "sample_info": compact_info,
+        "sample_info_full": full_info,
+    }
+    return delays, probe, sig_mod, meta
+
+
+def _interpolate_nonfinite_2d(sig_mod: np.ndarray) -> np.ndarray:
+    """Replace ``+-inf`` with ``NaN`` and linearly interpolate any non-finite entries."""
+    sig_mod = np.where(np.isfinite(sig_mod), sig_mod, np.nan)
+    if np.isnan(sig_mod).any():
+        import pandas as pd
+
+        sig_df = pd.DataFrame(sig_mod)
+        sig_mod = (
+            sig_df.interpolate(method="linear", limit_direction="both", axis=0)
+            .interpolate(method="linear", limit_direction="both", axis=1)
+            .to_numpy(dtype=float)
+        )
+    return sig_mod
+
+
 def parse_helios_csv(file_path: Path | str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Parse a single Helios CSV file into delays, probe, and signal (in mOD, NaN-interpolated)."""
     import pandas as pd
@@ -4770,25 +5174,90 @@ def parse_helios_csv(file_path: Path | str) -> tuple[np.ndarray, np.ndarray, np.
         raise ValueError(f"Helios TA signal matrix dimensions mismatch in {file_path}")
 
     # Convert Delta-A to mOD (x 1000) and transpose to [Ndelays x Npixels]
-    sig_mod = sig.T * 1000.0
+    return delays, probe, _interpolate_nonfinite_2d(sig.T * 1000.0)
 
-    if np.isnan(sig_mod).any():
-        sig_df = pd.DataFrame(sig_mod)
-        sig_mod = (
-            sig_df.interpolate(method="linear", limit_direction="both", axis=0)
-            .interpolate(method="linear", limit_direction="both", axis=1)
-            .to_numpy(dtype=float)
-        )
 
-    return delays, probe, sig_mod
+@register_loader("Helios_UFS")
+def read_Helios_UFS(datafilename: str, dataset_name: str | None = None) -> LoaderResult:
+    """Read a Surface Xplorer ``.ufs`` dataset (averaged file and sibling ``_scan*.ufs``)."""
+    path = Path(datafilename)
+    if path.is_dir():
+        main_file = _find_helios_main_ufs(path, dataset_name)
+        folder = path
+    elif path.is_file():
+        main_file = path
+        folder = path.parent
+    else:
+        raise FileNotFoundError(f"Surface Xplorer UFS path not found: {datafilename}")
+
+    main_stem = main_file.stem
+    delays, probe, Zavg_2d, meta = parse_ufs(main_file)
+
+    scan_pattern = re.compile(rf"^{re.escape(main_stem)}_scan(\d+)\.ufs$", re.IGNORECASE)
+    scan_entries: list[tuple[int, Path]] = []
+    for f in folder.iterdir():
+        if f.is_file():
+            m = scan_pattern.match(f.name)
+            if m and _has_valid_ufs_header(f):
+                scan_entries.append((int(m.group(1)), f))
+    scan_entries.sort(key=lambda x: x[0])
+
+    Zavg_R = Zavg_2d[..., np.newaxis]
+
+    if scan_entries:
+        scan_signals = []
+        scan_ids = []
+        for scan_num, scan_file in scan_entries:
+            try:
+                _, _, s_sig, _ = parse_ufs(scan_file)
+                if s_sig.shape == Zavg_2d.shape:
+                    scan_signals.append(s_sig)
+                    scan_ids.append(scan_num)
+            except Exception:
+                logger.debug("Skipping unreadable UFS scan %s", scan_file, exc_info=True)
+        if scan_signals:
+            Nscans: Any = len(scan_signals)
+            Zss_3d = np.stack(scan_signals, axis=-1)
+            Zss_R = Zss_3d[:, :, np.newaxis, :]
+            if Nscans > 1:
+                Zstdv_2d = np.nanstd(Zss_3d, axis=-1, ddof=1)
+            else:
+                Zstdv_2d = np.zeros_like(Zavg_2d)
+            Zstdv = Zstdv_2d[..., np.newaxis]
+        else:
+            Nscans = np.nan
+            Zss_R = np.full((*Zavg_R.shape, 1), np.nan)
+            Zstdv = np.zeros_like(Zavg_R)
+            scan_ids = None
+    else:
+        Nscans = np.nan
+        Zss_R = np.full((*Zavg_R.shape, 1), np.nan)
+        Zstdv = np.zeros_like(Zavg_R)
+        scan_ids = None
+
+    Units = hlp.units2dic(meta["unitsL"], meta["unitsT"], "x1E3")
+    Units["cal_source"] = "Dataset probe axis (UFS)"
+    if meta.get("sample_info"):
+        Units["sample_info"] = meta["sample_info"]
+    if meta.get("sample_info_full"):
+        Units["sample_info_full"] = meta["sample_info_full"]
+    if meta.get("fields"):
+        Units["ufs_metadata"] = meta["fields"]
+    return Zavg_R, delays, probe, Units, Nscans, Zss_R, Zstdv, scan_ids
 
 
 @register_loader("Helios_TA")
 def read_Helios_TA(datafilename: str, dataset_name: str | None = None) -> LoaderResult:
-    """Read Helios transient absorption dataset (averaged file and single scans)."""
+    """Read Helios transient absorption dataset (``.csv`` or ``.ufs`` averaged file and single scans)."""
     path = Path(datafilename)
+    if path.is_file() and path.suffix.lower() == ".ufs":
+        return read_Helios_UFS(datafilename, dataset_name=dataset_name)
     if path.is_dir():
-        main_file = _find_helios_main_csv(path, dataset_name)
+        try:
+            main_file = _find_helios_main_csv(path, dataset_name)
+        except FileNotFoundError:
+            main_ufs = _find_helios_main_ufs(path, dataset_name)
+            return read_Helios_UFS(str(main_ufs), dataset_name=dataset_name)
         folder = path
     elif path.is_file():
         main_file = path
@@ -4835,14 +5304,40 @@ def read_Helios_TA(datafilename: str, dataset_name: str | None = None) -> Loader
 
     Units = hlp.units2dic("nm", "ps", "x1E3")
     Units["cal_source"] = "Dataset probe axis (CSV header)"
+
+    sibling_ufs = main_file.with_suffix(".ufs")
+    if sibling_ufs.is_file() and _has_valid_ufs_header(sibling_ufs):
+        try:
+            _, _, _, ufs_meta = parse_ufs(sibling_ufs)
+            if ufs_meta.get("sample_info"):
+                Units["sample_info"] = ufs_meta["sample_info"]
+            if ufs_meta.get("sample_info_full"):
+                Units["sample_info_full"] = ufs_meta["sample_info_full"]
+        except Exception:
+            pass
+
     return Zavg_R, delays, probe, Units, Nscans, Zss_R, Zstdv, scan_ids
 
 
 @register_dataset_detector("Helios_TA")
 def _helios_is_dataset(folder: Path) -> bool:
-    """Whether ``folder`` is a Helios TA dataset directory."""
+    """Whether ``folder`` is a Helios TA dataset directory (CSV or UFS)."""
     try:
         _find_helios_main_csv(folder)
+        return True
+    except FileNotFoundError:
+        try:
+            _find_helios_main_ufs(folder)
+            return True
+        except FileNotFoundError:
+            return False
+
+
+@register_dataset_detector("Helios_UFS")
+def _helios_ufs_is_dataset(folder: Path) -> bool:
+    """Whether ``folder`` contains a Surface Xplorer ``.ufs`` dataset."""
+    try:
+        _find_helios_main_ufs(folder)
         return True
     except FileNotFoundError:
         return False

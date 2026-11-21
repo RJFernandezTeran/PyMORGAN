@@ -74,7 +74,17 @@ dimensionality:
       :link-type: doc
 
       Auto-generated API documentation for ``pymorgan.oneD``, ``pymorgan.twoD``,
-      ``pymorgan.cal``, ``pymorgan.steadyState``, and ``pymorgan.settings``.
+      ``pymorgan.cal``, ``pymorgan.steadyState``, ``pymorgan.detect``,
+      ``pymorgan.provenance``, ``pymorgan.recipe``, ``pymorgan.batch``,
+      ``pymorgan.project``, and ``pymorgan.settings``.
+
+   .. grid-item-card:: 🔁 Workflows, Batch & Interop
+      :link: user_guide/workflows
+      :link-type: doc
+
+      Undo/Redo, processing history & Python script export, ``.pmrecipe.toml`` recipes,
+      CLI/GUI batch processing, ``.pmproj`` workspace sessions, Glotaran/FAIR HDF5 interop,
+      and universal format auto-detection.
 
 .. admonition:: Download Complete LaTeX Manual (PDF)
    :class: tip
@@ -127,6 +137,7 @@ Contents
    user_guide/twoD
    user_guide/calibration
    user_guide/steady_state
+   user_guide/workflows
    user_guide/settings
    user_guide/extending
 
@@ -139,6 +150,7 @@ Contents
    api/twoD
    api/calibration
    api/steady_state
+   api/workflows
    api/settings_and_helpers
 
 

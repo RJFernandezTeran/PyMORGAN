@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass, fields, replace
+from dataclasses import dataclass, field, fields, replace
 from enum import Enum, StrEnum
 from pathlib import Path
 from typing import Union, get_args, get_origin, get_type_hints
@@ -395,6 +395,12 @@ def _coerce_field(name: str, value):
         if args and Ellipsis not in args and len(parts) != len(args):
             raise ValueError(f"{name} expects {len(args)} values, got {len(parts)}")
         return tuple(conv(v) for v in parts)
+    if get_origin(base) is list:
+        args = get_args(base)
+        conv = args[0] if args and isinstance(args[0], type) else str
+        if isinstance(value, str):
+            return [conv(value)] if value.strip() else []
+        return [conv(v) for v in value]
     if optional and base is None:
         return value
     return value
@@ -534,6 +540,8 @@ class Settings:
     sd_interpolation: PeakInterpolation = PeakInterpolation.QUADRATIC
     sd_interpolation_factor: int = 2  # axis upsampling factor for sub-pixel peak finding (1 = no upsampling)
     kubo_ftir_weight: float = 1.0  # relative weight of FTIR vs 2D fit in joint optimisation
+    recent_dirs: list[str] = field(default_factory=list)  # MRU visited data directories
+    max_recent_dirs: int = 12  # maximum number of remembered recent directories
 
     def __post_init__(self) -> None:
         """Coerce string values (e.g. straight from TOML) into their enum members."""
@@ -790,6 +798,8 @@ class Settings:
             "default_twoD_datatype": "gui",
             "default_calibration_datatype": "gui",
             "load_single_scans": "gui",
+            "recent_dirs": "gui",
+            "max_recent_dirs": "gui",
             # [chirp]
             "chirp_boundary_handling": "chirp",
             "parallel_fitting": "chirp",
@@ -1430,4 +1440,66 @@ def save_settings(path: str | Path, settings: Settings | None = None) -> None:
 def apply_style(settings: Settings | None = None) -> None:
     """Apply ``settings`` (or the active settings) to matplotlib."""
     (settings or _active).apply()
+
+
+def _should_auto_save_settings(target: Path) -> bool:
+    """Avoid mutating the repository-root ``settings.toml`` during pytest runs."""
+    import os
+
+    if not os.environ.get("PYTEST_CURRENT_TEST"):
+        return True
+    repo_cfg = (Path(__file__).resolve().parent.parent.parent / "settings.toml").resolve()
+    try:
+        return target.resolve() != repo_cfg
+    except OSError:
+        return True
+
+
+def record_recent_dir(path: str | Path, *, save: bool = True) -> list[str]:
+    """Record ``path`` as most-recently used in ``settings.recent_dirs``."""
+    import os
+
+    current = list(getattr(get_settings(), "recent_dirs", []) or [])
+    raw = str(path).strip()
+    if not raw:
+        return current
+    p = Path(raw)
+    if not p.is_dir():
+        return current
+    try:
+        canonical = os.path.normpath(str(p.resolve()))
+    except OSError:
+        canonical = os.path.normpath(str(p))
+
+    norm_key = os.path.normcase(canonical)
+    updated = [canonical]
+    for existing in current:
+        ex_str = os.path.normpath(str(existing))
+        if os.path.normcase(ex_str) != norm_key:
+            updated.append(ex_str)
+
+    limit = max(0, int(getattr(get_settings(), "max_recent_dirs", 12)))
+    updated = updated[:limit]
+    new_settings = update_settings(recent_dirs=updated)
+    if save:
+        target = settings_path()
+        if _should_auto_save_settings(target):
+            try:
+                new_settings.save(target)
+            except OSError as exc:
+                logger.warning("Could not persist recent_dirs to %s: %s", target, exc)
+    return list(new_settings.recent_dirs)
+
+
+def clear_recent_dirs(*, save: bool = True) -> list[str]:
+    """Clear ``settings.recent_dirs`` and optionally persist to disk."""
+    new_settings = update_settings(recent_dirs=[])
+    if save:
+        target = settings_path()
+        if _should_auto_save_settings(target):
+            try:
+                new_settings.save(target)
+            except OSError as exc:
+                logger.warning("Could not clear recent_dirs in %s: %s", target, exc)
+    return list(new_settings.recent_dirs)
 

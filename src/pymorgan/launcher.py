@@ -24,6 +24,10 @@ def main(argv: list[str] | None = None) -> int:
     args = list(argv) if argv is not None else sys.argv[1:]
     if getattr(sys, "frozen", False) and args and args[0] in ("-m", "-c"):
         return 2
+    if args and args[0] == "batch":
+        from .batch import cli_main as batch_cli_main
+
+        return batch_cli_main(args[1:])
     if "--install-fonts" in args:
         install_fonts(quiet=False)
         return 0

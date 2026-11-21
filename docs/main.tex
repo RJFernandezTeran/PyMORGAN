@@ -68,6 +68,8 @@ runs through both: a single dataset object wraps the raw arrays and exposes
 processing and plotting methods, data formats are resolved through a loader
 registry, and all presentation choices are centralised in a settings object.
 
+Through \code{pymorgan.detect} (\code{detect\_format} and \code{load\_auto}), datasets, \code{.pmproj} workspace sessions, and \code{.pmrecipe.toml} recipes are automatically identified on load or drag-and-drop. Processing steps are recorded non-destructively with copy-on-write Undo/Redo, standalone Python script export (\code{to\_python\_script()}), FAIR HDF5 v2.0 / Glotaran (\code{.ascii}, \code{.nc}) interoperability, and parallel CLI/GUI batch execution (\code{pymorgan batch} / \code{pymorgan-batch}).
+
 This manual documents both the data-processing model and the programming
 interface. Chapter~\ref{sec:installation} covers installation;
 chapter~\ref{sec:oneD} covers the one-dimensional workflow;

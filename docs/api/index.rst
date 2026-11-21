@@ -12,6 +12,7 @@ This section provides the auto-generated API reference for all public modules in
    twoD
    calibration
    steady_state
+   workflows
    settings_and_helpers
 
 Top-Level Package (``pymorgan``)

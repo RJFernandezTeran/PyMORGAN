@@ -83,17 +83,22 @@ print(pm.available_loaders())
     Format Token & Instrument / Origin & Description \\
     \midrule
     \code{PDAT} & PyMORGAN standard & Comma-separated averaged data (\code{.pdat}) + optional noise (\code{.pdatn}) \\
+    \code{HDF5} & PyMORGAN FAIR HDF5 & Compressed FAIR/NeXus HDF5 archive (\code{.h5}/\code{.hdf5}) with embedded provenance \\
     \code{UniGE\_fsTA} & UniGE fs-TA & Step-scan femtosecond TA (\code{.dat}) with C-engine vectorised parsing \\
     \code{UniGE\_nsTA} & UniGE ns-TA & Nanosecond TA (\code{.dat}) with delay, pixel, and TA signal columns \\
     \code{UoS\_IRpp} & Univ. of Sheffield & Transient IR (\code{.2D} and \code{.DT}), 96 or 192 pixels, single-scan detection \\
+    \code{RAL\_IRpp} & STFC / CLF & RAL LIFEtime 1D IR pump--probe CSV datasets \\
     \code{MESS\_TRIR} & MESS TRIR & State-modulated TRIR directories with inverse-variance scan averaging \\
     \code{MESS\_TRUVIS} & MESS TRUVIS & State-modulated transient UV-Vis directories \\
-    \code{HARPIA} & Light Conversion & Harpia ultrafast transient absorption files (\code{.dat}) \\
+    \code{HARPIA\_TA} & Light Conversion & HARPIA ultrafast transient absorption files (\code{.dat}) \\
     \code{Helios\_TA} & Ultrafast Systems & Helios TA files (\code{.csv}) with multi-scan discovery and interpolation \\
+    \code{Helios\_UFS} & Ultrafast Systems & Surface Xplorer binary datasets (\code{.ufs}) + \code{\_scan*.ufs} discovery \\
     \code{QuickControl\_PP} & PhaseTech Spectroscopy & QuickControl 1D pump--probe ASCII files (\code{.info} + \code{.scan} + \code{.spec}) with Magic Angle channel ordering \\
     \code{PyMESS\_PP} & PyMESS HDF5 & Broadband pump--probe HDF5 datasets (\code{.h5}), including slow-modulation states and multi-signal fast modulation \\
     \code{PyMESS\_Aniso} & PyMESS HDF5 & Slow-modulation polarization anisotropy HDF5 datasets (\code{.h5}) \\
     \code{PyMESS\_t2scan} & PyMESS HDF5 & 2D-IR population waiting-time ($t_2$) scan HDF5 datasets (\code{.h5}) \\
+    \code{Glotaran\_ASCII} & Glotaran / TIMP & Time- or wavelength-explicit ASCII files (\code{.ascii}) \\
+    \code{Glotaran\_NC} & Glotaran / pyglotaran & CF-1.8 NetCDF4/HDF5 datasets (\code{.nc}) via \code{h5py} dimension scales \\
     \code{Exported\_TXT} & Generic exports & Wavelength-vs-delay tabular text files (\code{.txt}) \\
     \bottomrule
   \end{tabular}

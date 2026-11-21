@@ -85,6 +85,14 @@ class TwoDTabMixin:
     @staticmethod
     def _commit_twoD_processed_snapshot(target_ds, work_ds) -> None:
         """Apply outputs computed on ``work_ds`` onto ``target_ds`` on the GUI thread."""
+        from ...provenance import _capture_snapshot
+
+        hist = getattr(target_ds, "_history", None)
+        pre_snap = None
+        if hist is not None and not hist.is_guarded:
+            hist.ensure_baseline(target_ds)
+            pre_snap = _capture_snapshot(target_ds)
+
         for cache_attr in (
             "_cls_cache",
             "_ivcls_cache",
@@ -115,9 +123,27 @@ class TwoDTabMixin:
             "pump",
             "Z_C",
             "_is_corrected",
+            "_process_params",
         ):
             if hasattr(work_ds, attr):
                 setattr(target_ds, attr, getattr(work_ds, attr))
+
+        work_hist = getattr(work_ds, "_history", None)
+        if (
+            hist is not None
+            and not hist.is_guarded
+            and work_hist is not None
+            and work_hist.steps
+        ):
+            last_step = work_hist.steps[-1]
+            hist.commit_coalesced_external(
+                target_ds,
+                last_step.op,
+                last_step.params,
+                pre_snap=pre_snap,
+                coalesce=True,
+                label=last_step.label,
+            )
 
     def _refresh_twoD_after_reprocess(self) -> None:
         """Refresh plot controls, preview contour, info panel, and phase diagnostics."""
@@ -145,6 +171,108 @@ class TwoDTabMixin:
         if hasattr(self, "_twoD_update_other_plot"):
             self._twoD_update_other_plot()
         self._twoD_update_phase_coeffs_display()
+        self._notify_twoD_history_changed(dirty=True)
+
+    def _notify_twoD_history_changed(self, *, dirty: bool = True) -> None:
+        """Refresh Edit menu enablement and session dirty indicator after 2D changes."""
+        if hasattr(self, "_update_edit_menu_state"):
+            self._update_edit_menu_state()
+        if dirty and not getattr(self, "_restoring_session", False):
+            if hasattr(self, "_set_project_dirty"):
+                self._set_project_dirty(True)
+
+    def _sync_twoD_ui_after_history_change(self) -> None:
+        """Synchronize 2D UI widgets, plot controls, and canvases after undo/redo/revert."""
+        ds = self.twoD_dataset
+        if ds is None:
+            return
+
+        sub_chk = getattr(self, "twoD_sub_scat_chk", None)
+        if sub_chk is not None:
+            sub_chk.blockSignals(True)
+            sub_chk.setChecked(bool(getattr(ds, "_is_corrected", False)))
+            sub_chk.blockSignals(False)
+
+        bkg_params = getattr(ds, "_bkg_params", None)
+        sub_delay = getattr(self, "twoD_sub_scat_delay", None)
+        if sub_delay is not None and isinstance(bkg_params, dict):
+            ref = bkg_params.get("reference")
+            if ref is not None:
+                sub_delay.blockSignals(True)
+                sub_delay.setValue(max(1, int(ref) + 1))
+                sub_delay.blockSignals(False)
+
+        shot_spin = getattr(self, "twoD_shot_rotation", None)
+        if shot_spin is not None:
+            shot_spin.blockSignals(True)
+            shot_spin.setValue(int(getattr(ds, "shot_rotation", 0) or 0))
+            shot_spin.blockSignals(False)
+
+        state_cbx = getattr(self, "twoD_state_cbx", None)
+        active_st = getattr(ds, "active_state", None)
+        if state_cbx is not None and active_st is not None:
+            idx = state_cbx.findText(str(active_st))
+            if idx >= 0:
+                state_cbx.blockSignals(True)
+                state_cbx.setCurrentIndex(idx)
+                state_cbx.blockSignals(False)
+
+        det_cbx = getattr(self, "_twoD_detector_cbx", None)
+        active_det = getattr(ds, "active_detector", None)
+        if det_cbx is not None and active_det is not None:
+            idx = det_cbx.findText(str(active_det))
+            if idx >= 0:
+                det_cbx.blockSignals(True)
+                det_cbx.setCurrentIndex(idx)
+                det_cbx.blockSignals(False)
+        det_probes = getattr(ds, "detector_probes", None)
+        if isinstance(det_probes, dict) and active_det in det_probes:
+            self._twoD_raw_probe = np.asarray(det_probes[active_det], dtype=float).copy()
+        det_lvls = (
+            ds.units.get("detector_cal_levels")
+            if isinstance(getattr(ds, "units", None), dict)
+            else None
+        )
+        if isinstance(det_lvls, dict) and active_det in det_lvls:
+            self._twoD_raw_cal_level = det_lvls[active_det]
+        pixel_spin = getattr(self, "twoD_other_pixel_spin", None)
+        if pixel_spin is not None and getattr(ds, "probe", None) is not None:
+            n_pixels = len(ds.probe)
+            pixel_spin.blockSignals(True)
+            pixel_spin.setRange(0, n_pixels)
+            if pixel_spin.value() > n_pixels:
+                pixel_spin.setValue(0)
+            pixel_spin.blockSignals(False)
+
+        self._update_spectral_diffusion_controls_state()
+        if self.twoD_plot_controls is not None:
+            lst_delays = getattr(self, "twoD_t2delay_lst", None)
+            active_idx = lst_delays.currentIndex().row() if lst_delays is not None else 0
+            if active_idx < 0 or active_idx >= len(ds.delays):
+                active_idx = max(0, len(ds.delays) - 1)
+            self.twoD_plot_controls.set_dataset(ds, active_idx)
+
+        self._twoD_preview_contour()
+        self._update_twoD_sample_info()
+        if hasattr(self, "_twoD_update_other_plot"):
+            self._twoD_update_other_plot()
+        self._twoD_update_phase_coeffs_display()
+        self._notify_twoD_history_changed(dirty=True)
+
+    def _on_twoD_scat_controls_changed(self, *_args) -> None:
+        """Apply 2D scatter background subtraction when UI controls are toggled/edited."""
+        if self.twoD_dataset is None:
+            return
+        sub_chk = getattr(self, "twoD_sub_scat_chk", None)
+        sub_delay = getattr(self, "twoD_sub_scat_delay", None)
+        do_correct = sub_chk.isChecked() if sub_chk is not None else False
+        ref_idx = (sub_delay.value() - 1) if (sub_delay is not None and do_correct) else None
+        self.twoD_dataset.background_correct(reference=ref_idx, do_correct=do_correct)
+        self._twoD_preview_contour()
+        self._update_twoD_sample_info()
+        if hasattr(self, "_twoD_update_other_plot"):
+            self._twoD_update_other_plot()
+        self._notify_twoD_history_changed(dirty=True)
 
     def _on_twoD_datatype_changed(self, text: str):
         self.twoD_refresh_dataset_list()
@@ -356,7 +484,7 @@ class TwoDTabMixin:
                     prev_delay = self.twoD_dataset.delays[curr_idx]
                     prev_idx = curr_idx
 
-        is_slow = dt not in ("P2DAT", "RAL_Proc")
+        is_slow = dt not in ("P2DAT", "RAL_Proc", "HDF5_2D")
         progress = None
         if is_slow:
             try:
@@ -381,15 +509,24 @@ class TwoDTabMixin:
             loaded_raw_cal_level = getattr(loaded_ds, "cal_level", None)
 
             has_neg_ref = (
-                dt != "P2DAT"
+                dt not in ("P2DAT", "RAL_Proc", "HDF5_2D")
                 and len(loaded_ds.delays) > 1
                 and float(np.nanmin(loaded_ds.delays)) < -0.05
             )
 
-            if loaded_ds is not None and (
-                loaded_ds.datatype in ("shaper", "interferometer", "FreqDomain")
-                or getattr(loaded_ds, "is_frequency_domain", False)
-            ):
+            needs_process = (
+                loaded_ds is not None
+                and dt not in ("P2DAT", "RAL_Proc")
+                and not (dt == "HDF5_2D" and getattr(loaded_ds, "Z_R", None) is not None)
+                and (
+                    loaded_ds.datatype in ("shaper", "interferometer", "FreqDomain")
+                    or (
+                        getattr(loaded_ds, "is_frequency_domain", False)
+                        and getattr(loaded_ds, "datatype", None) != "processed"
+                    )
+                )
+            )
+            if needs_process:
                 proc_kwargs = self._twoD_collect_process_kwargs()
                 proc_kwargs["shot_rotation"] = 0
                 auto_cal = getattr(self, "twoD_auto_cal_chk", None)
@@ -449,6 +586,8 @@ class TwoDTabMixin:
                 self._twoD_update_other_plot()
             if hasattr(self, "_update_embed_cal_h5_action_state"):
                 self._update_embed_cal_h5_action_state()
+            if hasattr(self, "_update_export_actions_state"):
+                self._update_export_actions_state()
             return
         finally:
             if progress is not None:
@@ -466,7 +605,7 @@ class TwoDTabMixin:
 
         is_freq_domain = bool(
             getattr(self.twoD_dataset, "is_frequency_domain", False)
-            or getattr(self.twoD_dataset, "datatype", None) == "FreqDomain"
+            or getattr(self.twoD_dataset, "datatype", None) in ("FreqDomain", "processed")
         )
         has_time_domain = dt not in ("P2DAT", "RAL_Proc") and not is_freq_domain
 
@@ -504,10 +643,21 @@ class TwoDTabMixin:
             if not has_time_domain:
                 self.twoD_other_btn_CAL.setChecked(True)
 
+        sub_chk_init = getattr(self, "twoD_sub_scat_chk", None)
+        do_init_bkg = sub_chk_init.isChecked() if sub_chk_init is not None else False
+        ref_init = (_scat_delay.value() - 1) if (_scat_delay is not None and do_init_bkg) else None
+        if do_init_bkg:
+            self.twoD_dataset.background_correct(reference=ref_init, do_correct=True)
+        elif hasattr(self.twoD_dataset, "_history"):
+            with self.twoD_dataset._history.suppress():
+                self.twoD_dataset.background_correct(reference=None, do_correct=False)
+        else:
+            self.twoD_dataset.background_correct(reference=None, do_correct=False)
+
         self._twoD_preview_contour()
         self._update_twoD_sample_info()
 
-        # Explicitly update the other plot after preview contour (which handles bkg correct)
+        # Explicitly update the other plot after preview contour
         if hasattr(self, "_twoD_update_other_plot"):
             self._twoD_update_other_plot()
 
@@ -515,6 +665,9 @@ class TwoDTabMixin:
         self._update_twoD_single_scan_controls()
         if hasattr(self, "_update_embed_cal_h5_action_state"):
             self._update_embed_cal_h5_action_state()
+        if hasattr(self, "_update_export_actions_state"):
+            self._update_export_actions_state()
+        self._notify_twoD_history_changed(dirty=False)
 
     def _update_twoD_single_scan_controls(self):
         """Show/hide and configure the 2D single-scan exploration controls."""
@@ -645,7 +798,7 @@ class TwoDTabMixin:
             ds.cal_level = base_cal_level
 
     def _update_twoD_state_selector(self):
-        """Show and populate the polarization/slow-modulation state selector if multiple states exist."""
+        """Show and populate the polarization state and multi-detector selectors if needed."""
         from PyQt6.QtWidgets import QComboBox, QLabel, QWidget
 
         state_names = (
@@ -655,35 +808,156 @@ class TwoDTabMixin:
         )
         has_states = bool(state_names and len(state_names) >= 2)
 
+        detector_names = (
+            getattr(self.twoD_dataset, "detector_names", None)
+            if self.twoD_dataset is not None
+            else None
+        )
+        has_detectors = bool(detector_names and len(detector_names) >= 2)
+        needs_row = has_states or has_detectors
+
         row_widget = getattr(self, "_twoD_state_row_widget", None)
-        if row_widget is None and has_states:
+        if row_widget is None and needs_row:
             parent_tab = getattr(self, "twoD_processplot_tab", None)
             if parent_tab is not None and parent_tab.layout() is not None:
                 row_widget = QWidget(parent_tab)
                 row_layout = QHBoxLayout(row_widget)
                 row_layout.setContentsMargins(0, 0, 0, 4)
-                lbl = QLabel("Polarization State:", row_widget)
-                cbx = QComboBox(row_widget)
-                cbx.currentTextChanged.connect(self._on_twoD_state_changed)
-                row_layout.addWidget(lbl)
-                row_layout.addWidget(cbx, 1)
+
+                state_lbl = QLabel("Polarization State:", row_widget)
+                state_cbx = QComboBox(row_widget)
+                state_cbx.currentTextChanged.connect(self._on_twoD_state_changed)
+                row_layout.addWidget(state_lbl)
+                row_layout.addWidget(state_cbx, 1)
+
+                det_lbl = QLabel("Detector:", row_widget)
+                det_cbx = QComboBox(row_widget)
+                det_cbx.currentTextChanged.connect(self._on_twoD_detector_changed)
+                row_layout.addWidget(det_lbl)
+                row_layout.addWidget(det_cbx, 1)
+
                 parent_tab.layout().insertWidget(0, row_widget)
                 self._twoD_state_row_widget = row_widget
-                self._twoD_state_cbx = cbx
+                self._twoD_state_lbl = state_lbl
+                self._twoD_state_cbx = state_cbx
+                self._twoD_detector_lbl = det_lbl
+                self._twoD_detector_cbx = det_cbx
 
         if row_widget is not None:
-            cbx = getattr(self, "_twoD_state_cbx", None)
-            if has_states and cbx is not None:
-                cbx.blockSignals(True)
-                cbx.clear()
-                cbx.addItems(state_names)
-                active_st = getattr(self.twoD_dataset, "active_state", None)
-                if active_st and active_st in state_names:
-                    cbx.setCurrentText(active_st)
-                cbx.blockSignals(False)
-                row_widget.setVisible(True)
-            else:
-                row_widget.setVisible(False)
+            state_lbl = getattr(self, "_twoD_state_lbl", None)
+            state_cbx = getattr(self, "_twoD_state_cbx", None)
+            det_lbl = getattr(self, "_twoD_detector_lbl", None)
+            det_cbx = getattr(self, "_twoD_detector_cbx", None)
+
+            if state_cbx is not None:
+                if has_states:
+                    state_cbx.blockSignals(True)
+                    state_cbx.clear()
+                    state_cbx.addItems(state_names)
+                    active_st = getattr(self.twoD_dataset, "active_state", None)
+                    if active_st and active_st in state_names:
+                        state_cbx.setCurrentText(active_st)
+                    state_cbx.blockSignals(False)
+                if state_lbl is not None:
+                    state_lbl.setVisible(has_states)
+                state_cbx.setVisible(has_states)
+
+            if det_cbx is not None:
+                if has_detectors:
+                    det_cbx.blockSignals(True)
+                    det_cbx.clear()
+                    det_cbx.addItems(detector_names)
+                    active_det = getattr(self.twoD_dataset, "active_detector", None)
+                    if active_det and active_det in detector_names:
+                        det_cbx.setCurrentText(active_det)
+                    det_cbx.blockSignals(False)
+                if det_lbl is not None:
+                    det_lbl.setVisible(has_detectors)
+                det_cbx.setVisible(has_detectors)
+
+            row_widget.setVisible(needs_row)
+
+    def _update_twoD_detector_selector(self):
+        """Alias that refreshes the top selector row including the Detector combo box."""
+        self._update_twoD_state_selector()
+
+    def _on_twoD_detector_changed(self, detector_name: str):
+        """Switch active 2D detector channel (probe + data cube) and refresh UI/FFT."""
+        target_ds = self.twoD_dataset
+        if not detector_name or target_ds is None:
+            return
+        if detector_name == getattr(target_ds, "active_detector", None):
+            return
+        self._cancel_pending_twoD_shot_rotation()
+        req_seq = self._next_twoD_op_seq()
+        if not target_ds.set_active_detector(detector_name):
+            return
+
+        self._twoD_raw_probe = (
+            target_ds.probe.copy() if getattr(target_ds, "probe", None) is not None else None
+        )
+        self._twoD_raw_cal_level = getattr(target_ds, "cal_level", None)
+
+        shot_spin = getattr(self, "twoD_shot_rotation", None)
+        if shot_spin is not None and not (
+            getattr(target_ds, "is_frequency_domain", False)
+            or getattr(target_ds, "datatype", None) in ("FreqDomain", "processed")
+        ):
+            shot_spin.blockSignals(True)
+            shot_spin.setValue(0)
+            shot_spin.blockSignals(False)
+
+        pixel_spin = getattr(self, "twoD_other_pixel_spin", None)
+        if pixel_spin is not None and getattr(target_ds, "probe", None) is not None:
+            n_pixels = len(target_ds.probe)
+            pixel_spin.blockSignals(True)
+            pixel_spin.setRange(0, n_pixels)
+            if pixel_spin.value() > n_pixels:
+                pixel_spin.setValue(0)
+            pixel_spin.blockSignals(False)
+
+        needs_process = target_ds.datatype in ("shaper", "interferometer", "FreqDomain") or (
+            getattr(target_ds, "is_frequency_domain", False)
+            and getattr(target_ds, "datatype", None) != "processed"
+        )
+        if needs_process:
+            proc_kwargs = self._twoD_collect_process_kwargs()
+            proc_kwargs["shot_rotation"] = 0
+            auto_cal = getattr(self, "twoD_auto_cal_chk", None)
+            autocalibrate_probe = auto_cal.isChecked() if auto_cal is not None else False
+            cal_probe_vec = (
+                self._get_cal_tab_probe_curve(len(target_ds.probe))
+                if autocalibrate_probe
+                else None
+            )
+            work_ds = target_ds.copy(deep=False)
+            self._run_twoD_dataset_process(
+                dataset=work_ds,
+                raw_probe=self._twoD_raw_probe,
+                raw_cal_level=self._twoD_raw_cal_level,
+                proc_kwargs_override=proc_kwargs,
+                autocalibrate_override=autocalibrate_probe,
+                cal_probe_override=cal_probe_vec,
+            )
+            if req_seq != getattr(self, "_twoD_op_seq", 0) or self.twoD_dataset is not target_ds:
+                return
+            self._commit_twoD_processed_snapshot(target_ds, work_ds)
+
+        if req_seq != getattr(self, "_twoD_op_seq", 0) or self.twoD_dataset is not target_ds:
+            return
+        self._update_spectral_diffusion_controls_state()
+        if self.twoD_plot_controls is not None:
+            lst_delays = getattr(self, "twoD_t2delay_lst", None)
+            active_idx = lst_delays.currentIndex().row() if lst_delays is not None else 0
+            if active_idx < 0 or active_idx >= len(target_ds.delays):
+                active_idx = max(0, len(target_ds.delays) - 1)
+            self.twoD_plot_controls.set_dataset(target_ds, active_idx)
+        self._twoD_preview_contour()
+        self._update_twoD_sample_info()
+        if hasattr(self, "_twoD_update_other_plot"):
+            self._twoD_update_other_plot()
+        self._twoD_update_phase_coeffs_display()
+        self._notify_twoD_history_changed(dirty=True)
 
     def _on_twoD_state_changed(self, state_name: str):
         """Switch active polarization/slow-modulation state on the 2D dataset and re-render."""
@@ -738,6 +1012,7 @@ class TwoDTabMixin:
         self._twoD_preview_contour()
         if hasattr(self, "_twoD_update_other_plot"):
             self._twoD_update_other_plot()
+        self._notify_twoD_history_changed(dirty=True)
 
     def _update_twoD_delay_list(self, prev_delay: float | None = None, prev_idx: int | None = None):
         """Populate the delays list and select the one closest to ``prev_delay`` (or the last delay if index exceeds new dataset delays)."""
@@ -865,15 +1140,18 @@ class TwoDTabMixin:
                     else:
                         spec = pm.load_spectrum(path)
                         self._twoD_overlay = (spec.x, spec.y)
+                    self._twoD_overlay_path = str(path)
                 except Exception as exc:
                     QMessageBox.warning(self, "Load overlay failed", str(exc))
                     self._twoD_overlay = None
+                    self._twoD_overlay_path = None
                     _include_ftir = getattr(self, "twoD_include_ftir_chk", None)
                     if _include_ftir is not None:
                         _include_ftir.blockSignals(True)
                         _include_ftir.setChecked(False)
                         _include_ftir.blockSignals(False)
             else:
+                self._twoD_overlay_path = None
                 _include_ftir = getattr(self, "twoD_include_ftir_chk", None)
                 if _include_ftir is not None:
                     _include_ftir.blockSignals(True)
@@ -881,6 +1159,7 @@ class TwoDTabMixin:
                     _include_ftir.blockSignals(False)
         else:
             self._twoD_overlay = None
+            self._twoD_overlay_path = None
         self._twoD_rerender_preview()
 
     def render_twoD_contour_frame(self, t2_val: float, ax=None, vmin=None, vmax=None):
@@ -1257,7 +1536,11 @@ class TwoDTabMixin:
                 self.twoD_dataset.datatype in ("shaper", "interferometer", "FreqDomain")
                 or getattr(self.twoD_dataset, "is_frequency_domain", False)
             ):
-                self._run_twoD_dataset_process()
+                if hasattr(self.twoD_dataset, "_history"):
+                    with self.twoD_dataset._history.suppress():
+                        self._run_twoD_dataset_process()
+                else:
+                    self._run_twoD_dataset_process()
         except Exception as exc:
             QMessageBox.warning(self, "Recalc. average", str(exc))
             return
@@ -1277,6 +1560,7 @@ class TwoDTabMixin:
         self.statusBar().showMessage(
             f"Recalculated 2D average over {len(idx)} scan(s): {text}"
         )
+        self._notify_twoD_history_changed(dirty=True)
 
     def _twoD_interactive(self) -> bool:
         chk = getattr(self, "twoD_interactive_chk", None)
@@ -2562,6 +2846,7 @@ class TwoDTabMixin:
         dlg = TwoDSubtractionDialog(self, self.twoD_dataset)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self._twoD_rerender_preview()
+            self._notify_twoD_history_changed(dirty=True)
 
     def _open_2d_gaussian_fit_dialog(self):
         """Open the interactive 2D Gaussian fitting dialog."""
@@ -3288,17 +3573,10 @@ class TwoDTabMixin:
         self.twoDaxes.canvas.draw_idle()
 
     def _twoD_preview_contour(self):
-        """Draw the 2D contour map on the twoDaxes canvas."""
+        """Draw the 2D contour map on the twoDaxes canvas without mutating history."""
         if self.twoD_dataset is None or self.twoD_plot_controls is None:
             return
         pm.apply_style()
-
-        # Background subtraction (scatter subtraction)
-        sub_chk = getattr(self, "twoD_sub_scat_chk", None)
-        sub_delay = getattr(self, "twoD_sub_scat_delay", None)
-        do_correct = sub_chk.isChecked() if sub_chk is not None else False
-        ref_idx = (sub_delay.value() - 1) if (sub_delay is not None and do_correct) else None
-        self.twoD_dataset.background_correct(reference=ref_idx, do_correct=do_correct)
 
         w, ax = self._twoD_fresh_axis()
 

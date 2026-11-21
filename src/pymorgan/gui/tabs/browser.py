@@ -14,13 +14,20 @@ os.environ.setdefault("QT_API", "pyqt6")
 
 from pathlib import Path
 
+from PyQt6.QtCore import QStringListModel, Qt
 from PyQt6.QtGui import (
     QBrush,
     QColor,
+    QKeySequence,
+    QShortcut,
     QStandardItem,
 )
 from PyQt6.QtWidgets import (
+    QCompleter,
     QFileDialog,
+    QInputDialog,
+    QLineEdit,
+    QVBoxLayout,
 )
 
 import pymorgan as pm
@@ -41,7 +48,93 @@ from ..mw_common import (
 class DatasetBrowserMixin:
     """Root-folder navigation and the 1D / 2D dataset list widgets."""
 
+    def _setup_browser_controls(self):
+        """Attach RootDir MRU completer and inject zero-I/O dataset filter bars."""
+        self._cached_1d_entries = None
+        self._cached_2d_entries = None
+
+        # RootDir MRU QCompleter
+        root_field = getattr(self, "RootDir_field", None)
+        if root_field is not None:
+            self._rootdir_completer_model = QStringListModel(self)
+            completer = QCompleter(self._rootdir_completer_model, root_field)
+            completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+            completer.setFilterMode(Qt.MatchFlag.MatchContains)
+            completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+            root_field.setCompleter(completer)
+            self._rootdir_completer = completer
+            self._sync_rootdir_completer()
+
+        # 1D filter bar above PP_datafolderlist_lst
+        grid = getattr(self, "gridLayout", None)
+        lst1 = getattr(self, "PP_datafolderlist_lst", None)
+        if grid is not None and lst1 is not None and getattr(self, "PP_filter_edit", None) is None:
+            idx = grid.indexOf(lst1)
+            if idx >= 0:
+                row, col, rspan, cspan = grid.getItemPosition(idx)
+                grid.removeWidget(lst1)
+                self.PP_filter_edit = QLineEdit(self)
+                self.PP_filter_edit.setObjectName("PP_filter_edit")
+                self.PP_filter_edit.setPlaceholderText("Filter datasets… (Ctrl+F)")
+                self.PP_filter_edit.setClearButtonEnabled(True)
+                self.PP_filter_edit.textChanged.connect(self._apply_1d_browser_filter)
+                esc1 = QShortcut(QKeySequence(Qt.Key.Key_Escape), self.PP_filter_edit)
+                esc1.setContext(Qt.ShortcutContext.WidgetShortcut)
+                esc1.activated.connect(self.PP_filter_edit.clear)
+                grid.addWidget(self.PP_filter_edit, row, col, 1, cspan)
+                grid.addWidget(lst1, row + 1, col, rspan, cspan)
+
+        # 2D filter bar above twoD_datafolderlist_lst
+        sel2 = getattr(self, "twoD_selectors_layout", None)
+        lst2 = getattr(self, "twoD_datafolderlist_lst", None)
+        if sel2 is not None and lst2 is not None and getattr(self, "twoD_filter_edit", None) is None:
+            idx2 = sel2.indexOf(lst2)
+            if idx2 >= 0:
+                sel2.removeWidget(lst2)
+                vbox = QVBoxLayout()
+                vbox.setContentsMargins(0, 0, 0, 0)
+                vbox.setSpacing(4)
+                self.twoD_filter_edit = QLineEdit(self)
+                self.twoD_filter_edit.setObjectName("twoD_filter_edit")
+                self.twoD_filter_edit.setPlaceholderText("Filter datasets… (Ctrl+F)")
+                self.twoD_filter_edit.setClearButtonEnabled(True)
+                self.twoD_filter_edit.textChanged.connect(self._apply_2d_browser_filter)
+                esc2 = QShortcut(QKeySequence(Qt.Key.Key_Escape), self.twoD_filter_edit)
+                esc2.setContext(Qt.ShortcutContext.WidgetShortcut)
+                esc2.activated.connect(self.twoD_filter_edit.clear)
+                vbox.addWidget(self.twoD_filter_edit)
+                vbox.addWidget(lst2, 1)
+                sel2.insertLayout(idx2, vbox, 2)
+
+    def _sync_rootdir_completer(self):
+        """Refresh the RootDir QCompleter list from active ``settings.recent_dirs``."""
+        model = getattr(self, "_rootdir_completer_model", None)
+        if model is None:
+            return
+        dirs = list(getattr(pm.get_settings(), "recent_dirs", []) or [])
+        model.setStringList(dirs)
+
+    def _focus_dataset_filter(self):
+        """Focus the active tab's dataset filter box (triggered by Ctrl+F)."""
+        tabs = getattr(self, "MainTabs", None)
+        is_2d = tabs is not None and tabs.currentIndex() == 1
+        target = getattr(self, "twoD_filter_edit" if is_2d else "PP_filter_edit", None)
+        if target is not None:
+            target.setFocus()
+            target.selectAll()
+
+    def _record_current_rootdir(self):
+        """Record valid current RootDir in MRU settings and refresh recent UI."""
+        root = self._rootdir_text()
+        if not root or not Path(root).is_dir():
+            return
+        pm.settings.record_recent_dir(root)
+        self._sync_rootdir_completer()
+        if hasattr(self, "_rebuild_recent_dirs_menu"):
+            self._rebuild_recent_dirs_menu()
+
     def _on_rootdir_changed(self):
+        self._record_current_rootdir()
         self.refresh_dataset_list()
         self.twoD_refresh_dataset_list()
 
@@ -240,25 +333,45 @@ class DatasetBrowserMixin:
         ``[name]`` and is entered by double-click. File-based formats (e.g.
         PDAT) additionally list matching data files in the current folder.
         """
-        self._folder_model.clear()
         root = self._rootdir_text()
         if not root:
+            self._cached_1d_entries = None
+            self._folder_model.clear()
             return
         folder = Path(root)
         if not folder.is_dir():
+            self._cached_1d_entries = None
+            self._folder_model.clear()
             self.statusBar().showMessage(f"Not a folder: {root}")
             return
         dt = self._current_datatype()
-        self._add_dir_item("..", folder.parent)
         entries, n_datasets = self._scan_dataset_folder(folder, dt, twoD=False)
-        for item in entries:
-            label, path, is_dir = item[0], item[1], item[2]
-            is_valid = item[3] if len(item) > 3 else True
-            if is_dir:
-                self._add_dir_item(label, path)
-            else:
-                self._add_dataset_item(label, path, is_valid=is_valid)
-        self.statusBar().showMessage(f"{n_datasets} dataset(s) of type {dt} in {folder.name}")
+        self._cached_1d_entries = (folder, dt, n_datasets, entries)
+        self._apply_1d_browser_filter()
+
+    def _apply_1d_browser_filter(self):
+        """Filter cached 1D browser entries in-memory without touching disk."""
+        cached = getattr(self, "_cached_1d_entries", None)
+        if not cached:
+            self._folder_model.clear()
+            return
+        folder, dt, n_datasets, entries = cached
+        edit = getattr(self, "PP_filter_edit", None)
+        needle = edit.text().strip().lower() if edit is not None else ""
+        self._populate_filtered_browser_model(
+            self._folder_model,
+            getattr(self, "PP_datafolderlist_lst", None),
+            folder,
+            entries,
+            needle,
+        )
+        if needle:
+            shown = max(0, self._folder_model.rowCount() - 1)
+            self.statusBar().showMessage(
+                f"Showing {shown} matching item(s) ({n_datasets} {dt} dataset(s) in {folder.name})"
+            )
+        else:
+            self.statusBar().showMessage(f"{n_datasets} dataset(s) of type {dt} in {folder.name}")
 
     def _on_dataset_activated(self, index, _previous=None):
         if index is None or not index.isValid():
@@ -309,26 +422,66 @@ class DatasetBrowserMixin:
 
     def twoD_refresh_dataset_list(self):
         """Populate the 2D file list with sub-folders and 2D data files."""
-        self._twoD_folder_model.clear()
         root = self._rootdir_text()
         if not root:
+            self._cached_2d_entries = None
+            self._twoD_folder_model.clear()
             return
         folder = Path(root)
         if not folder.is_dir():
+            self._cached_2d_entries = None
+            self._twoD_folder_model.clear()
             self.statusBar().showMessage(f"Not a folder: {root}")
             return
         dt = self._current_twoD_datatype()
-        model = self._twoD_folder_model
-        self._add_dir_item("..", folder.parent, model)
         entries, n_datasets = self._scan_dataset_folder(folder, dt, twoD=True)
-        for item in entries:
-            label, path, is_dir = item[0], item[1], item[2]
-            is_valid = item[3] if len(item) > 3 else True
-            if is_dir:
-                self._add_dir_item(label, path, model)
-            else:
-                self._add_dataset_item(label, path, model, is_valid=is_valid)
-        self.statusBar().showMessage(f"{n_datasets} 2D dataset(s) of type {dt} in {folder.name}")
+        self._cached_2d_entries = (folder, dt, n_datasets, entries)
+        self._apply_2d_browser_filter()
+
+    def _apply_2d_browser_filter(self):
+        """Filter cached 2D browser entries in-memory without touching disk."""
+        cached = getattr(self, "_cached_2d_entries", None)
+        if not cached:
+            self._twoD_folder_model.clear()
+            return
+        folder, dt, n_datasets, entries = cached
+        edit = getattr(self, "twoD_filter_edit", None)
+        needle = edit.text().strip().lower() if edit is not None else ""
+        self._populate_filtered_browser_model(
+            self._twoD_folder_model,
+            getattr(self, "twoD_datafolderlist_lst", None),
+            folder,
+            entries,
+            needle,
+        )
+        if needle:
+            shown = max(0, self._twoD_folder_model.rowCount() - 1)
+            self.statusBar().showMessage(
+                f"Showing {shown} matching 2D item(s) ({n_datasets} {dt} dataset(s) in {folder.name})"
+            )
+        else:
+            self.statusBar().showMessage(f"{n_datasets} 2D dataset(s) of type {dt} in {folder.name}")
+
+    def _populate_filtered_browser_model(self, model, view, folder: Path, entries, needle: str):
+        """Populate ``model`` from cached ``entries``, always retaining ``[..]``."""
+        sel = view.selectionModel() if view is not None else None
+        if sel is not None:
+            sel.blockSignals(True)
+        try:
+            model.clear()
+            self._add_dir_item("..", folder.parent, model)
+            for item in entries:
+                label, path, is_dir = item[0], item[1], item[2]
+                is_valid = item[3] if len(item) > 3 else True
+                if needle and needle not in str(label).lower():
+                    continue
+                if is_dir:
+                    self._add_dir_item(label, path, model)
+                else:
+                    self._add_dataset_item(label, path, model, is_valid=is_valid)
+        finally:
+            if sel is not None:
+                sel.blockSignals(False)
 
     def _on_twoD_dataset_activated(self, index, _previous=None):
         if index is None or not index.isValid():
@@ -376,12 +529,12 @@ class DatasetBrowserMixin:
         return None
 
     def open_external_path(self, path: str | os.PathLike, *, set_rootdir: bool = True) -> bool:
-        """Open a folder or dataset file (such as ``.pdat`` / ``.p2dat``) passed externally.
+        """Open a folder, dataset, steady-state spectrum, project, or recipe passed externally.
 
-        When ``path`` is a file and ``set_rootdir`` is true, sets ``RootDir_field``
-        to the file's parent directory, selects the appropriate tab and data type
-        for known file extensions (``.pdat`` -> 1D/PDAT, ``.p2dat`` -> 2D/P2DAT),
-        highlights the file in the dataset browser, and loads it.
+        Uses :func:`pymorgan.detect_format` to classify ``path`` (supporting all
+        1D, 2D, steady-state, ``.pmproj``, and ``.pmrecipe.toml`` targets). If multiple
+        formats tie at the highest confidence, prompts via ``QInputDialog``. Plain
+        directories without a dataset match open in the root browser folder.
         """
         raw = Path(path).expanduser()
         try:
@@ -392,23 +545,18 @@ class DatasetBrowserMixin:
         if not target.exists():
             return False
 
-        if target.is_dir():
-            if hasattr(self, "RootDir_field") and self.RootDir_field is not None:
-                self.RootDir_field.setText(str(target))
-            self._on_rootdir_changed()
-            return True
-
-        if not target.is_file():
-            return False
-
-        if target.suffix.lower() == ".pdatn":
+        if target.is_file() and target.suffix.lower() == ".pdatn":
             sibling = target.with_suffix(".pdat")
             if sibling.is_file():
                 target = sibling
 
-        suffix = target.suffix.lower()
-        if set_rootdir and hasattr(self, "RootDir_field") and self.RootDir_field is not None:
-            self.RootDir_field.setText(str(target.parent))
+        matches = pm.detect_format(target, return_all=True) or []
+
+        if target.is_dir() and not matches:
+            if hasattr(self, "RootDir_field") and self.RootDir_field is not None:
+                self.RootDir_field.setText(str(target))
+            self._on_rootdir_changed()
+            return True
 
         tabs = getattr(self, "MainTabs", None)
 
@@ -422,7 +570,14 @@ class DatasetBrowserMixin:
             refresh_single,
             loader,
             result_attr: str,
+            resolved_path: Path,
         ) -> bool:
+            if (
+                set_rootdir
+                and hasattr(self, "RootDir_field")
+                and self.RootDir_field is not None
+            ):
+                self.RootDir_field.setText(str(resolved_path.parent))
             combo = getattr(self, combo_name, None)
             if combo is not None:
                 combo.blockSignals(True)
@@ -431,42 +586,120 @@ class DatasetBrowserMixin:
                 finally:
                     combo.blockSignals(False)
             if tab_idx == 1 and hasattr(self, "_set_twoD_phasing_tab_visible"):
-                self._set_twoD_phasing_tab_visible(False)
+                self._set_twoD_phasing_tab_visible(dt not in ("P2DAT", "RAL_Proc"))
             if tabs is not None and tabs.currentIndex() != tab_idx:
                 tabs.setCurrentIndex(tab_idx)
             if set_rootdir:
                 self._on_rootdir_changed()
             else:
                 refresh_single()
-            matched = self._find_and_select_browser_item(view_name, model_name, target)
-            loader(matched or str(target), data_type=dt)
+            matched = self._find_and_select_browser_item(view_name, model_name, resolved_path)
+            loader(matched or str(resolved_path), data_type=dt)
             return getattr(self, result_attr, None) is not None
 
-        if suffix == ".pdat":
-            return _open_typed(
-                combo_name="PP_datatype_cbx",
-                dt="PDAT",
-                tab_idx=0,
-                view_name="PP_datafolderlist_lst",
-                model_name="_folder_model",
-                refresh_single=self.refresh_dataset_list,
-                loader=self.load_path,
-                result_attr="dataset",
-            )
+        if matches:
+            top_conf = matches[0].confidence
+            tied = [m for m in matches if abs(m.confidence - top_conf) <= 1e-6]
+            if len(tied) >= 2:
+                labels = [f"{m.dimension} — {m.data_type} ({m.reason})" for m in tied]
+                choice, ok = QInputDialog.getItem(
+                    self,
+                    "Select Data Format",
+                    f"Multiple formats matched '{target.name}' with equal confidence:",
+                    labels,
+                    0,
+                    False,
+                )
+                if not ok:
+                    return False
+                chosen = tied[labels.index(choice)]
+            else:
+                chosen = matches[0]
 
-        if suffix == ".p2dat":
-            return _open_typed(
-                combo_name="twoD_datatype_cbx",
-                dt="P2DAT",
-                tab_idx=1,
-                view_name="twoD_datafolderlist_lst",
-                model_name="_twoD_folder_model",
-                refresh_single=self.twoD_refresh_dataset_list,
-                loader=self.twoD_load_path,
-                result_attr="twoD_dataset",
-            )
+            resolved = chosen.resolved_path
+            if chosen.dimension == "1D":
+                return _open_typed(
+                    combo_name="PP_datatype_cbx",
+                    dt=chosen.data_type,
+                    tab_idx=0,
+                    view_name="PP_datafolderlist_lst",
+                    model_name="_folder_model",
+                    refresh_single=self.refresh_dataset_list,
+                    loader=self.load_path,
+                    result_attr="dataset",
+                    resolved_path=resolved,
+                )
 
-        if set_rootdir:
+            if chosen.dimension == "2D":
+                return _open_typed(
+                    combo_name="twoD_datatype_cbx",
+                    dt=chosen.data_type,
+                    tab_idx=1,
+                    view_name="twoD_datafolderlist_lst",
+                    model_name="_twoD_folder_model",
+                    refresh_single=self.twoD_refresh_dataset_list,
+                    loader=self.twoD_load_path,
+                    result_attr="twoD_dataset",
+                    resolved_path=resolved,
+                )
+
+            if chosen.dimension == "steady_state":
+                kind = "emission" if "em" in chosen.data_type.lower() else "absorption"
+                try:
+                    spec = pm.load_spectrum(str(resolved), kind)
+                    overlay = spec.as_overlay_dict()
+                except Exception:
+                    return False
+                if kind == "absorption":
+                    self._ss_abs = overlay
+                    self._ss_abs_spectrum = spec
+                    led = getattr(self, "PP_led_SSabs", None)
+                else:
+                    self._ss_em = overlay
+                    self._ss_em_spectrum = spec
+                    led = getattr(self, "PP_led_SSem", None)
+                if led is not None:
+                    led.set_state("loaded")
+                act_plot_ss = getattr(self, "actionPlotSteadyState", None)
+                if act_plot_ss is not None:
+                    act_plot_ss.setEnabled(True)
+                if tabs is not None and tabs.currentIndex() != 0:
+                    tabs.setCurrentIndex(0)
+                if hasattr(self, "statusBar"):
+                    self.statusBar().showMessage(
+                        f"Loaded steady-state {kind} ({resolved.name})"
+                    )
+                return True
+
+            if chosen.dimension == "project":
+                for handler_name in ("open_project", "_open_project_file", "load_project"):
+                    handler = getattr(self, handler_name, None)
+                    if callable(handler):
+                        handler(str(resolved))
+                        return True
+                if hasattr(self, "statusBar"):
+                    self.statusBar().showMessage(
+                        f"Detected PyMORGAN project file: {resolved.name}"
+                    )
+                return True
+
+            if chosen.dimension == "recipe":
+                for handler_name in ("open_recipe", "_open_recipe_file", "load_recipe"):
+                    handler = getattr(self, handler_name, None)
+                    if callable(handler):
+                        handler(str(resolved))
+                        return True
+                if hasattr(self, "statusBar"):
+                    self.statusBar().showMessage(
+                        f"Detected PyMORGAN recipe file: {resolved.name}"
+                    )
+                return True
+
+        if not target.is_file():
+            return False
+
+        if set_rootdir and hasattr(self, "RootDir_field") and self.RootDir_field is not None:
+            self.RootDir_field.setText(str(target.parent))
             self._on_rootdir_changed()
 
         if tabs is not None and tabs.currentIndex() == 1:

@@ -19,6 +19,7 @@ from typing import Any, Literal
 
 import numpy as np
 
+from ..provenance import HistoryManager, ProcessingStep, generate_python_script
 from ..settings import DeltaAUnits, Settings, get_settings
 from . import process
 from .load import get_loader
@@ -139,6 +140,9 @@ class Dataset1D:
         self._scatter_removal_params = None
         self._scatter_removal_result = None
         self._orig_Zstdv = None
+        self._bkg_params: dict[str, Any] | None = None
+        self._loader_kwargs: dict[str, Any] = {}
+        self._history = HistoryManager()
 
     @property
     def Units(self) -> dict:
@@ -160,6 +164,22 @@ class Dataset1D:
         ``slowmod`` and ``anisotropy`` for the MESS_TRIR reader). Loaders that
         take no options simply receive none.
         """
+        if data_type == "HDF5" and not loader_kwargs:
+            import h5py
+
+            p = Path(path)
+            if p.is_file() and h5py.is_hdf5(p):
+                with h5py.File(p, "r") as f:
+                    if "delays" in f and "Zavg_R" in f:
+                        from .load import load_1D_hdf5
+
+                        ds = load_1D_hdf5(p)
+                        if ds.data_type and "original_data_type" not in ds.units:
+                            ds.units["original_data_type"] = ds.data_type
+                        ds.data_type = data_type
+                        ds.source = str(path)
+                        return ds
+
         loader = get_loader(data_type)
         res = loader(str(path), **loader_kwargs)
         counts = None
@@ -189,7 +209,7 @@ class Dataset1D:
             except Exception:
                 pass
 
-        return cls(
+        ds = cls(
             Zavg_R,
             delays,
             probe,
@@ -202,6 +222,8 @@ class Dataset1D:
             scan_ids=scan_ids,
             counts=counts,
         )
+        ds._loader_kwargs = dict(loader_kwargs)
+        return ds
 
     # ----------------------------------------------------------------- #
     #                            Properties                             #
@@ -234,6 +256,63 @@ class Dataset1D:
             return False
         z = np.asarray(z)
         return z.ndim == 4 and z.shape[3] >= 1 and bool(np.any(np.isfinite(z)))
+
+    # ----------------------------------------------------------------- #
+    #                       Provenance & Undo/Redo                      #
+    # ----------------------------------------------------------------- #
+    @property
+    def history(self) -> list[ProcessingStep]:
+        """Ordered list of recorded processing steps applied to this dataset."""
+        return self._history.steps
+
+    @property
+    def can_undo(self) -> bool:
+        """Whether an undo snapshot is available."""
+        return self._history.can_undo
+
+    @property
+    def can_redo(self) -> bool:
+        """Whether a redo snapshot is available."""
+        return self._history.can_redo
+
+    def undo(self) -> bool:
+        """Undo the most recent processing step (or coalesced tweak)."""
+        return self._history.undo(self)
+
+    def redo(self) -> bool:
+        """Redo the most recently undone processing step."""
+        return self._history.redo(self)
+
+    def reset_to_raw(self) -> bool:
+        """Restore the raw initial dataset state and clear processing history."""
+        return self._history.reset_to_raw(self)
+
+    def revert_to_step(self, step_index: int) -> bool:
+        """Revert the dataset to the state immediately after ``step_index`` (``-1`` = raw)."""
+        return self._history.revert_to(self, step_index)
+
+    def history_to_dicts(self) -> list[dict[str, Any]]:
+        """Serialize processing history to JSON/TOML-friendly dictionaries."""
+        return self._history.to_dicts()
+
+    def load_history_from_dicts(self, items: Sequence[dict[str, Any]]) -> None:
+        """Restore processing history metadata from serialized dictionaries."""
+        self._history.load_dicts(items)
+
+    def to_python_script(
+        self,
+        *,
+        include_plot: bool = True,
+        include_settings: bool = True,
+        plot_kwargs: dict | None = None,
+    ) -> str:
+        """Generate a standalone Python script reproducing this dataset's pipeline."""
+        return generate_python_script(
+            self,
+            include_plot=include_plot,
+            include_settings=include_settings,
+            plot_kwargs=plot_kwargs,
+        )
 
     def scan_signal(self, detector: int = 0) -> np.ndarray:
         """Return the single-scan signal ``[Ndelays x Npixels x Nscans]``.
@@ -301,6 +380,18 @@ class Dataset1D:
         sc_res = getattr(self, "_scatter_removal_result", None)
         new_ds._scatter_removal_result = _copy.deepcopy(sc_res) if deep else sc_res
         new_ds._orig_Zstdv = _dup(getattr(self, "_orig_Zstdv", None))
+        new_ds.chirp_fit = _copy.deepcopy(self.chirp_fit) if deep else self.chirp_fit
+        bkg_p = getattr(self, "_bkg_params", None)
+        new_ds._bkg_params = _copy.deepcopy(bkg_p) if deep else bkg_p
+        lk = getattr(self, "_loader_kwargs", None)
+        new_ds._loader_kwargs = _copy.deepcopy(lk) if (deep and lk is not None) else dict(lk or {})
+        new_ds._solvent_dataset = getattr(self, "_solvent_dataset", None)
+        new_ds._solvent_dt = _dup(getattr(self, "_solvent_dt", None)) if isinstance(getattr(self, "_solvent_dt", None), np.ndarray) else getattr(self, "_solvent_dt", None)
+        new_ds._solvent_scale = _dup(getattr(self, "_solvent_scale", None)) if isinstance(getattr(self, "_solvent_scale", None), np.ndarray) else getattr(self, "_solvent_scale", None)
+        new_ds._shockwave_pixels = _dup(getattr(self, "_shockwave_pixels", None)) if isinstance(getattr(self, "_shockwave_pixels", None), np.ndarray) else getattr(self, "_shockwave_pixels", None)
+        new_ds._shockwave_trace = _dup(getattr(self, "_shockwave_trace", None)) if isinstance(getattr(self, "_shockwave_trace", None), np.ndarray) else getattr(self, "_shockwave_trace", None)
+        hist = getattr(self, "_history", None)
+        new_ds._history = hist.copy(deep=deep) if hist is not None else HistoryManager()
         return new_ds
 
     def crop(
@@ -315,60 +406,84 @@ class Dataset1D:
         Mutates the dataset in-place and returns ``self`` for chaining.
         To keep the original dataset intact, call ``dataset.copy().crop(...)``.
         """
-        if tmin is not None or tmax is not None:
-            t_low = -np.inf if tmin is None else float(tmin)
-            t_high = np.inf if tmax is None else float(tmax)
-            t_mask = (self.delays >= t_low) & (self.delays <= t_high)
-            if not np.any(t_mask):
-                raise ValueError(f"No delay points fall in range [{t_low}, {t_high}]")
+        if tmin is None and tmax is None and probe_min is None and probe_max is None:
+            return self
 
-            self.delays = self.delays[t_mask]
-            if self.Zavg_R is not None:
-                self.Zavg_R = self.Zavg_R[t_mask]
-            if self.Zavg_C is not None:
-                self.Zavg_C = self.Zavg_C[t_mask]
-            if self.Zss_R is not None:
-                self.Zss_R = self.Zss_R[t_mask]
-            if self.Zss_C is not None:
-                self.Zss_C = self.Zss_C[t_mask]
-            if self.Zstdv is not None:
-                self.Zstdv = self.Zstdv[t_mask]
+        def _do():
+            if tmin is not None or tmax is not None:
+                t_low = -np.inf if tmin is None else float(tmin)
+                t_high = np.inf if tmax is None else float(tmax)
+                t_mask = (self.delays >= t_low) & (self.delays <= t_high)
+                if not np.any(t_mask):
+                    raise ValueError(f"No delay points fall in range [{t_low}, {t_high}]")
 
-        if probe_min is not None or probe_max is not None:
-            p_low = -np.inf if probe_min is None else float(probe_min)
-            p_high = np.inf if probe_max is None else float(probe_max)
+                self.delays = self.delays[t_mask]
+                if self.Zavg_R is not None:
+                    self.Zavg_R = self.Zavg_R[t_mask]
+                if self.Zavg_C is not None:
+                    self.Zavg_C = self.Zavg_C[t_mask]
+                if self.Zss_R is not None:
+                    self.Zss_R = self.Zss_R[t_mask]
+                if self.Zss_C is not None:
+                    self.Zss_C = self.Zss_C[t_mask]
+                if self.Zstdv is not None:
+                    self.Zstdv = self.Zstdv[t_mask]
 
-            p_probe = self.probe[:, 0] if self.probe.ndim > 1 else self.probe
-            p_mask = (p_probe >= p_low) & (p_probe <= p_high)
-            if not np.any(p_mask):
-                raise ValueError(f"No probe points fall in range [{p_low}, {p_high}]")
+            if probe_min is not None or probe_max is not None:
+                p_low = -np.inf if probe_min is None else float(probe_min)
+                p_high = np.inf if probe_max is None else float(probe_max)
 
-            self.probe = self.probe[p_mask] if self.probe.ndim == 1 else self.probe[p_mask, :]
-            if self.Zavg_R is not None:
-                self.Zavg_R = self.Zavg_R[:, p_mask] if self.Zavg_R.ndim == 2 else self.Zavg_R[:, p_mask, :]
-            if self.Zavg_C is not None:
-                self.Zavg_C = self.Zavg_C[:, p_mask] if self.Zavg_C.ndim == 2 else self.Zavg_C[:, p_mask, :]
-            if self.Zss_R is not None:
-                if self.Zss_R.ndim == 4:
-                    self.Zss_R = self.Zss_R[:, p_mask, :, :]
-                elif self.Zss_R.ndim == 3:
-                    self.Zss_R = self.Zss_R[:, p_mask, :]
-            if self.Zss_C is not None:
-                if self.Zss_C.ndim == 4:
-                    self.Zss_C = self.Zss_C[:, p_mask, :, :]
-                elif self.Zss_C.ndim == 3:
-                    self.Zss_C = self.Zss_C[:, p_mask, :]
-            if self.Zstdv is not None:
-                self.Zstdv = self.Zstdv[:, p_mask] if self.Zstdv.ndim == 2 else self.Zstdv[:, p_mask, :]
-            if self.bkg_avg is not None:
-                self.bkg_avg = self.bkg_avg[p_mask] if self.bkg_avg.ndim == 1 else self.bkg_avg[p_mask, :]
-            if self.bkg_ss is not None:
-                self.bkg_ss = self.bkg_ss[p_mask] if self.bkg_ss.ndim == 1 else self.bkg_ss[p_mask, :]
+                p_probe = self.probe[:, 0] if self.probe.ndim > 1 else self.probe
+                p_mask = (p_probe >= p_low) & (p_probe <= p_high)
+                if not np.any(p_mask):
+                    raise ValueError(f"No probe points fall in range [{p_low}, {p_high}]")
 
-        if tmin is not None or tmax is not None or probe_min is not None or probe_max is not None:
+                self.probe = self.probe[p_mask] if self.probe.ndim == 1 else self.probe[p_mask, :]
+                if self.Zavg_R is not None:
+                    self.Zavg_R = (
+                        self.Zavg_R[:, p_mask] if self.Zavg_R.ndim == 2 else self.Zavg_R[:, p_mask, :]
+                    )
+                if self.Zavg_C is not None:
+                    self.Zavg_C = (
+                        self.Zavg_C[:, p_mask] if self.Zavg_C.ndim == 2 else self.Zavg_C[:, p_mask, :]
+                    )
+                if self.Zss_R is not None:
+                    if self.Zss_R.ndim == 4:
+                        self.Zss_R = self.Zss_R[:, p_mask, :, :]
+                    elif self.Zss_R.ndim == 3:
+                        self.Zss_R = self.Zss_R[:, p_mask, :]
+                if self.Zss_C is not None:
+                    if self.Zss_C.ndim == 4:
+                        self.Zss_C = self.Zss_C[:, p_mask, :, :]
+                    elif self.Zss_C.ndim == 3:
+                        self.Zss_C = self.Zss_C[:, p_mask, :]
+                if self.Zstdv is not None:
+                    self.Zstdv = (
+                        self.Zstdv[:, p_mask] if self.Zstdv.ndim == 2 else self.Zstdv[:, p_mask, :]
+                    )
+                if self.bkg_avg is not None:
+                    self.bkg_avg = (
+                        self.bkg_avg[p_mask] if self.bkg_avg.ndim == 1 else self.bkg_avg[p_mask, :]
+                    )
+                if self.bkg_ss is not None:
+                    self.bkg_ss = (
+                        self.bkg_ss[p_mask] if self.bkg_ss.ndim == 1 else self.bkg_ss[p_mask, :]
+                    )
+
             self._scatter_removal_result = None
             self._scatter_removal_params = None
 
+        params = {
+            k: float(v)
+            for k, v in (
+                ("tmin", tmin),
+                ("tmax", tmax),
+                ("probe_min", probe_min),
+                ("probe_max", probe_max),
+            )
+            if v is not None
+        }
+        self._history.record_call(self, "crop", _do, params=params)
         return self
 
     def to_pdat(
@@ -463,6 +578,48 @@ class Dataset1D:
     def save_hdf5(self, path: str | PathLike) -> Path:
         """Alias of :meth:`to_hdf5`."""
         return self.to_hdf5(path)
+
+    def to_glotaran_ascii(
+        self,
+        path: str | PathLike,
+        *,
+        orientation: str = "time",
+        signal_unit: str = "mOD",
+        use_corrected: bool = True,
+        detector: int = 0,
+    ) -> Path:
+        """Export dataset to Glotaran / TIMP ``.ascii`` format."""
+        from .interop import write_glotaran_ascii
+
+        return write_glotaran_ascii(
+            self,
+            path,
+            orientation=orientation,
+            signal_unit=signal_unit,
+            use_corrected=use_corrected,
+            detector=detector,
+        )
+
+    def to_glotaran_nc(
+        self,
+        path: str | PathLike,
+        *,
+        signal_unit: str = "mOD",
+        use_corrected: bool = True,
+        detector: int = 0,
+        write_noise: bool = True,
+    ) -> Path:
+        """Export dataset to a Glotaran / pyglotaran CF-1.8 NetCDF4 ``.nc`` file."""
+        from .interop import write_glotaran_nc
+
+        return write_glotaran_nc(
+            self,
+            path,
+            signal_unit=signal_unit,
+            use_corrected=use_corrected,
+            detector=detector,
+            write_noise=write_noise,
+        )
 
     def _repr_html_(self) -> str:
         """Rich HTML summary card for Jupyter notebook display."""
@@ -782,8 +939,22 @@ class Dataset1D:
 
         Returns ``self`` so calls can be chained.
         """
-        self.Zavg_C, self.Zss_C, self.bkg_avg, self.bkg_ss = process.background_correct(
-            self.Zavg_R, self.Zss_R, self.nscans, self.delays, tmin, tmax, do_correct=do_correct
+        tmin_f = float(tmin)
+        tmax_f = float(tmax)
+        do_c = bool(do_correct)
+
+        def _do():
+            self.Zavg_C, self.Zss_C, self.bkg_avg, self.bkg_ss = process.background_correct(
+                self.Zavg_R, self.Zss_R, self.nscans, self.delays, tmin_f, tmax_f, do_correct=do_c
+            )
+            self._bkg_params = {"tmin": tmin_f, "tmax": tmax_f, "do_correct": do_c}
+
+        self._history.record_call(
+            self,
+            "background_correct",
+            _do,
+            params={"tmin": tmin_f, "tmax": tmax_f, "do_correct": do_c},
+            coalesce=True,
         )
         return self
 
@@ -848,20 +1019,25 @@ class Dataset1D:
         Dataset1D
             Returns ``self`` so calls can be chained.
         """
-        if getattr(self, "_orig_Zstdv", None) is None and self.Zstdv is not None:
-            self._orig_Zstdv = np.copy(self.Zstdv)
 
-        self.Zavg_C = np.copy(result.Zavg_C)
-        self.Zss_C = np.copy(result.Zss_C) if result.Zss_C is not None else None
-        self.bkg_avg = np.copy(result.bkg_avg) if result.bkg_avg is not None else None
-        self.bkg_ss = np.copy(result.bkg_ss) if result.bkg_ss is not None else None
-        if result.Zstdv is not None:
-            self.Zstdv = np.copy(result.Zstdv)
-        elif getattr(self, "_orig_Zstdv", None) is not None:
-            self.Zstdv = np.copy(self._orig_Zstdv)
+        def _do():
+            if getattr(self, "_orig_Zstdv", None) is None and self.Zstdv is not None:
+                self._orig_Zstdv = np.copy(self.Zstdv)
 
-        self._scatter_removal_result = result
-        self._scatter_removal_params = dict(result.params)
+            self.Zavg_C = np.copy(result.Zavg_C)
+            self.Zss_C = np.copy(result.Zss_C) if result.Zss_C is not None else None
+            self.bkg_avg = np.copy(result.bkg_avg) if result.bkg_avg is not None else None
+            self.bkg_ss = np.copy(result.bkg_ss) if result.bkg_ss is not None else None
+            if result.Zstdv is not None:
+                self.Zstdv = np.copy(result.Zstdv)
+            elif getattr(self, "_orig_Zstdv", None) is not None:
+                self.Zstdv = np.copy(self._orig_Zstdv)
+
+            self._scatter_removal_result = result
+            self._scatter_removal_params = dict(result.params)
+
+        params = dict(getattr(result, "params", {}) or {})
+        self._history.record_call(self, "apply_scatter_removal", _do, params=params)
         return self
 
     def remove_scatter(self, bands=None, **kwargs) -> Dataset1D:
@@ -891,8 +1067,15 @@ class Dataset1D:
         """
         from .scatter import compute_scatter_removal
 
-        res = compute_scatter_removal(self, bands=bands, **kwargs)
-        return self.apply_scatter_removal(res)
+        def _do():
+            res = compute_scatter_removal(self, bands=bands, **kwargs)
+            return self.apply_scatter_removal(res)
+
+        params = dict(kwargs)
+        if bands is not None:
+            params["bands"] = bands
+        self._history.record_call(self, "remove_scatter", _do, params=params)
+        return self
 
     def clear_scatter_removal(self) -> Dataset1D:
         """Clear applied advanced scatter removal state and restore original ``Zstdv``.
@@ -902,11 +1085,15 @@ class Dataset1D:
         Dataset1D
             Returns ``self`` so calls can be chained.
         """
-        self._scatter_removal_result = None
-        self._scatter_removal_params = None
-        if getattr(self, "_orig_Zstdv", None) is not None:
-            self.Zstdv = np.copy(self._orig_Zstdv)
-            self._orig_Zstdv = None
+
+        def _do():
+            self._scatter_removal_result = None
+            self._scatter_removal_params = None
+            if getattr(self, "_orig_Zstdv", None) is not None:
+                self.Zstdv = np.copy(self._orig_Zstdv)
+                self._orig_Zstdv = None
+
+        self._history.record_call(self, "clear_scatter_removal", _do, params={})
         return self
 
     def recalc_average(
@@ -936,59 +1123,75 @@ class Dataset1D:
         Dataset1D
             Returns ``self`` for chaining.
         """
-        scan_indices = [int(k) for k in scan_indices]
-        if not scan_indices:
+        scan_indices_list = [int(k) for k in scan_indices]
+        if not scan_indices_list:
             raise ValueError("No scans selected.")
 
-        if self.data_type in ("MESS_TRIR", "MESS_TRUVIS"):
-            from .load import mess_recalc_average
+        def _do():
+            if self.data_type in ("MESS_TRIR", "MESS_TRUVIS"):
+                from .load import mess_recalc_average
 
-            Zavg, Zstdv = mess_recalc_average(
-                self.source,
-                scan_indices,
-                spectrum=spectrum,
-                slowmod=slowmod,
-                noise_weighted=noise_weighted,
-            )
-        elif self.has_single_scans:
-            sub = self.Zss_R[:, :, :, scan_indices]
-            with np.errstate(divide="ignore", invalid="ignore"):
-                if noise_weighted and len(scan_indices) > 1:
-                    neg_idx = np.where(self.delays < 0)[0]
-                    if len(neg_idx) >= 2:
-                        scan_var = np.nanvar(sub[neg_idx, :, :, :], axis=(0, 1, 2))
-                        valid = np.isfinite(scan_var) & (scan_var > 0)
-                        if np.all(valid):
-                            w = 1.0 / scan_var
-                            w = w / np.sum(w)
-                            Zavg = np.sum(sub * w.reshape(1, 1, 1, -1), axis=-1)
+                Zavg, Zstdv = mess_recalc_average(
+                    self.source,
+                    scan_indices_list,
+                    spectrum=spectrum,
+                    slowmod=slowmod,
+                    noise_weighted=noise_weighted,
+                )
+            elif self.has_single_scans:
+                sub = self.Zss_R[:, :, :, scan_indices_list]
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    if noise_weighted and len(scan_indices_list) > 1:
+                        neg_idx = np.where(self.delays < 0)[0]
+                        if len(neg_idx) >= 2:
+                            scan_var = np.nanvar(sub[neg_idx, :, :, :], axis=(0, 1, 2))
+                            valid = np.isfinite(scan_var) & (scan_var > 0)
+                            if np.all(valid):
+                                w = 1.0 / scan_var
+                                w = w / np.sum(w)
+                                Zavg = np.sum(sub * w.reshape(1, 1, 1, -1), axis=-1)
+                            else:
+                                Zavg = np.nanmean(sub, axis=-1)
                         else:
                             Zavg = np.nanmean(sub, axis=-1)
                     else:
                         Zavg = np.nanmean(sub, axis=-1)
-                else:
-                    Zavg = np.nanmean(sub, axis=-1)
 
-                if len(scan_indices) > 1:
-                    import warnings
+                    if len(scan_indices_list) > 1:
+                        import warnings
 
-                    with warnings.catch_warnings():
-                        warnings.simplefilter("ignore", category=RuntimeWarning)
-                        Zstdv = np.nanstd(sub, axis=-1, ddof=1)
-                    Zstdv = np.nan_to_num(Zstdv, nan=0.0)
-                else:
-                    Zstdv = np.zeros_like(Zavg)
-                Zavg = np.nan_to_num(Zavg, nan=0.0)
-        else:
-            raise ValueError(f"Dataset of type {self.data_type} has no per-scan data to recombine.")
+                        with warnings.catch_warnings():
+                            warnings.simplefilter("ignore", category=RuntimeWarning)
+                            Zstdv = np.nanstd(sub, axis=-1, ddof=1)
+                        Zstdv = np.nan_to_num(Zstdv, nan=0.0)
+                    else:
+                        Zstdv = np.zeros_like(Zavg)
+                    Zavg = np.nan_to_num(Zavg, nan=0.0)
+            else:
+                raise ValueError(
+                    f"Dataset of type {self.data_type} has no per-scan data to recombine."
+                )
 
-        self.Zavg_R = Zavg
-        self.Zstdv = Zstdv
-        self.nscans = len(scan_indices)
-        self.Zavg_C = None  # Invalidate background correction cache
-        self._scatter_removal_result = None
-        self._scatter_removal_params = None
-        self._orig_Zstdv = None
+            self.Zavg_R = Zavg
+            self.Zstdv = Zstdv
+            self.nscans = len(scan_indices_list)
+            self.Zavg_C = None  # Invalidate background correction cache
+            self._bkg_params = None
+            self._scatter_removal_result = None
+            self._scatter_removal_params = None
+            self._orig_Zstdv = None
+
+        self._history.record_call(
+            self,
+            "recalc_average",
+            _do,
+            params={
+                "scan_indices": scan_indices_list,
+                "spectrum": int(spectrum),
+                "slowmod": int(slowmod),
+                "noise_weighted": bool(noise_weighted),
+            },
+        )
         return self
 
     def mask_probe_regions(
@@ -1008,112 +1211,119 @@ class Dataset1D:
         if not ranges:
             return self
 
-        if self.n_detectors <= 1:
-            # Build a mask of indices to keep
-            keep = np.ones(self.probe.shape, dtype=bool)
-            for r_min, r_max in ranges:
-                keep = keep & ~((self.probe >= r_min) & (self.probe <= r_max))
+        clean_ranges = [(float(a), float(b)) for a, b in ranges]
 
-            self.probe = self.probe[keep]
+        def _do():
+            if self.n_detectors <= 1:
+                # Build a mask of indices to keep
+                keep = np.ones(self.probe.shape, dtype=bool)
+                for r_min, r_max in clean_ranges:
+                    keep = keep & ~((self.probe >= r_min) & (self.probe <= r_max))
 
-            if self.Zavg_R is not None:
-                if self.Zavg_R.ndim == 3:
-                    self.Zavg_R = self.Zavg_R[:, keep, :]
-                elif self.Zavg_R.ndim == 2:
-                    self.Zavg_R = self.Zavg_R[:, keep]
+                self.probe = self.probe[keep]
 
-            if self.Zss_R is not None:
-                self.Zss_R = np.asarray(self.Zss_R)
-                if self.Zss_R.ndim == 4:
-                    self.Zss_R = self.Zss_R[:, keep, :, :]
-                elif self.Zss_R.ndim == 3:
-                    self.Zss_R = self.Zss_R[:, keep, :]
-                elif self.Zss_R.ndim == 2:
-                    self.Zss_R = self.Zss_R[:, keep]
-                elif self.Zss_R.ndim == 1:
-                    self.Zss_R = self.Zss_R[keep]
+                if self.Zavg_R is not None:
+                    if self.Zavg_R.ndim == 3:
+                        self.Zavg_R = self.Zavg_R[:, keep, :]
+                    elif self.Zavg_R.ndim == 2:
+                        self.Zavg_R = self.Zavg_R[:, keep]
 
-            if self.Zstdv is not None:
-                self.Zstdv = np.asarray(self.Zstdv)
-                if self.Zstdv.ndim == 3:
-                    self.Zstdv = self.Zstdv[:, keep, :]
-                elif self.Zstdv.ndim == 2:
-                    self.Zstdv = self.Zstdv[:, keep]
-                elif self.Zstdv.ndim == 1:
-                    self.Zstdv = self.Zstdv[keep]
-
-            if self.Zavg_C is not None:
-                if self.Zavg_C.ndim == 3:
-                    self.Zavg_C = self.Zavg_C[:, keep, :]
-                elif self.Zavg_C.ndim == 2:
-                    self.Zavg_C = self.Zavg_C[:, keep]
-
-            if self.Zss_C is not None:
-                if self.Zss_C.ndim == 4:
-                    self.Zss_C = self.Zss_C[:, keep, :, :]
-                elif self.Zss_C.ndim == 3:
-                    self.Zss_C = self.Zss_C[:, keep, :]
-                elif self.Zss_C.ndim == 2:
-                    self.Zss_C = self.Zss_C[:, keep]
-
-            if self.bkg_avg is not None:
-                if self.bkg_avg.ndim == 2:
-                    self.bkg_avg = self.bkg_avg[keep, :]
-                elif self.bkg_avg.ndim == 1:
-                    self.bkg_avg = self.bkg_avg[keep]
-
-            if self.bkg_ss is not None:
-                if self.bkg_ss.ndim == 3:
-                    self.bkg_ss = self.bkg_ss[keep, :, :]
-                elif self.bkg_ss.ndim == 2:
-                    self.bkg_ss = self.bkg_ss[keep, :]
-                elif self.bkg_ss.ndim == 1:
-                    self.bkg_ss = self.bkg_ss[keep]
-
-            self.mask_ranges = ranges
-            self._scatter_removal_result = None
-            self._scatter_removal_params = None
-            self._orig_Zstdv = None
-        else:
-            det = detector if detector is not None else 0
-            det = int(np.clip(det, 0, self.n_detectors - 1))
-
-            probe_det = self._detector_probe(det)
-            mask_det = np.zeros(probe_det.shape, dtype=bool)
-            for r_min, r_max in ranges:
-                mask_det = mask_det | ((probe_det >= r_min) & (probe_det <= r_max))
-
-            if np.any(mask_det):
-                if self.Zavg_R is not None and self.Zavg_R.ndim == 3:
-                    self.Zavg_R[:, mask_det, det] = np.nan
-                if self.Zavg_C is not None and self.Zavg_C.ndim == 3:
-                    self.Zavg_C[:, mask_det, det] = np.nan
                 if self.Zss_R is not None:
                     self.Zss_R = np.asarray(self.Zss_R)
                     if self.Zss_R.ndim == 4:
-                        self.Zss_R[:, mask_det, det, :] = np.nan
-                if self.Zss_C is not None:
-                    self.Zss_C = np.asarray(self.Zss_C)
-                    if self.Zss_C.ndim == 4:
-                        self.Zss_C[:, mask_det, det, :] = np.nan
+                        self.Zss_R = self.Zss_R[:, keep, :, :]
+                    elif self.Zss_R.ndim == 3:
+                        self.Zss_R = self.Zss_R[:, keep, :]
+                    elif self.Zss_R.ndim == 2:
+                        self.Zss_R = self.Zss_R[:, keep]
+                    elif self.Zss_R.ndim == 1:
+                        self.Zss_R = self.Zss_R[keep]
+
                 if self.Zstdv is not None:
                     self.Zstdv = np.asarray(self.Zstdv)
                     if self.Zstdv.ndim == 3:
-                        self.Zstdv[:, mask_det, det] = np.nan
+                        self.Zstdv = self.Zstdv[:, keep, :]
+                    elif self.Zstdv.ndim == 2:
+                        self.Zstdv = self.Zstdv[:, keep]
+                    elif self.Zstdv.ndim == 1:
+                        self.Zstdv = self.Zstdv[keep]
+
+                if self.Zavg_C is not None:
+                    if self.Zavg_C.ndim == 3:
+                        self.Zavg_C = self.Zavg_C[:, keep, :]
+                    elif self.Zavg_C.ndim == 2:
+                        self.Zavg_C = self.Zavg_C[:, keep]
+
+                if self.Zss_C is not None:
+                    if self.Zss_C.ndim == 4:
+                        self.Zss_C = self.Zss_C[:, keep, :, :]
+                    elif self.Zss_C.ndim == 3:
+                        self.Zss_C = self.Zss_C[:, keep, :]
+                    elif self.Zss_C.ndim == 2:
+                        self.Zss_C = self.Zss_C[:, keep]
+
                 if self.bkg_avg is not None:
-                    self.bkg_avg = np.asarray(self.bkg_avg)
                     if self.bkg_avg.ndim == 2:
-                        self.bkg_avg[mask_det, det] = np.nan
+                        self.bkg_avg = self.bkg_avg[keep, :]
+                    elif self.bkg_avg.ndim == 1:
+                        self.bkg_avg = self.bkg_avg[keep]
+
                 if self.bkg_ss is not None:
-                    self.bkg_ss = np.asarray(self.bkg_ss)
                     if self.bkg_ss.ndim == 3:
-                        self.bkg_ss[mask_det, det, :] = np.nan
+                        self.bkg_ss = self.bkg_ss[keep, :, :]
+                    elif self.bkg_ss.ndim == 2:
+                        self.bkg_ss = self.bkg_ss[keep, :]
+                    elif self.bkg_ss.ndim == 1:
+                        self.bkg_ss = self.bkg_ss[keep]
 
-            if not hasattr(self, "mask_ranges_by_det"):
-                self.mask_ranges_by_det = {}
-            self.mask_ranges_by_det[det] = ranges
-            self.mask_ranges = ranges
+                self.mask_ranges = clean_ranges
+                self._scatter_removal_result = None
+                self._scatter_removal_params = None
+                self._orig_Zstdv = None
+            else:
+                det = detector if detector is not None else 0
+                det = int(np.clip(det, 0, self.n_detectors - 1))
 
+                probe_det = self._detector_probe(det)
+                mask_det = np.zeros(probe_det.shape, dtype=bool)
+                for r_min, r_max in clean_ranges:
+                    mask_det = mask_det | ((probe_det >= r_min) & (probe_det <= r_max))
+
+                if np.any(mask_det):
+                    if self.Zavg_R is not None and self.Zavg_R.ndim == 3:
+                        self.Zavg_R[:, mask_det, det] = np.nan
+                    if self.Zavg_C is not None and self.Zavg_C.ndim == 3:
+                        self.Zavg_C[:, mask_det, det] = np.nan
+                    if self.Zss_R is not None:
+                        self.Zss_R = np.array(self.Zss_R, copy=True)
+                        if self.Zss_R.ndim == 4:
+                            self.Zss_R[:, mask_det, det, :] = np.nan
+                    if self.Zss_C is not None:
+                        self.Zss_C = np.array(self.Zss_C, copy=True)
+                        if self.Zss_C.ndim == 4:
+                            self.Zss_C[:, mask_det, det, :] = np.nan
+                    if self.Zstdv is not None:
+                        self.Zstdv = np.asarray(self.Zstdv)
+                        if self.Zstdv.ndim == 3:
+                            self.Zstdv[:, mask_det, det] = np.nan
+                    if self.bkg_avg is not None:
+                        self.bkg_avg = np.asarray(self.bkg_avg)
+                        if self.bkg_avg.ndim == 2:
+                            self.bkg_avg[mask_det, det] = np.nan
+                    if self.bkg_ss is not None:
+                        self.bkg_ss = np.array(self.bkg_ss, copy=True)
+                        if self.bkg_ss.ndim == 3:
+                            self.bkg_ss[mask_det, det, :] = np.nan
+
+                if not hasattr(self, "mask_ranges_by_det"):
+                    self.mask_ranges_by_det = {}
+                self.mask_ranges_by_det[det] = clean_ranges
+                self.mask_ranges = clean_ranges
+
+        params: dict[str, Any] = {"ranges": [list(r) for r in clean_ranges]}
+        if detector is not None:
+            params["detector"] = int(detector)
+        self._history.record_call(self, "mask_probe_regions", _do, params=params)
         return self
 
     def shift_t0(self, t0_shift: float) -> Dataset1D:
@@ -1125,9 +1335,15 @@ class Dataset1D:
         Resetting ``self.Zavg_C`` forces background correction to re-evaluate
         pre-zero delay indices with the updated time axis.
         """
-        self.delays = np.asarray(self.delays, dtype=float) - float(t0_shift)
-        self.Zavg_C = None
-        self.clear_scatter_removal()
+        shift_f = float(t0_shift)
+
+        def _do():
+            self.delays = np.asarray(self.delays, dtype=float) - shift_f
+            self.Zavg_C = None
+            self._bkg_params = None
+            self.clear_scatter_removal()
+
+        self._history.record_call(self, "shift_t0", _do, params={"t0_shift": shift_f})
         return self
 
     def subtract_solvent(
@@ -1159,33 +1375,42 @@ class Dataset1D:
         Dataset1D
             ``self`` — so calls can be chained.
         """
-        Z_solvent = solvent.Zavg_C if solvent.Zavg_C is not None else solvent.Zavg_R
 
-        if not np.array_equal(solvent.probe, self.probe):
-            from scipy.interpolate import make_interp_spline
+        def _do():
+            Z_solvent = solvent.Zavg_C if solvent.Zavg_C is not None else solvent.Zavg_R
 
-            sol_probe = np.asarray(solvent.probe, dtype=float)
-            s_idx = np.argsort(sol_probe)
-            xp = sol_probe[s_idx]
-            Z_sol_sorted = Z_solvent[:, s_idx, :] if Z_solvent.ndim == 3 else Z_solvent[:, s_idx]
-            spl = make_interp_spline(xp, Z_sol_sorted, k=1, axis=1)
-            Z_solvent_aligned = spl(self.probe)
-        else:
-            Z_solvent_aligned = Z_solvent
+            if not np.array_equal(solvent.probe, self.probe):
+                from scipy.interpolate import make_interp_spline
 
+                sol_probe = np.asarray(solvent.probe, dtype=float)
+                s_idx = np.argsort(sol_probe)
+                xp = sol_probe[s_idx]
+                Z_sol_sorted = Z_solvent[:, s_idx, :] if Z_solvent.ndim == 3 else Z_solvent[:, s_idx]
+                spl = make_interp_spline(xp, Z_sol_sorted, k=1, axis=1)
+                Z_solvent_aligned = spl(self.probe)
+            else:
+                Z_solvent_aligned = Z_solvent
 
-        self.Zavg_C = process.subtract_solvent(
-            self.Z,
-            self.delays,
-            Z_solvent_aligned,
-            solvent.delays,
-            dt=dt,
-            scale=scale,
-        )
-        # Provenance — keep references so the caller can inspect them.
-        self._solvent_dataset = solvent
-        self._solvent_dt = dt
-        self._solvent_scale = scale
+            self.Zavg_C = process.subtract_solvent(
+                self.Z,
+                self.delays,
+                Z_solvent_aligned,
+                solvent.delays,
+                dt=dt,
+                scale=scale,
+            )
+            # Provenance — keep references so the caller can inspect them.
+            self._solvent_dataset = solvent
+            self._solvent_dt = dt
+            self._solvent_scale = scale
+
+        params: dict[str, Any] = {
+            "solvent_file": getattr(solvent, "source", None),
+            "solvent_data_type": getattr(solvent, "data_type", None),
+            "dt": dt,
+            "scale": scale,
+        }
+        self._history.record_call(self, "subtract_solvent", _do, params=params)
         return self
 
     def subtract_shockwave(
@@ -1252,15 +1477,32 @@ class Dataset1D:
             nearest_indices = [int(np.argmin(np.abs(self.probe - val))) for val in p_vals]
             pix_0based = np.unique(np.array(nearest_indices, dtype=int))
 
-        Z_in = self.Z
-        self.Zavg_C, shockwave_trace = process.subtract_shockwave(Z_in, pix_0based, one_based=False)
+        def _do():
+            Z_in = self.Z
+            self.Zavg_C, shockwave_trace = process.subtract_shockwave(
+                Z_in, pix_0based, one_based=False
+            )
 
-        if self.has_single_scans:
-            Zss_in = self.Zss_C if self.Zss_C is not None else self.Zss_R
-            self.Zss_C, _ = process.subtract_shockwave(Zss_in, pix_0based, one_based=False)
+            if self.has_single_scans:
+                Zss_in = self.Zss_C if self.Zss_C is not None else self.Zss_R
+                self.Zss_C, _ = process.subtract_shockwave(Zss_in, pix_0based, one_based=False)
 
-        self._shockwave_pixels = pix_0based
-        self._shockwave_trace = shockwave_trace
+            self._shockwave_pixels = pix_0based
+            self._shockwave_trace = shockwave_trace
+
+        params: dict[str, Any] = {}
+        if pixels is not None:
+            if isinstance(pixels, slice):
+                params["pixels"] = [int(i) for i in pix_0based]
+                params["one_based"] = False
+            else:
+                params["pixels"] = pixels
+                params["one_based"] = bool(one_based)
+        elif probe_range is not None:
+            params["probe_range"] = [float(probe_range[0]), float(probe_range[1])]
+        elif probe_values is not None:
+            params["probe_values"] = probe_values
+        self._history.record_call(self, "subtract_shockwave", _do, params=params)
         return self
 
     def fit_solvent_auto(
@@ -1933,86 +2175,118 @@ class Dataset1D:
 
         if detector is None:
             detector = getattr(fit, "detector", 0)
+        det = int(detector)
+        bh = str(boundary_handling)
 
-        probe_det = self._detector_probe(detector)
-        t0fit = fit(probe_det)  # shape: [Npixels]
-        Npixels = probe_det.size
-        extrapolate = boundary_handling == "extrapolate"
+        def _do():
+            probe_det = self._detector_probe(det)
+            t0fit = fit(probe_det)  # shape: [Npixels]
+            Npixels = probe_det.size
+            extrapolate = bh == "extrapolate"
 
-        def interpolate_array_3d(arr):
-            if arr is None:
-                return None
-            arr_new = arr.copy()
-            if arr.ndim == 2:
-                for i in range(Npixels):
-                    lv = arr[0, i] if extrapolate else np.nan
-                    rv = arr[-1, i] if extrapolate else np.nan
-                    arr_new[:, i] = np.interp(
-                        self.delays, self.delays - t0fit[i], arr[:, i], left=lv, right=rv
-                    )
-            elif arr.ndim == 3:
-                for i in range(Npixels):
-                    lv = arr[0, i, detector] if extrapolate else np.nan
-                    rv = arr[-1, i, detector] if extrapolate else np.nan
-                    arr_new[:, i, detector] = np.interp(
-                        self.delays, self.delays - t0fit[i], arr[:, i, detector], left=lv, right=rv
-                    )
-            return arr_new
-
-        def interpolate_array_4d(arr):
-            if arr is None:
-                return None
-            arr_new = arr.copy()
-            Nscans = arr.shape[3] if arr.ndim == 4 else arr.shape[2]
-            if arr.ndim == 3:
-                for s in range(Nscans):
+            def interpolate_array_3d(arr):
+                if arr is None:
+                    return None
+                arr_new = arr.copy()
+                if arr.ndim == 2:
                     for i in range(Npixels):
-                        lv = arr[0, i, s] if extrapolate else np.nan
-                        rv = arr[-1, i, s] if extrapolate else np.nan
-                        arr_new[:, i, s] = np.interp(
-                            self.delays, self.delays - t0fit[i], arr[:, i, s], left=lv, right=rv
+                        lv = arr[0, i] if extrapolate else np.nan
+                        rv = arr[-1, i] if extrapolate else np.nan
+                        arr_new[:, i] = np.interp(
+                            self.delays, self.delays - t0fit[i], arr[:, i], left=lv, right=rv
                         )
-            elif arr.ndim == 4:
-                for s in range(Nscans):
+                elif arr.ndim == 3:
                     for i in range(Npixels):
-                        lv = arr[0, i, detector, s] if extrapolate else np.nan
-                        rv = arr[-1, i, detector, s] if extrapolate else np.nan
-                        arr_new[:, i, detector, s] = np.interp(
-                            self.delays, self.delays - t0fit[i], arr[:, i, detector, s], left=lv, right=rv
+                        lv = arr[0, i, det] if extrapolate else np.nan
+                        rv = arr[-1, i, det] if extrapolate else np.nan
+                        arr_new[:, i, det] = np.interp(
+                            self.delays, self.delays - t0fit[i], arr[:, i, det], left=lv, right=rv
                         )
-            return arr_new
+                return arr_new
 
+            def interpolate_array_4d(arr):
+                if arr is None:
+                    return None
+                arr_new = arr.copy()
+                Nscans = arr.shape[3] if arr.ndim == 4 else arr.shape[2]
+                if arr.ndim == 3:
+                    for s in range(Nscans):
+                        for i in range(Npixels):
+                            lv = arr[0, i, s] if extrapolate else np.nan
+                            rv = arr[-1, i, s] if extrapolate else np.nan
+                            arr_new[:, i, s] = np.interp(
+                                self.delays, self.delays - t0fit[i], arr[:, i, s], left=lv, right=rv
+                            )
+                elif arr.ndim == 4:
+                    for s in range(Nscans):
+                        for i in range(Npixels):
+                            lv = arr[0, i, det, s] if extrapolate else np.nan
+                            rv = arr[-1, i, det, s] if extrapolate else np.nan
+                            arr_new[:, i, det, s] = np.interp(
+                                self.delays,
+                                self.delays - t0fit[i],
+                                arr[:, i, det, s],
+                                left=lv,
+                                right=rv,
+                            )
+                return arr_new
 
-        self.Zavg_R = interpolate_array_3d(self.Zavg_R)
-        if self.Zavg_C is not None:
-            self.Zavg_C = interpolate_array_3d(self.Zavg_C)
-        if self.Zstdv is not None:
-            self.Zstdv = interpolate_array_3d(self.Zstdv)
-        if self.Zss_R is not None:
-            self.Zss_R = interpolate_array_4d(self.Zss_R)
-        if self.Zss_C is not None:
-            self.Zss_C = interpolate_array_4d(self.Zss_C)
-
-        if boundary_handling == "crop":
-            # Crop/slice delays axis to fully finite region (exclude introduced NaNs)
-            t0_min = np.nanmin(t0fit) if np.any(np.isfinite(t0fit)) else 0.0
-            t0_max = np.nanmax(t0fit) if np.any(np.isfinite(t0fit)) else 0.0
-            valid_indices = (self.delays >= np.nanmin(self.delays) - t0_min) & (
-                self.delays <= np.nanmax(self.delays) - t0_max
-            )
-
-            self.delays = self.delays[valid_indices]
-            self.Zavg_R = self.Zavg_R[valid_indices, :, :]
+            self.Zavg_R = interpolate_array_3d(self.Zavg_R)
             if self.Zavg_C is not None:
-                self.Zavg_C = self.Zavg_C[valid_indices, :, :]
+                self.Zavg_C = interpolate_array_3d(self.Zavg_C)
             if self.Zstdv is not None:
-                self.Zstdv = self.Zstdv[valid_indices, :, :]
+                self.Zstdv = interpolate_array_3d(self.Zstdv)
             if self.Zss_R is not None:
-                self.Zss_R = self.Zss_R[valid_indices, :, :, :]
+                self.Zss_R = interpolate_array_4d(self.Zss_R)
             if self.Zss_C is not None:
-                self.Zss_C = self.Zss_C[valid_indices, :, :, :]
+                self.Zss_C = interpolate_array_4d(self.Zss_C)
 
-        self.chirp_fit = fit
+            if bh == "crop":
+                # Crop/slice delays axis to fully finite region (exclude introduced NaNs)
+                t0_min = np.nanmin(t0fit) if np.any(np.isfinite(t0fit)) else 0.0
+                t0_max = np.nanmax(t0fit) if np.any(np.isfinite(t0fit)) else 0.0
+                valid_indices = (self.delays >= np.nanmin(self.delays) - t0_min) & (
+                    self.delays <= np.nanmax(self.delays) - t0_max
+                )
+
+                self.delays = self.delays[valid_indices]
+                self.Zavg_R = self.Zavg_R[valid_indices, :, :]
+                if self.Zavg_C is not None:
+                    self.Zavg_C = self.Zavg_C[valid_indices, :, :]
+                if self.Zstdv is not None:
+                    self.Zstdv = self.Zstdv[valid_indices, :, :]
+                if self.Zss_R is not None:
+                    self.Zss_R = self.Zss_R[valid_indices, :, :, :]
+                if self.Zss_C is not None:
+                    self.Zss_C = self.Zss_C[valid_indices, :, :, :]
+
+            self.chirp_fit = fit
+
+        chirp_file = getattr(fit, "chirp_file", None)
+        if not chirp_file:
+            fit_src = getattr(fit, "source", None)
+            if (
+                fit_src
+                and fit_src != self.source
+                and Path(str(fit_src)).suffix.lower() in (".mat", ".h5", ".hdf5", ".json")
+            ):
+                chirp_file = str(fit_src)
+        inline_chirp = {
+            "mode": str(getattr(fit, "mode", "manual")),
+            "coeffs": np.asarray(getattr(fit, "coeffs", []), dtype=float).tolist(),
+            "fit_wl": np.asarray(getattr(fit, "fit_wl", []), dtype=float).tolist(),
+            "n_cauchy_terms": int(getattr(fit, "n_cauchy_terms", 6)),
+            "lambda_ref": float(getattr(fit, "lambda_ref", 500.0)),
+            "detector": int(getattr(fit, "detector", 0)),
+        }
+        step_params: dict[str, Any] = {
+            "detector": det,
+            "boundary_handling": bh,
+            "inline_chirp": inline_chirp,
+        }
+        if chirp_file:
+            step_params["chirp_file"] = str(chirp_file)
+        self._history.record_call(self, "apply_chirp_correction", _do, params=step_params)
 
     def embed_calibrated_probe(
         self,
@@ -2032,17 +2306,32 @@ class Dataset1D:
         if src.suffix.lower() not in (".h5", ".hdf5"):
             raise ValueError(f"Dataset source is not an HDF5 (.h5) file: {src.name}")
 
-        res = embed_calibrated_probe_h5(src, csv_path, backup_original=backup_original)
-        if len(self.probe) == len(res["probe"]):
-            self.probe = res["probe"].copy()
-            cur_T = self.units.get("T") or self.units.get("unitsT_ltx", "ps")
-            cur_Z = self.units.get("Z") or self.units.get("unitsZ", "x1E3")
-            self.units.update(hlp.units2dic(res["unitsL"], cur_T, cur_Z))
-            self.cal_source = res["cal_source"]
-            self.units["cal_source"] = res["cal_source"]
-            self.cal_level = None
-            self.units.pop("cal_level", None)
-        return res
+        def _do():
+            res = embed_calibrated_probe_h5(src, csv_path, backup_original=backup_original)
+            if len(self.probe) == len(res["probe"]):
+                self.probe = res["probe"].copy()
+                cur_T = self.units.get("T") or self.units.get("unitsT_ltx", "ps")
+                cur_Z = self.units.get("Z") or self.units.get("unitsZ", "x1E3")
+                self.units.update(hlp.units2dic(res["unitsL"], cur_T, cur_Z))
+                self.cal_source = res["cal_source"]
+                self.units["cal_source"] = res["cal_source"]
+                self.cal_level = None
+                self.units.pop("cal_level", None)
+            return res
+
+        return self._history.record_call(
+            self,
+            "embed_calibrated_probe",
+            _do,
+            params_fn=lambda res: {
+                "csv_path": (
+                    str(csv_path)
+                    if csv_path is not None
+                    else (str(res["csv_path"]) if isinstance(res, dict) and res.get("csv_path") else None)
+                ),
+                "backup_original": bool(backup_original),
+            },
+        )
 
 
 def load_1D(path: str | PathLike, data_type: str = "PDAT", **loader_kwargs) -> Dataset1D:

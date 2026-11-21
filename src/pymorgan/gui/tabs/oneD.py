@@ -125,12 +125,14 @@ class OneDTabMixin:
             self,
             "Open data file",
             start_dir,
-            "Data (*.pdat *.p2dat *.csv *.dat *.h5 *.hdf5 *.info);;All files (*)",
+            (
+                "Data (*.pdat *.pdatn *.p2dat *.ufs *.ascii *.nc *.csv *.dat "
+                "*.h5 *.hdf5 *.info *.txt *.dpt *.2D *.DT *.pmproj *.toml);;"
+                "All files (*)"
+            ),
         )
         if path:
-            if Path(path).suffix.lower() in (".pdat", ".pdatn", ".p2dat") and hasattr(
-                self, "open_external_path"
-            ):
+            if hasattr(self, "open_external_path") and pm.detect_format(path) is not None:
                 self.open_external_path(path, set_rootdir=True)
             else:
                 self.load_path(path)
@@ -197,6 +199,8 @@ class OneDTabMixin:
             self._update_sample_info()
             if hasattr(self, "_update_embed_cal_h5_action_state"):
                 self._update_embed_cal_h5_action_state()
+            if hasattr(self, "_update_export_actions_state"):
+                self._update_export_actions_state()
             return
         self._configure_state_controls(meta)
         name = Path(path).stem if dt == "QuickControl_PP" else Path(path).name
@@ -211,9 +215,21 @@ class OneDTabMixin:
                 self.plot_controls.detector_spin.blockSignals(False)
             self.plot_controls.set_dataset(self.dataset)
         self._setup_background_controls()
+        sub = getattr(self, "PP_SubtactBkg_chk", None)
+        is_pdat_no_op = (
+            getattr(self.dataset, "data_type", None) == "PDAT"
+            and sub is not None
+            and not sub.isChecked()
+        )
+        if is_pdat_no_op and hasattr(self.dataset, "_history"):
+            with self.dataset._history.suppress():
+                self._apply_background()
+        else:
+            self._apply_background()
         self._preview_contour()
         self._update_sample_info()
         self._set_dataset_widgets_visible(True)
+        self._notify_oneD_history_changed(dirty=False)
 
         tab_idx = self.MainTabs.currentIndex() if hasattr(self, "MainTabs") and self.MainTabs is not None else 0
         has_ds = self.dataset is not None
@@ -260,6 +276,8 @@ class OneDTabMixin:
 
         if hasattr(self, "_update_embed_cal_h5_action_state"):
             self._update_embed_cal_h5_action_state()
+        if hasattr(self, "_update_export_actions_state"):
+            self._update_export_actions_state()
 
     def _update_sample_info(self, _checked: bool = False):
         """Refresh the 1D sample-info box and toggle visibility."""
@@ -310,7 +328,7 @@ class OneDTabMixin:
         except Exception as exc:
             QMessageBox.warning(self, "Load failed", str(exc))
 
-    def _load_steady_state(self, kind: str):
+    def _load_steady_state(self, kind: str, *, path: str | None = None):
         """Load a steady-state (0-D) absorption/emission spectrum as an overlay.
 
         The spectrum is stored and drawn as a shaded area on every transient-
@@ -318,29 +336,33 @@ class OneDTabMixin:
         :meth:`Dataset1D.plot_spectra`). The overlay colours, line and fill
         transparencies are taken from the ``ss_*`` settings.
         """
-        path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Load steady-state %s" % kind,
-            self._rootdir_text(),
-            "Spectra (*.csv *.dat *.txt *.dpt);;All files (*)",
-        )
-        if not path:
-            return
+        norm_kind = "absorption" if kind in ("abs", "absorption") else "emission"
+        if path is None:
+            path, _ = QFileDialog.getOpenFileName(
+                self,
+                "Load steady-state %s" % norm_kind,
+                self._rootdir_text(),
+                "Spectra (*.csv *.dat *.txt *.dpt);;All files (*)",
+            )
+            if not path:
+                return
         try:
-            spec = pm.load_spectrum(path, kind)
+            spec = pm.load_spectrum(path, norm_kind)
             overlay = spec.as_overlay_dict()
         except Exception as exc:
             QMessageBox.warning(self, "Load failed", str(exc))
             return
-        if kind == "absorption":
+        if norm_kind == "absorption":
             self._ss_abs = overlay
             self._ss_abs_spectrum = spec
+            self._ss_abs_path = str(path)
             led = getattr(self, "PP_led_SSabs", None)
             if led is not None:
                 led.set_state("loaded")
         else:
             self._ss_em = overlay
             self._ss_em_spectrum = spec
+            self._ss_em_path = str(path)
             led = getattr(self, "PP_led_SSem", None)
             if led is not None:
                 led.set_state("loaded")
@@ -349,15 +371,17 @@ class OneDTabMixin:
             act_plot_ss.setEnabled(True)
         self.statusBar().showMessage(
             "Loaded steady-state %s (%s) - overlaid on new transient-spectra figures"
-            % (kind, Path(path).name)
+            % (norm_kind, Path(path).name)
         )
 
     def _clear_steady_state(self):
         """Forget the loaded steady-state absorption / emission overlays."""
         self._ss_abs = None
         self._ss_abs_spectrum = None
+        self._ss_abs_path = None
         self._ss_em = None
         self._ss_em_spectrum = None
+        self._ss_em_path = None
         for led_name in ("PP_led_SSabs", "PP_led_SSem"):
             led = getattr(self, led_name, None)
             if led is not None:
@@ -745,9 +769,55 @@ class OneDTabMixin:
                 box.blockSignals(False)
         sub = getattr(self, "PP_SubtactBkg_chk", None)
         if sub is not None:
+            sub.blockSignals(True)
             sub.setChecked(self.dataset.data_type != "PDAT")
+            sub.blockSignals(False)
         if hasattr(self, "_update_adv_scatter_btn_style"):
             self._update_adv_scatter_btn_style()
+
+    def _notify_oneD_history_changed(self, *, dirty: bool = True):
+        """Refresh Edit menu enablement and session dirty indicator after 1D changes."""
+        if hasattr(self, "_update_edit_menu_state"):
+            self._update_edit_menu_state()
+        if dirty and not getattr(self, "_restoring_session", False):
+            if hasattr(self, "_set_project_dirty"):
+                self._set_project_dirty(True)
+
+    def _sync_oneD_ui_after_history_change(self):
+        """Synchronize 1D UI widgets, plot controls, and canvas after undo/redo/revert."""
+        if self.dataset is None:
+            return
+        sub = getattr(self, "PP_SubtactBkg_chk", None)
+        if sub is not None:
+            sub.blockSignals(True)
+            sub.setChecked(bool(getattr(self.dataset, "_is_corrected", False)))
+            sub.blockSignals(False)
+
+        bkg_params = getattr(self.dataset, "_bkg_params", None)
+        if isinstance(bkg_params, dict):
+            for box_name, key in (("PP_bkg_tmin", "tmin"), ("PP_bkg_tmax", "tmax")):
+                box = getattr(self, box_name, None)
+                if box is not None and key in bkg_params:
+                    box.blockSignals(True)
+                    box.setValue(float(bkg_params[key]))
+                    box.blockSignals(False)
+
+        if hasattr(self, "_update_adv_scatter_btn_style"):
+            self._update_adv_scatter_btn_style()
+        if getattr(self, "plot_controls", None) is not None:
+            self.plot_controls.set_dataset(self.dataset)
+        self._preview_contour()
+        self._update_sample_info()
+        self._notify_oneD_history_changed(dirty=True)
+
+    def _on_bkg_controls_changed(self):
+        """Recompute background and redraw when background controls are toggled/edited."""
+        if self.dataset is None:
+            return
+        self._apply_background()
+        self._preview_contour()
+        self._update_sample_info()
+        self._notify_oneD_history_changed(dirty=True)
 
     def _on_bkg_limit_entered(self):
         """Snap an entered background-window limit to the nearest delay, then render.
@@ -772,7 +842,7 @@ class OneDTabMixin:
                 box.blockSignals(True)
                 box.setValue(nearest)
                 box.blockSignals(False)
-        self._rerender_preview()
+        self._on_bkg_controls_changed()
 
     def _apply_background(self, force: bool = False):
         if self.dataset is None:
@@ -789,21 +859,27 @@ class OneDTabMixin:
             and do_correct
             and np.asarray(adv_res.Zavg_C).shape == np.asarray(self.dataset.Zavg_R).shape
         ):
-            self.dataset.apply_scatter_removal(adv_res)
+            if hasattr(self.dataset, "_history") and getattr(self.dataset, "_is_corrected", False):
+                with self.dataset._history.suppress():
+                    self.dataset.apply_scatter_removal(adv_res)
+            else:
+                self.dataset.apply_scatter_removal(adv_res)
         else:
             self.dataset.background_correct(tmin, tmax, do_correct=do_correct)
 
-        # If a solvent background subtraction has been performed, re-apply it on top
+        # If a solvent background subtraction has been performed, re-apply it on top silently
         solvent_ds = getattr(self.dataset, "_solvent_dataset", None)
         if solvent_ds is not None:
             dt = getattr(self.dataset, "_solvent_dt", 0.0)
             scale = getattr(self.dataset, "_solvent_scale", 1.0)
-            self.dataset.subtract_solvent(solvent_ds, dt=dt, scale=scale)
+            with self.dataset._history.suppress():
+                self.dataset.subtract_solvent(solvent_ds, dt=dt, scale=scale)
 
-        # If a shockwave subtraction has been performed, re-apply it on top
+        # If a shockwave subtraction has been performed, re-apply it on top silently
         sw_pixels = getattr(self.dataset, "_shockwave_pixels", None)
         if sw_pixels is not None and sw_pixels.size > 0:
-            self.dataset.subtract_shockwave(pixels=sw_pixels, one_based=False)
+            with self.dataset._history.suppress():
+                self.dataset.subtract_shockwave(pixels=sw_pixels, one_based=False)
 
     def _norm(self) -> bool:
         chk = getattr(self, "PP_Normalise_chk", None)
@@ -815,11 +891,10 @@ class OneDTabMixin:
         return pc.smooth() if pc is not None else 0
 
     def _preview_contour(self):
-        """Draw the contour on the embedded canvas (used on load)."""
+        """Draw the contour on the embedded canvas without mutating processing history."""
         if self.dataset is None:
             return
         pm.apply_style()
-        self._apply_background()
         w, ax = self._fresh_axis()
         pc = getattr(self, "plot_controls", None)
         kwargs = pc.contour_kwargs() if pc is not None else {}
@@ -853,7 +928,9 @@ class OneDTabMixin:
         import matplotlib.pyplot as plt
 
         pm.apply_style()
-        self._apply_background()
+        if getattr(self.dataset, "bkg_avg", None) is None:
+            with self.dataset._history.suppress():
+                self._apply_background()
         pc = getattr(self, "plot_controls", None)
         det = getattr(pc, "detector", 0) if pc is not None else 0
         try:
@@ -880,7 +957,6 @@ class OneDTabMixin:
         )
 
         pm.apply_style()
-        self._apply_background()
         pc = getattr(self, "plot_controls", None)
         det = getattr(pc, "detector", 0) if pc is not None else 0
         try:
@@ -934,7 +1010,6 @@ class OneDTabMixin:
         import matplotlib.pyplot as plt
 
         pm.apply_style()
-        self._apply_background()
         pc = getattr(self, "plot_controls", None)
         det = getattr(pc, "detector", 0) if pc is not None else 0
         try:
@@ -1022,7 +1097,6 @@ class OneDTabMixin:
         import matplotlib.pyplot as plt
 
         pm.apply_style()
-        self._apply_background()
         binsize = self._binscans_value()
         try:
             if kind == "spectra":
@@ -1155,6 +1229,7 @@ class OneDTabMixin:
         self.statusBar().showMessage(
             f"Recalculated {avg_type} over {len(idx)} scan(s): {text}"
         )
+        self._notify_oneD_history_changed(dirty=True)
 
     @busy_guard("Masking probe region...")
     def _mask_probe_region(self):
@@ -1230,6 +1305,7 @@ class OneDTabMixin:
             self.statusBar().showMessage(
                 f"Applied probe mask to detector {det + 1}: {self._last_mask_text}"
             )
+            self._notify_oneD_history_changed(dirty=True)
         except Exception as exc:
             QMessageBox.critical(self, "Mask Probe Region Failed", str(exc))
 
@@ -1258,6 +1334,7 @@ class OneDTabMixin:
         self._preview_contour()
         self._update_sample_info()
         self.statusBar().showMessage(f"Shifted time axis t0 by {-t0_val:+.4g} {unit_str}")
+        self._notify_oneD_history_changed(dirty=True)
 
     @busy_guard("Subtracting solvent...")
     def _subtract_solvent(self):
@@ -1346,6 +1423,7 @@ class OneDTabMixin:
             self.statusBar().showMessage(
                 f"Solvent background subtracted (dt={dt_mean:.3f} ps, scale={scale_mean:.3f})"
             )
+            self._notify_oneD_history_changed(dirty=True)
         except Exception as exc:
             QMessageBox.critical(self, "Solvent Subtraction Failed", str(exc))
 
@@ -1375,6 +1453,7 @@ class OneDTabMixin:
             else:
                 p_str = f"pixels {p_idx[0] + 1}..{p_idx[-1] + 1}"
             self.statusBar().showMessage(f"Shockwave kinetic trace subtracted ({p_str})")
+            self._notify_oneD_history_changed(dirty=True)
         except Exception as exc:
             QMessageBox.critical(self, "Shockwave Subtraction Failed", str(exc))
 
@@ -1424,6 +1503,7 @@ class OneDTabMixin:
         self.statusBar().showMessage(
             f"Applied advanced scatter removal ({method}, {n_enabled} band(s), {per_scan_txt})"
         )
+        self._notify_oneD_history_changed(dirty=True)
 
     def _on_scatter_reset(self):
         """Reset advanced scatter removal and restore static pre-zero background."""
@@ -1432,12 +1512,14 @@ class OneDTabMixin:
         self.dataset.clear_scatter_removal()
         if hasattr(self, "_update_adv_scatter_btn_style"):
             self._update_adv_scatter_btn_style()
-        self._apply_background()
+        with self.dataset._history.suppress():
+            self._apply_background()
         if getattr(self, "plot_controls", None) is not None:
             self.plot_controls.set_dataset(self.dataset)
         self._preview_contour()
         self._update_sample_info()
         self.statusBar().showMessage("Reset to static pre-zero background subtraction.")
+        self._notify_oneD_history_changed(dirty=True)
 
     @busy_guard("Calculating time derivative...")
     def _calculate_time_derivative(self):
@@ -1785,6 +1867,7 @@ class OneDTabMixin:
 
         self.dataset.chirp_fit = fit
         self._preview_contour()
+        self._notify_oneD_history_changed(dirty=True)
         self.statusBar().showMessage(f"Chirp correction loaded and applied from: {path}")
 
         summary_lines = [
@@ -1830,6 +1913,7 @@ class OneDTabMixin:
             self.dataset.apply_chirp_correction(fit, detector=det)
             self.dataset.chirp_fit = fit
             self._preview_contour()
+            self._notify_oneD_history_changed(dirty=True)
         except Exception as exc:
             QMessageBox.warning(self, "Fit chirp", f"Error applying chirp correction: {exc}")
             return
@@ -1889,6 +1973,11 @@ class OneDTabMixin:
                 return
             try:
                 save_chirp_fit(fit, path, n_detectors=n_det)
+                if getattr(fit, "chirp_file", None):
+                    for st in reversed(getattr(self.dataset, "history", []) or []):
+                        if st.op == "apply_chirp_correction":
+                            st.params["chirp_file"] = fit.chirp_file
+                            break
                 self.statusBar().showMessage(f"Chirp correction applied and saved to: {path}")
             except Exception as exc:
                 QMessageBox.warning(self, "Fit chirp", f"Error saving chirp correction file: {exc}")
@@ -2052,7 +2141,6 @@ class OneDTabMixin:
         import matplotlib.pyplot as plt
 
         pm.apply_style()
-        self._apply_background()
         pc = getattr(self, "plot_controls", None)
         det = getattr(pc, "detector", 0) if pc is not None else 0
         try:
@@ -2395,6 +2483,7 @@ class OneDTabMixin:
         self.statusBar().showMessage(
             f"Embedded probe calibration from {csv_path.name} into {h5_path.name} ({len(probe_arr)} px, {disp_unit})"
         )
+        self._notify_oneD_history_changed(dirty=True)
         QMessageBox.information(
             self,
             "Probe Calibration Embedded",

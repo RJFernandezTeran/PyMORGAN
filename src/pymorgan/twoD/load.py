@@ -16,6 +16,7 @@ freq_units  Spectral-axis unit string for the labels (e.g. ``"cm-1"``)
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from os import PathLike
 from pathlib import Path
@@ -139,24 +140,6 @@ def write_P2DAT(
 
 
 save_P2DAT = write_P2DAT
-
-
-def _stub_loader(name: str) -> Loader:
-    """Build a placeholder loader that fails loudly until implemented."""
-
-    def loader(path: str) -> LoaderResult:
-        raise NotImplementedError(
-            f"The {name!r} 2-D loader is not implemented yet (requested file: {path}). "
-            f"Implement it here and register it via @register_map_loader({name!r})."
-        )
-
-    loader.__name__ = f"load_{name}"
-    return loader
-
-
-# Instrument-specific formats are recognised but not yet implemented.
-for _name in ("UoS_2DIR", "RAL_RAW", "RAL_Proc"):
-    register_map_loader(_name)(_stub_loader(_name))
 
 
 
@@ -2524,6 +2507,1059 @@ def read_QuickControl_2D(path: str, progress_tracker=None):
         raw_interferogram,
         raw_t1delays,
     )
+
+
+# --------------------------------------------------------------------------- #
+#              Shared helpers for UoS 2DIR & RAL 2DIR readers                 #
+# --------------------------------------------------------------------------- #
+def _read_w0_csv(folder: Path) -> tuple[float, float]:
+    """Read ``(w0_cm1, dt1_fs)`` from ``w0.csv`` in ``folder`` or its parent."""
+    for cand in (folder / "w0.csv", folder.parent / "w0.csv"):
+        if cand.is_file():
+            try:
+                vals = np.loadtxt(cand, delimiter=",").ravel().astype(float)
+                if vals.size >= 2:
+                    return float(vals[0]), float(vals[1])
+                if vals.size == 1:
+                    return float(vals[0]), 15.0
+            except Exception:
+                try:
+                    vals = np.loadtxt(cand).ravel().astype(float)
+                    if vals.size >= 2:
+                        return float(vals[0]), float(vals[1])
+                    if vals.size == 1:
+                        return float(vals[0]), 15.0
+                except Exception:
+                    logger.debug("Could not parse %s", cand, exc_info=True)
+    return 0.0, 15.0
+
+
+def _is_strictly_monotonic(arr: np.ndarray) -> bool:
+    arr = np.asarray(arr, dtype=float)
+    if arr.size <= 1 or not np.all(np.isfinite(arr)):
+        return False
+    diffs = np.diff(arr)
+    return bool(np.all(diffs > 0) or np.all(diffs < 0))
+
+
+def _probes_disjoint_and_monotonic(p1: np.ndarray, p2: np.ndarray) -> bool:
+    if not (_is_strictly_monotonic(p1) and _is_strictly_monotonic(p2)):
+        return False
+    return bool(float(np.max(p1)) < float(np.min(p2)) or float(np.max(p2)) < float(np.min(p1)))
+
+
+def _resolve_split_calibrated_probe(
+    folder: Path,
+    n_detectors: int,
+    pix_per_det: int,
+) -> tuple[list[np.ndarray] | None, str | None, str | None]:
+    """Load ``CalibratedProbe.csv`` from ``folder`` or parent and split per detector."""
+    cands = (
+        (folder / "CalibratedProbe.csv", "data folder", "datadir"),
+        (folder.parent / "CalibratedProbe.csv", "root folder", "rootdir"),
+    )
+    for cal_path, cal_loc, cal_lvl in cands:
+        if not cal_path.is_file():
+            continue
+        try:
+            arr = np.loadtxt(cal_path, delimiter=",").ravel().astype(float)
+            if n_detectors == 2 and len(arr) >= 2 * pix_per_det:
+                return (
+                    [arr[:pix_per_det], arr[pix_per_det : 2 * pix_per_det]],
+                    f"CalibratedProbe.csv ({cal_loc})",
+                    cal_lvl,
+                )
+            if n_detectors == 1 and len(arr) >= pix_per_det:
+                return [arr[:pix_per_det]], f"CalibratedProbe.csv ({cal_loc})", cal_lvl
+        except Exception:
+            logger.debug("Could not read CalibratedProbe.csv at %s", cal_path, exc_info=True)
+    return None, None, None
+
+
+def _build_dual_detector_maps(
+    cube_full: np.ndarray,
+    probe1: np.ndarray,
+    probe2: np.ndarray,
+    *,
+    allow_combined: bool,
+    pix_per_det: int,
+) -> tuple[list[str], dict[str, np.ndarray], dict[str, np.ndarray]]:
+    """Construct ``(detector_names, detector_probes, detector_data)`` for dual-array setups."""
+    d1 = cube_full[:, :pix_per_det, :]
+    d2 = cube_full[:, pix_per_det : 2 * pix_per_det, :]
+    p1 = np.asarray(probe1, dtype=float).ravel()
+    p2 = np.asarray(probe2, dtype=float).ravel()
+
+    names = ["DET1", "DET2"]
+    probes = {"DET1": p1, "DET2": p2}
+    data = {"DET1": d1, "DET2": d2}
+
+    if allow_combined and _probes_disjoint_and_monotonic(p1, p2):
+        p_comb = np.concatenate([p1, p2])
+        order = np.argsort(p_comb)
+        d_comb = cube_full[:, : 2 * pix_per_det, :][:, order, :]
+        names.append("Combined (DET1+DET2)")
+        probes["Combined (DET1+DET2)"] = p_comb[order]
+        data["Combined (DET1+DET2)"] = d_comb
+
+    return names, probes, data
+
+
+# --------------------------------------------------------------------------- #
+#                              UoS 2D-IR reader                               #
+# --------------------------------------------------------------------------- #
+_UOS_SLICE_RE = re.compile(
+    r"_D(\d+)(?:_([+-]?\d+(?:\.\d+)?)_ps)?",
+    re.IGNORECASE,
+)
+
+
+def _find_uos_2dir_slices(folder: Path) -> list[tuple[int, float | None, Path]]:
+    """Return sorted ``(D_index, optional_filename_ps, path)`` for non-empty delay-slice ``.2D`` files."""
+    entries: list[tuple[int, float | None, Path]] = []
+    for f in sorted(folder.iterdir(), key=lambda p: p.name.lower()):
+        if not f.is_file() or f.suffix.lower() != ".2d" or f.stat().st_size <= 0:
+            continue
+        m = _UOS_SLICE_RE.search(f.stem)
+        if not m:
+            continue
+        k_idx = int(m.group(1))
+        t2_fn = float(m.group(2)) if m.group(2) is not None else None
+        entries.append((k_idx, t2_fn, f))
+    return entries
+
+
+@register_map_dataset_detector("UoS_2DIR")
+def _uos_2dir_is_dataset(folder: Path) -> bool:
+    """Detect whether ``folder`` is a University of Sheffield 2D-IR dataset directory."""
+    folder = Path(folder)
+    if not folder.is_dir():
+        return False
+    slices = _find_uos_2dir_slices(folder)
+    if not slices:
+        return False
+
+    all_files = [f for f in folder.iterdir() if f.is_file()]
+    dt_files = [f for f in all_files if f.suffix.lower() == ".dt" and f.stat().st_size > 0]
+    if dt_files:
+        dt_stems = {f.stem.lower() for f in dt_files}
+        main_twod = [f for f in all_files if f.suffix.lower() == ".2d" and f.stem.lower() in dt_stems]
+        if any(f.stat().st_size > 0 for f in main_twod):
+            return False
+        return True
+
+    # Support partial / aborted UoS 2D-IR scans missing .DT (e.g. *-meh folders)
+    has_ps_slices = any(t2 is not None for _, t2, _ in slices)
+    has_w0 = any(f.name.lower() == "w0.csv" for f in all_files)
+    return has_ps_slices and (has_w0 or len(slices) >= 1)
+
+
+def _parse_uos_lg_sample_info(lg_file: Path | None) -> tuple[str, str]:
+    """Extract compact and full metadata strings from a UoS ``.LG`` log file."""
+    if lg_file is None or not lg_file.is_file():
+        return "", ""
+    try:
+        lines = lg_file.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except OSError:
+        return "", ""
+
+    compact_keys = (
+        "acquisition mode",
+        "data mode",
+        "number of scans",
+        "data normalised on reference?",
+        "grating grooves/mm",
+        "central wavelength nm",
+        "entrance slit width mm",
+    )
+    skip_prefixes = ("background ", "trim values", "gain values", "........")
+    compact_lines: list[str] = []
+    full_lines: list[str] = []
+    for raw_ln in lines:
+        ln = raw_ln.strip()
+        if not ln or ln.startswith("*"):
+            continue
+        low = ln.lower()
+        if low.startswith(skip_prefixes):
+            continue
+        if ":" in ln:
+            key, val = ln.split(":", 1)
+            val_clean = val.strip()
+            if not val_clean:
+                continue
+            pretty = f"{key.strip()}: {val_clean}"
+            full_lines.append(pretty)
+            if any(key.strip().lower().startswith(ck) for ck in compact_keys):
+                compact_lines.append(pretty)
+    return "\n".join(compact_lines), "\n".join(full_lines)
+
+
+@register_map_loader("UoS_2DIR")
+def read_UoS_2DIR(path: str, progress_tracker=None):
+    """Read a University of Sheffield 2D-IR dataset (``.DT`` + ``*_D*_*.2D`` slices)."""
+    from ..oneD.load import _estimate_uos_probe, _parse_uos_lg
+
+    p = Path(path)
+    folder = p if p.is_dir() else p.parent
+    slices = _find_uos_2dir_slices(folder)
+    if not slices:
+        raise FileNotFoundError(f"No UoS 2D-IR delay-slice (*_D*_*.2D) files found in {folder}")
+
+    all_files = sorted((f for f in folder.iterdir() if f.is_file()), key=lambda f: f.name.lower())
+    dt_files = [f for f in all_files if f.suffix.lower() == ".dt" and f.stat().st_size > 0]
+    lg_files = [f for f in all_files if f.suffix.lower() == ".lg"]
+
+    dt_delays: np.ndarray | None = None
+    if dt_files:
+        try:
+            dt_delays = np.loadtxt(dt_files[0], dtype=float).ravel()
+        except Exception:
+            dt_delays = None
+
+    in_progress = dt_delays is None or len(slices) < len(dt_delays)
+
+    aligned: list[tuple[float, int, Path]] = []
+    for k_idx, fn_t2, fpath in slices:
+        if dt_delays is not None and 0 <= k_idx < len(dt_delays):
+            t2_val = float(dt_delays[k_idx])
+        elif fn_t2 is not None:
+            t2_val = float(fn_t2)
+        else:
+            t2_val = float(k_idx)
+        aligned.append((t2_val, k_idx, fpath))
+
+    aligned.sort(key=lambda item: (item[0], item[1]))
+    delays_ps = np.asarray([item[0] for item in aligned], dtype=float)
+
+    n_total = len(aligned)
+    if progress_tracker is not None:
+        progress_tracker.set_total(max(1, n_total))
+
+    matrices: list[np.ndarray] = []
+    for idx, (_t2, _k, fpath) in enumerate(aligned):
+        if progress_tracker is not None:
+            if hasattr(progress_tracker, "update_split"):
+                progress_tracker.update_split(idx + 1, n_total, "loading")
+            else:
+                progress_tracker.update(idx + 1, label=f"Loading UoS 2D slice {idx + 1}/{n_total}...")
+        arr = np.loadtxt(fpath, dtype=float)
+        if arr.ndim == 1:
+            arr = arr[np.newaxis, :]
+        matrices.append(arr)
+
+    min_rows = min(m.shape[0] for m in matrices)
+    if any(m.shape[0] != min_rows for m in matrices):
+        in_progress = True
+        matrices = [m[:min_rows, :] for m in matrices]
+
+    min_cols = min(m.shape[1] for m in matrices)
+    matrices = [m[:, :min_cols] for m in matrices]
+    cube_full = np.stack(matrices, axis=-1)  # (Nt1, Ncols, Nt2)
+
+    nt1 = cube_full.shape[0]
+    w0_cm1, dt1_fs = _read_w0_csv(folder)
+    raw_t1delays = np.arange(nt1, dtype=float) * dt1_fs
+
+    if min_cols >= 192:
+        n_det = 2
+        pix_per_det = 96
+    else:
+        n_det = 1
+        pix_per_det = min_cols
+
+    cal_probes, cal_source, cal_level = _resolve_split_calibrated_probe(folder, n_det, pix_per_det)
+    lg_file = lg_files[0] if lg_files else None
+    if cal_probes is None:
+        gratings, cwls = _parse_uos_lg(lg_file) if lg_file is not None else ([], [])
+        if (
+            len(gratings) >= n_det
+            and len(cwls) >= n_det
+            and all(c > 0 for c in cwls[:n_det])
+        ):
+            cal_probes = [_estimate_uos_probe(gratings[d], cwls[d], pix_per_det) for d in range(n_det)]
+            cal_source = f"Estimated from log file ({lg_file.name})"
+        else:
+            pix = np.arange(1, pix_per_det + 1, dtype=float)
+            cal_probes = [pix.copy() for _ in range(n_det)]
+            cal_source = "Pixel indices (uncalibrated)"
+
+    units = _units_2d("ps", "cm-1")
+    units["w0_cm1"] = w0_cm1
+    units["dt1_fs"] = dt1_fs
+    units["is_frequency_domain"] = False
+    units["interferogram_from_signal"] = True
+    units["cal_source"] = cal_source
+    if cal_level is not None:
+        units["cal_level"] = cal_level
+
+    compact_info, full_info = _parse_uos_lg_sample_info(lg_file)
+    if compact_info:
+        units["sample_info"] = compact_info
+    if full_info:
+        units["sample_info_full"] = full_info
+
+    if n_det == 2:
+        det_names, det_probes, det_data = _build_dual_detector_maps(
+            cube_full, cal_probes[0], cal_probes[1], allow_combined=False, pix_per_det=pix_per_det
+        )
+        units["detector_names"] = det_names
+        units["detector_probes"] = det_probes
+        units["detector_data"] = det_data
+        units["active_detector"] = "DET1"
+        raw_signal = det_data["DET1"].copy()
+        probe = det_probes["DET1"].copy()
+    else:
+        raw_signal = cube_full[:, :pix_per_det, :].copy()
+        probe = np.asarray(cal_probes[0], dtype=float).copy()
+
+    raw_interferogram = np.nanmean(raw_signal, axis=1)
+    Z = raw_signal.copy()
+    pump = raw_t1delays.copy()
+
+    return (
+        Z,
+        pump,
+        probe,
+        delays_ps,
+        units,
+        "cm-1",
+        "shaper",
+        in_progress,
+        raw_signal,
+        raw_interferogram,
+        raw_t1delays,
+    )
+
+
+# --------------------------------------------------------------------------- #
+#                            RAL 2D-IR (Raw & Proc)                           #
+# --------------------------------------------------------------------------- #
+def _find_ral_raw_avgdiff(folder: Path) -> Path | None:
+    """Locate the non-empty ``*AvgDiff.csv`` file in ``folder`` (excluding 1D ``Avg Diff spec``)."""
+    cands = sorted(
+        [
+            f
+            for f in folder.glob("*.csv")
+            if f.is_file()
+            and f.stat().st_size > 0
+            and "avgdiff" in f.name.lower()
+            and "avg diff spec" not in f.name.lower()
+        ],
+        key=lambda f: f.name.lower(),
+    )
+    return cands[0] if cands else None
+
+
+def _ral_header_has_encoded_t1(avg_file: Path) -> bool:
+    """Check whether the first row of ``avg_file`` carries ``1e7``-encoded ``t1_idx`` columns."""
+    try:
+        with open(avg_file, encoding="utf-8", errors="ignore") as fh:
+            first = fh.readline()
+        parts = [p.strip() for p in first.split(",")[1:12] if p.strip()]
+        vals = [float(p) for p in parts]
+        return any(abs(v) >= 1e6 for v in vals)
+    except Exception:
+        return False
+
+
+@register_map_dataset_detector("RAL_RAW")
+def _ral_raw_is_dataset(folder: Path) -> bool:
+    """Detect whether ``folder`` is a RAL raw 2D-IR dataset directory."""
+    folder = Path(folder)
+    if not folder.is_dir():
+        return False
+    avg_file = _find_ral_raw_avgdiff(folder)
+    if avg_file is None:
+        return False
+    return (folder / "w0.csv").is_file() or _ral_header_has_encoded_t1(avg_file)
+
+
+def _parse_ral_info_txt(folder: Path) -> tuple[dict[str, str], str, str]:
+    """Parse ``Run * info.txt`` into ``(units_kv, compact_info, full_info)``."""
+    info_files = sorted(
+        (f for f in folder.iterdir() if f.is_file() and f.name.lower().endswith("info.txt")),
+        key=lambda f: f.name.lower(),
+    )
+    if not info_files:
+        return {}, "", ""
+    units_kv: dict[str, str] = {}
+    full_lines: list[str] = []
+    compact_lines: list[str] = []
+    compact_keys = {
+        "date",
+        "time",
+        "sample",
+        "solvent",
+        "concentration",
+        "polarisations",
+        "cycles (if not stopped early)",
+        "single cycle average time",
+    }
+    try:
+        for raw_ln in info_files[0].read_text(encoding="utf-8", errors="ignore").splitlines():
+            ln = raw_ln.strip()
+            if not ln or ":" not in ln:
+                continue
+            key, val = ln.split(":", 1)
+            k_clean = key.strip()
+            v_clean = val.strip()
+            if not v_clean:
+                continue
+            units_kv[f"info_{k_clean.lower().replace(' ', '_')}"] = v_clean
+            pretty = f"{k_clean}: {v_clean}"
+            full_lines.append(pretty)
+            if k_clean.lower() in compact_keys:
+                compact_lines.append(pretty)
+    except OSError:
+        pass
+    return units_kv, "\n".join(compact_lines), "\n".join(full_lines)
+
+
+@register_map_loader("RAL_RAW")
+def read_RAL_RAW(path: str, progress_tracker=None, load_single_scans: bool | None = None):
+    """Read a RAL raw 2D-IR dataset (``Run *_AvgDiff.csv`` + ``w0.csv`` + ``CalibratedProbe.csv``)."""
+    import pandas as pd
+
+    p = Path(path)
+    if p.is_file() and "avgdiff" in p.name.lower() and "avg diff spec" not in p.name.lower():
+        avg_file = p
+        folder = p.parent
+    else:
+        folder = p if p.is_dir() else p.parent
+        avg_file = _find_ral_raw_avgdiff(folder)
+        if avg_file is None:
+            raise FileNotFoundError(f"No '*AvgDiff.csv' file found in RAL 2D folder {folder}")
+
+    if progress_tracker is not None:
+        progress_tracker.set_total(2)
+        if hasattr(progress_tracker, "update_split"):
+            progress_tracker.update_split(1, 2, "loading")
+        else:
+            progress_tracker.update(1, label=f"Reading {avg_file.name}...")
+
+    df_raw = pd.read_csv(avg_file, header=None, engine="c")
+    if df_raw.shape[0] < 2 or df_raw.shape[1] < 3:
+        raise ValueError(f"Invalid RAL_RAW matrix dimensions {df_raw.shape} in {avg_file}")
+
+    hdr = pd.to_numeric(df_raw.iloc[0, 1:], errors="coerce").to_numpy(dtype=float)
+    valid_cols = np.isfinite(hdr)
+    hdr = hdr[valid_cols]
+    mat = (
+        df_raw.iloc[1:, 1:]
+        .loc[:, valid_cols]
+        .apply(pd.to_numeric, errors="coerce")
+        .to_numpy(dtype=float)
+    )
+    mat = np.where(np.isfinite(mat), mat, 0.0)
+
+    t1_idx = np.round(hdr / 1e7).astype(int)
+    t2_rem = hdr - t1_idx * 1e7
+
+    # Partition columns into contiguous t2 blocks while keeping ALL columns per block
+    # (including both leading t1_idx == 0 entries).
+    blocks: list[tuple[float, np.ndarray]] = []
+    b_start = 0
+    for idx in range(1, len(hdr)):
+        same_t2 = abs(t2_rem[idx] - t2_rem[b_start]) <= 1e-4
+        wrapped_t1 = (idx > b_start + 1) and (t1_idx[idx] < t1_idx[idx - 1])
+        if not same_t2 or wrapped_t1:
+            t2_val = float(np.mean(t2_rem[b_start:idx]))
+            blocks.append((t2_val, mat[:, b_start:idx].T))  # (Nt1_block, Npix)
+            b_start = idx
+    t2_val = float(np.mean(t2_rem[b_start:]))
+    blocks.append((t2_val, mat[:, b_start:].T))
+
+    if not blocks:
+        raise ValueError(f"Could not decode any t2 delay blocks from {avg_file}")
+
+    block_lens = [b[1].shape[0] for b in blocks]
+    nt1_expected = max(set(block_lens), key=block_lens.count)
+    in_progress = any(bl != nt1_expected for bl in block_lens)
+    complete_blocks = [b for b in blocks if b[1].shape[0] == nt1_expected]
+    if not complete_blocks:
+        # Single partial block: keep whatever length was recorded
+        nt1_expected = block_lens[0]
+        complete_blocks = blocks
+
+    complete_blocks.sort(key=lambda b: b[0])
+    delays_ps = np.asarray([b[0] for b in complete_blocks], dtype=float)
+    cube_full = np.stack([b[1] for b in complete_blocks], axis=-1)  # (Nt1, Npix_total, Nt2)
+
+    if progress_tracker is not None:
+        if hasattr(progress_tracker, "update_split"):
+            progress_tracker.update_split(2, 2, "loading")
+        else:
+            progress_tracker.update(2, label="Finalizing RAL 2D-IR dataset...")
+
+    n_pix_total = cube_full.shape[1]
+    w0_cm1, dt1_fs = _read_w0_csv(folder)
+    raw_t1delays = np.arange(nt1_expected, dtype=float) * dt1_fs
+
+    if n_pix_total >= 256:
+        n_det = 2
+        pix_per_det = 128
+    elif n_pix_total >= 192:
+        n_det = 2
+        pix_per_det = 96
+    else:
+        n_det = 1
+        pix_per_det = n_pix_total
+
+    cal_probes, cal_source, cal_level = _resolve_split_calibrated_probe(folder, n_det, pix_per_det)
+    if cal_probes is None:
+        pix = np.arange(1, pix_per_det + 1, dtype=float)
+        cal_probes = [pix.copy() for _ in range(n_det)]
+        cal_source = "Pixel indices (uncalibrated)"
+
+    units = _units_2d("ps", "cm-1")
+    units["w0_cm1"] = w0_cm1
+    units["dt1_fs"] = dt1_fs
+    units["is_frequency_domain"] = False
+    units["interferogram_from_signal"] = True
+    units["cal_source"] = cal_source
+    if cal_level is not None:
+        units["cal_level"] = cal_level
+
+    info_kv, compact_info, full_info = _parse_ral_info_txt(folder)
+    units.update(info_kv)
+    if compact_info:
+        units["sample_info"] = compact_info
+    if full_info:
+        units["sample_info_full"] = full_info
+
+    if n_det == 2:
+        det_names, det_probes, det_data = _build_dual_detector_maps(
+            cube_full, cal_probes[0], cal_probes[1], allow_combined=True, pix_per_det=pix_per_det
+        )
+        units["detector_names"] = det_names
+        units["detector_probes"] = det_probes
+        units["detector_data"] = det_data
+        units["active_detector"] = "DET1"
+        raw_signal = det_data["DET1"].copy()
+        probe = det_probes["DET1"].copy()
+    else:
+        raw_signal = cube_full[:, :pix_per_det, :].copy()
+        probe = np.asarray(cal_probes[0], dtype=float).copy()
+
+    raw_interferogram = np.nanmean(raw_signal, axis=1)
+    Z = raw_signal.copy()
+    pump = raw_t1delays.copy()
+
+    return (
+        Z,
+        pump,
+        probe,
+        delays_ps,
+        units,
+        "cm-1",
+        "shaper",
+        in_progress,
+        raw_signal,
+        raw_interferogram,
+        raw_t1delays,
+    )
+
+
+_RAL_PROC_FILE_RE = re.compile(
+    r"([+-]?\d+(?:\.\d+)?)\s*(fs|ps|ns)(?=_2dir\.csv$)",
+    re.IGNORECASE,
+)
+
+
+def _find_ral_proc_files(folder: Path) -> list[tuple[float, Path]]:
+    """Find and sort ``*_2DIR.csv`` delay files in ``folder`` by population time ``t2`` (ps)."""
+    entries: list[tuple[float, Path]] = []
+    for f in sorted(folder.glob("*_2DIR.csv"), key=lambda p: p.name.lower()):
+        if not f.is_file() or f.stat().st_size <= 0:
+            continue
+        m = _RAL_PROC_FILE_RE.search(f.name)
+        if not m:
+            continue
+        val = float(m.group(1))
+        unit = m.group(2).lower()
+        if unit == "fs":
+            val /= 1000.0
+        elif unit == "ns":
+            val *= 1000.0
+        entries.append((val, f))
+    entries.sort(key=lambda item: item[0])
+    return entries
+
+
+@register_map_dataset_detector("RAL_Proc")
+def _ral_proc_is_dataset(folder: Path) -> bool:
+    """Detect whether ``folder`` is a RAL processed 2D-IR directory (``*_2DIR.csv``)."""
+    folder = Path(folder)
+    if not folder.is_dir():
+        return False
+    return len(_find_ral_proc_files(folder)) > 0
+
+
+@register_map_loader("RAL_Proc")
+def read_RAL_Proc(path: str, progress_tracker=None):
+    """Read a RAL processed 2D-IR dataset (directory of ``*_2DIR.csv`` delay files)."""
+    import pandas as pd
+
+    p = Path(path)
+    folder = p if p.is_dir() else p.parent
+    entries = _find_ral_proc_files(folder)
+    if not entries:
+        raise FileNotFoundError(f"No '*_2DIR.csv' processed delay files found in {folder}")
+
+    n_files = len(entries)
+    if progress_tracker is not None:
+        progress_tracker.set_total(max(1, n_files))
+
+    delays_list: list[float] = []
+    slices: list[np.ndarray] = []
+    pump_ref: np.ndarray | None = None
+    probe_ref: np.ndarray | None = None
+
+    for idx, (t2_ps, fpath) in enumerate(entries):
+        if progress_tracker is not None:
+            if hasattr(progress_tracker, "update_split"):
+                progress_tracker.update_split(idx + 1, n_files, "loading")
+            else:
+                progress_tracker.update(idx + 1, label=f"Loading {fpath.name}...")
+        with open(fpath, encoding="utf-8", errors="ignore") as fh:
+            first_line = fh.readline()
+        sep = "\t" if "\t" in first_line else ","
+        arr = pd.read_csv(fpath, sep=sep, header=None, engine="c").to_numpy(dtype=float)
+        if arr.shape[0] < 2 or arr.shape[1] < 2:
+            raise ValueError(f"Invalid RAL_Proc CSV dimensions {arr.shape} in {fpath}")
+        if pump_ref is None:
+            pump_ref = arr[0, 1:].astype(float)
+            probe_ref = arr[1:, 0].astype(float)
+        delays_list.append(t2_ps)
+        slices.append(arr[1:, 1:].T.astype(float))  # (Npump, Nprobe_total)
+
+    assert pump_ref is not None and probe_ref is not None
+    pump = pump_ref
+    probe_all = probe_ref
+    delays_ps = np.asarray(delays_list, dtype=float)
+    cube_full = np.stack(slices, axis=-1)  # (Npump, Nprobe_total, Nt2)
+
+    # Collapse redundant Hermitian mirror around Nyquist if present
+    n_pump = len(pump)
+    if (
+        n_pump >= 4
+        and n_pump % 2 == 0
+        and np.allclose(
+            cube_full[1 : n_pump // 2, :, :],
+            cube_full[-1 : n_pump // 2 : -1, :, :],
+            rtol=1e-4,
+            atol=1e-6,
+            equal_nan=True,
+        )
+    ):
+        n_half = n_pump // 2
+        pump = pump[:n_half]
+        cube_full = cube_full[:n_half, :, :]
+
+    n_pix_total = len(probe_all)
+    if n_pix_total >= 256:
+        n_det = 2
+        pix_per_det = 128
+    elif n_pix_total >= 192:
+        n_det = 2
+        pix_per_det = 96
+    else:
+        n_det = 1
+        pix_per_det = n_pix_total
+
+    units = _units_2d("ps", "cm-1")
+    units["is_frequency_domain"] = True
+    units["cal_source"] = "Dataset probe axis (RAL_Proc CSV)"
+
+    # Only fall back to CalibratedProbe.csv if row headers are uncalibrated pixel indices
+    if np.allclose(probe_all, np.arange(1, n_pix_total + 1, dtype=float)):
+        cal_probes, cal_source, cal_level = _resolve_split_calibrated_probe(folder, n_det, pix_per_det)
+        if cal_probes is not None:
+            p1 = cal_probes[0]
+            p2 = cal_probes[1] if n_det == 2 else None
+            units["cal_source"] = cal_source
+            if cal_level is not None:
+                units["cal_level"] = cal_level
+        else:
+            p1 = probe_all[:pix_per_det]
+            p2 = probe_all[pix_per_det : 2 * pix_per_det] if n_det == 2 else None
+    else:
+        p1 = probe_all[:pix_per_det]
+        p2 = probe_all[pix_per_det : 2 * pix_per_det] if n_det == 2 else None
+
+    if n_det == 2 and p2 is not None:
+        det_names, det_probes, det_data = _build_dual_detector_maps(
+            cube_full, p1, p2, allow_combined=True, pix_per_det=pix_per_det
+        )
+        units["detector_names"] = det_names
+        units["detector_probes"] = det_probes
+        units["detector_data"] = det_data
+        units["active_detector"] = "DET1"
+        Z = det_data["DET1"].copy()
+        probe = det_probes["DET1"].copy()
+    else:
+        Z = cube_full[:, :pix_per_det, :].copy()
+        probe = np.asarray(p1, dtype=float).copy()
+
+    return (
+        Z,
+        pump,
+        probe,
+        delays_ps,
+        units,
+        "cm-1",
+        "processed",
+        False,
+        Z.copy(),
+        None,
+        None,
+    )
+
+
+# --------------------------------------------------------------------------- #
+#                         FAIR 2D HDF5 (HDF5_2D)                              #
+# --------------------------------------------------------------------------- #
+register_map_dataset_glob("HDF5_2D", "*.h5")
+
+
+@register_map_dataset_file_filter("HDF5_2D")
+def _pymorgan_2d_hdf5_is_file(path: Path | str) -> bool:
+    """Return True if ``path`` is a PyMORGAN FAIR 2D HDF5 archive."""
+    import h5py
+
+    p = Path(path)
+    if not p.is_file() or p.suffix.lower() not in {".h5", ".hdf5"}:
+        return False
+    try:
+        if not h5py.is_hdf5(p):
+            return False
+        with h5py.File(p, "r") as f:
+            fmt = f.attrs.get("pymorgan_format", "")
+            if isinstance(fmt, (bytes, np.bytes_)):
+                fmt = fmt.decode("utf-8", errors="replace")
+            if fmt == "2D":
+                return True
+            if "pump" in f and "probe" in f and "delays" in f and "Z_R" in f:
+                return True
+    except Exception:
+        return False
+    return False
+
+
+def _save_mapping_group(parent, group_name: str, mapping: dict[str, np.ndarray] | None, *, units: str | None = None) -> None:
+    from ..hdf5_meta import create_compressed_dataset
+
+    if not mapping:
+        return
+    grp = parent.create_group(group_name)
+    order: list[str] = []
+    for key, arr in mapping.items():
+        safe_key = str(key).replace("/", "_")
+        dset = create_compressed_dataset(grp, safe_key, np.asarray(arr, dtype=float), units=units)
+        dset.attrs["original_key"] = str(key)
+        order.append(str(key))
+    import json
+
+    grp.attrs["keys_json"] = json.dumps(order)
+
+
+def _load_mapping_group(parent, group_name: str) -> dict[str, np.ndarray] | None:
+    import json
+
+    if group_name not in parent:
+        return None
+    grp = parent[group_name]
+    out: dict[str, np.ndarray] = {}
+    ordered_keys: list[str] = []
+    if "keys_json" in grp.attrs:
+        try:
+            ordered_keys = list(json.loads(grp.attrs["keys_json"]))
+        except Exception:
+            ordered_keys = []
+    by_orig: dict[str, np.ndarray] = {}
+    for k in grp.keys():
+        dset = grp[k]
+        orig_k = dset.attrs.get("original_key", k)
+        if isinstance(orig_k, (bytes, np.bytes_)):
+            orig_k = orig_k.decode("utf-8", errors="replace")
+        by_orig[str(orig_k)] = np.asarray(dset[:], dtype=float)
+    for k in ordered_keys:
+        if k in by_orig:
+            out[k] = by_orig.pop(k)
+    out.update(by_orig)
+    return out or None
+
+
+def save_2D_hdf5(dataset, path: str | PathLike) -> Path:
+    """Save a :class:`~pymorgan.twoD.Dataset2D` instance to a FAIR/NeXus HDF5 archive."""
+    import json
+
+    import h5py
+
+    from ..hdf5_meta import create_compressed_dataset, json_safe_units, write_fair_root_attrs
+
+    target = Path(path)
+    if target.suffix.lower() not in (".h5", ".hdf5"):
+        target = target.with_suffix(".h5")
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    units_dict = dataset.units if isinstance(dataset.units, dict) else {}
+    freq_u = str(getattr(dataset, "freq_units", "cm-1") or "cm-1")
+    t2_u = str(units_dict.get("unitsT_ltx", "ps")).replace("$", "")
+    z_u = str(units_dict.get("unitsZ_ltx", "mOD")).replace("$", "")
+
+    with h5py.File(target, "w") as f:
+        write_fair_root_attrs(
+            f,
+            pymorgan_format="2D",
+            source=getattr(dataset, "source", None),
+            original_data_type=getattr(dataset, "data_type", None),
+            units=units_dict,
+            dataset=dataset,
+            format_version="2.0",
+        )
+
+        create_compressed_dataset(f, "pump", np.asarray(dataset.pump, dtype=float), units=freq_u, long_name="Pump axis")
+        create_compressed_dataset(f, "probe", np.asarray(dataset.probe, dtype=float), units=freq_u, long_name="Probe axis")
+        create_compressed_dataset(f, "delays", np.asarray(dataset.delays, dtype=float), units=t2_u, long_name="Population time t2")
+        create_compressed_dataset(f, "Z_R", np.asarray(dataset.Z_R, dtype=float), units=z_u, long_name="Raw 2D signal cube")
+
+        if getattr(dataset, "Z_C", None) is not None:
+            create_compressed_dataset(f, "Z_C", np.asarray(dataset.Z_C, dtype=float), units=z_u, long_name="Corrected 2D signal cube")
+        if getattr(dataset, "raw_signal", None) is not None:
+            create_compressed_dataset(f, "raw_signal", np.asarray(dataset.raw_signal, dtype=float), long_name="Raw time-domain/frequency signal")
+        if getattr(dataset, "raw_interferogram", None) is not None:
+            create_compressed_dataset(f, "raw_interferogram", np.asarray(dataset.raw_interferogram, dtype=float), long_name="Raw pump interferogram")
+        if getattr(dataset, "raw_t1delays", None) is not None:
+            create_compressed_dataset(f, "raw_t1delays", np.asarray(dataset.raw_t1delays, dtype=float), units="fs", long_name="t1 delay axis")
+        if getattr(dataset, "raw_signal_ss", None) is not None:
+            create_compressed_dataset(f, "raw_signal_ss", np.asarray(dataset.raw_signal_ss, dtype=float), long_name="Single-scan 2D signal cube")
+        if getattr(dataset, "raw_interferogram_ss", None) is not None:
+            create_compressed_dataset(f, "raw_interferogram_ss", np.asarray(dataset.raw_interferogram_ss, dtype=float), long_name="Single-scan interferograms")
+
+        _save_mapping_group(f, "states_data", getattr(dataset, "states_data", None), units=z_u)
+        _save_mapping_group(f, "states_signal_ss", getattr(dataset, "states_signal_ss", None), units=z_u)
+        _save_mapping_group(f, "detector_probes", getattr(dataset, "detector_probes", None), units=freq_u)
+        _save_mapping_group(f, "detector_data", getattr(dataset, "detector_data", None), units=z_u)
+        _save_mapping_group(f, "detector_signal_ss", getattr(dataset, "detector_signal_ss", None), units=z_u)
+
+        f.attrs["data_type"] = str(getattr(dataset, "data_type", None) or "HDF5_2D")
+        f.attrs["datatype"] = str(getattr(dataset, "datatype", None) or "processed")
+        f.attrs["freq_units"] = freq_u
+        f.attrs["w0_cm1"] = float(getattr(dataset, "w0_cm1", 0.0) or 0.0)
+        f.attrs["dt1_fs"] = float(getattr(dataset, "dt1_fs", 0.0) or 0.0)
+        f.attrs["shot_rotation"] = int(getattr(dataset, "shot_rotation", 0) or 0)
+        f.attrs["is_frequency_domain"] = bool(getattr(dataset, "is_frequency_domain", False))
+        f.attrs["in_progress"] = bool(getattr(dataset, "in_progress", False))
+        f.attrs["nscans"] = int(getattr(dataset, "nscans", 1) or 1)
+        if getattr(dataset, "cal_level", None) is not None:
+            f.attrs["cal_level"] = str(dataset.cal_level)
+        if getattr(dataset, "cal_source", None) is not None:
+            f.attrs["cal_source"] = str(dataset.cal_source)
+        if getattr(dataset, "active_state", None) is not None:
+            f.attrs["active_state"] = str(dataset.active_state)
+        if getattr(dataset, "active_detector", None) is not None:
+            f.attrs["active_detector"] = str(dataset.active_detector)
+        if getattr(dataset, "state_names", None):
+            f.attrs["state_names_json"] = json.dumps(list(dataset.state_names))
+        if getattr(dataset, "detector_names", None):
+            f.attrs["detector_names_json"] = json.dumps(list(dataset.detector_names))
+        if getattr(dataset, "active_scan_indices", None) is not None:
+            f.attrs["active_scan_indices_json"] = json.dumps([int(i) for i in dataset.active_scan_indices])
+
+        units_clean = json_safe_units(
+            units_dict,
+            drop_keys={
+                "states_data",
+                "states_signal_ss",
+                "detector_probes",
+                "detector_data",
+                "detector_signal_ss",
+                "raw_signal_ss",
+                "raw_interferogram_ss",
+            },
+        )
+        f.attrs["units_json"] = json.dumps(units_clean)
+
+    return target
+
+
+def _decode_attr(val: Any, default: str = "") -> str:
+    if val is None:
+        return default
+    if isinstance(val, (bytes, np.bytes_)):
+        return val.decode("utf-8", errors="replace")
+    return str(val)
+
+
+@register_map_loader("HDF5_2D")
+def read_2D_hdf5(path: str | PathLike):
+    """Read a FAIR 2D HDF5 archive into the 11-tuple expected by :meth:`Dataset2D.from_file`."""
+    import json
+
+    import h5py
+
+    p = Path(path)
+    with h5py.File(p, "r") as f:
+        fmt = _decode_attr(f.attrs.get("pymorgan_format"), "")
+        if fmt == "1D" or ("Zavg_R" in f and "pump" not in f and "Z_R" not in f):
+            raise ValueError(
+                f"File {p.name} is a 1D PyMORGAN HDF5 archive; use load_1D_hdf5."
+            )
+        pump = np.asarray(f["pump"][:], dtype=float)
+        probe = np.asarray(f["probe"][:], dtype=float)
+        delays = np.asarray(f["delays"][:], dtype=float)
+        Z_R = np.asarray(f["Z_R"][:], dtype=float)
+        raw_signal = np.asarray(f["raw_signal"][:], dtype=float) if "raw_signal" in f else None
+        raw_interferogram = np.asarray(f["raw_interferogram"][:], dtype=float) if "raw_interferogram" in f else None
+        raw_t1delays = np.asarray(f["raw_t1delays"][:], dtype=float) if "raw_t1delays" in f else None
+
+        units_raw = _decode_attr(f.attrs.get("units_json"), "{}")
+        try:
+            units = json.loads(units_raw)
+        except Exception:
+            units = _units_2d("ps", "cm-1")
+
+        freq_units = _decode_attr(f.attrs.get("freq_units"), "cm-1")
+        datatype = _decode_attr(f.attrs.get("datatype"), "processed")
+        in_progress = bool(f.attrs.get("in_progress", False))
+        units["w0_cm1"] = float(f.attrs.get("w0_cm1", units.get("w0_cm1", 0.0)))
+        units["dt1_fs"] = float(f.attrs.get("dt1_fs", units.get("dt1_fs", 0.0)))
+        units["is_frequency_domain"] = bool(f.attrs.get("is_frequency_domain", units.get("is_frequency_domain", False)))
+
+        orig_dt = _decode_attr(f.attrs.get("original_data_type"), "")
+        if orig_dt and "original_data_type" not in units:
+            units["original_data_type"] = orig_dt
+        if "cal_level" in f.attrs:
+            units["cal_level"] = _decode_attr(f.attrs["cal_level"])
+        if "cal_source" in f.attrs:
+            units["cal_source"] = _decode_attr(f.attrs["cal_source"])
+
+        states_data = _load_mapping_group(f, "states_data")
+        if states_data:
+            units["states_data"] = states_data
+        states_ss = _load_mapping_group(f, "states_signal_ss")
+        if states_ss:
+            units["states_signal_ss"] = states_ss
+        det_probes = _load_mapping_group(f, "detector_probes")
+        if det_probes:
+            units["detector_probes"] = det_probes
+        det_data = _load_mapping_group(f, "detector_data")
+        if det_data:
+            units["detector_data"] = det_data
+        det_ss = _load_mapping_group(f, "detector_signal_ss")
+        if det_ss:
+            units["detector_signal_ss"] = det_ss
+
+        if "state_names_json" in f.attrs:
+            units["state_names"] = json.loads(_decode_attr(f.attrs["state_names_json"], "[]"))
+        if "detector_names_json" in f.attrs:
+            units["detector_names"] = json.loads(_decode_attr(f.attrs["detector_names_json"], "[]"))
+        if "active_state" in f.attrs:
+            units["active_state"] = _decode_attr(f.attrs["active_state"])
+        if "active_detector" in f.attrs:
+            units["active_detector"] = _decode_attr(f.attrs["active_detector"])
+        if "raw_signal_ss" in f:
+            units["raw_signal_ss"] = np.asarray(f["raw_signal_ss"][:], dtype=float)
+        if "raw_interferogram_ss" in f:
+            units["raw_interferogram_ss"] = np.asarray(f["raw_interferogram_ss"][:], dtype=float)
+        if "nscans" in f.attrs:
+            units["nscans"] = int(f.attrs["nscans"])
+
+    return (
+        Z_R,
+        pump,
+        probe,
+        delays,
+        units,
+        freq_units,
+        datatype,
+        in_progress,
+        raw_signal,
+        raw_interferogram,
+        raw_t1delays,
+    )
+
+
+def load_2D_hdf5(path: str | PathLike):
+    """Load a FAIR 2D HDF5 archive into a fully restored :class:`~pymorgan.twoD.Dataset2D`."""
+    import json
+
+    import h5py
+
+    from ..hdf5_meta import restore_dataset_history
+    from .dataset import Dataset2D
+
+    p = Path(path)
+    if not p.is_file():
+        raise FileNotFoundError(f"2D HDF5 archive not found: {path}")
+
+    (
+        Z_R,
+        pump,
+        probe,
+        delays,
+        units,
+        freq_units,
+        datatype,
+        in_progress,
+        raw_signal,
+        raw_interferogram,
+        raw_t1delays,
+    ) = read_2D_hdf5(p)
+
+    with h5py.File(p, "r") as f:
+        data_type = _decode_attr(f.attrs.get("data_type"), "HDF5_2D")
+        source = _decode_attr(f.attrs.get("source"), str(p)) or str(p)
+        Z_C = np.asarray(f["Z_C"][:], dtype=float) if "Z_C" in f else None
+        shot_rotation = int(f.attrs.get("shot_rotation", 0) or 0)
+        nscans = int(f.attrs.get("nscans", units.get("nscans", 1)) or 1)
+        active_scan_indices = None
+        if "active_scan_indices_json" in f.attrs:
+            try:
+                active_scan_indices = [int(i) for i in json.loads(_decode_attr(f.attrs["active_scan_indices_json"], "[]"))]
+            except Exception:
+                active_scan_indices = None
+
+        ds = Dataset2D(
+            Z_R,
+            pump,
+            probe,
+            delays,
+            units,
+            freq_units=freq_units,
+            source=source,
+            data_type=data_type,
+            datatype=datatype,
+            in_progress=in_progress,
+            raw_signal=raw_signal,
+            raw_interferogram=raw_interferogram,
+            raw_t1delays=raw_t1delays,
+            cal_level=units.get("cal_level"),
+            cal_source=units.get("cal_source"),
+            is_frequency_domain=units.get("is_frequency_domain"),
+            w0_cm1=units.get("w0_cm1"),
+            dt1_fs=units.get("dt1_fs"),
+            state_names=units.get("state_names"),
+            states_data=units.get("states_data"),
+            states_signal_ss=units.get("states_signal_ss"),
+            active_state=units.get("active_state"),
+            detector_names=units.get("detector_names"),
+            detector_probes=units.get("detector_probes"),
+            detector_data=units.get("detector_data"),
+            detector_signal_ss=units.get("detector_signal_ss"),
+            active_detector=units.get("active_detector"),
+            raw_signal_ss=units.get("raw_signal_ss"),
+            raw_interferogram_ss=units.get("raw_interferogram_ss"),
+            nscans=nscans,
+            active_scan_indices=active_scan_indices,
+        )
+        ds.shot_rotation = shot_rotation
+        ds.Z_C = Z_C
+        ds._is_corrected = Z_C is not None
+        restore_dataset_history(f, ds)
+
+    return ds
 
 
 

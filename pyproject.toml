@@ -49,6 +49,7 @@ pymorgan-edit-gui = "pymorgan.gui.designer:main"
 pymorgan-settings = "pymorgan.gui.settings_app:main"
 pymorgan-setup-env = "pymorgan.gui.python_env_setup:cli_main"
 pymorgan-test = "pymorgan.test_runner:main"
+pymorgan-batch = "pymorgan.batch:cli_main"
 
 [project.gui-scripts]
 pymorgan-app = "pymorgan.launcher:main"

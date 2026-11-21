@@ -109,6 +109,9 @@ listed above. Loaders are registered under one or more data-type names and resol
    * - ``PDAT``
      - PyMORGAN standard
      - Comma-separated averaged data (``.pdat``) + optional noise (``.pdatn``)
+   * - ``HDF5``
+     - PyMORGAN FAIR HDF5
+     - Gzip-compressed FAIR/NeXus HDF5 archive (``.h5`` / ``.hdf5``) storing arrays, chirp/mask/scatter state, and JSON history
    * - ``UniGE_fsTA``
      - UniGE fs-TA
      - Step-scan femtosecond TA (``.dat``) with C-engine vectorised parsing
@@ -118,18 +121,24 @@ listed above. Loaders are registered under one or more data-type names and resol
    * - ``UoS_IRpp``
      - Univ. of Sheffield
      - Transient IR (``.2D`` and ``.DT``), 96 or 192 pixels, single-scan detection
+   * - ``RAL_IRpp``
+     - STFC / Central Laser Facility
+     - RAL LIFEtime 1D IR pump–probe CSV datasets (alias ``RAL_TRIR`` / ``RAL_LIFEtime``)
    * - ``MESS_TRIR``
      - MESS TRIR
      - State-modulated TRIR directories with inverse-variance scan averaging
    * - ``MESS_TRUVIS``
      - MESS TRUVIS
      - State-modulated transient UV–Vis directories
-   * - ``HARPIA``
+   * - ``HARPIA_TA``
      - Light Conversion
      - HARPIA ultrafast transient absorption files (``.dat``)
    * - ``Helios_TA``
      - Ultrafast Systems
      - Helios TA files (``.csv``) with multi-scan discovery and interpolation
+   * - ``Helios_UFS``
+     - Ultrafast Systems
+     - Surface Xplorer binary datasets (``.ufs``) with metadata and ``_scan*.ufs`` single-scan loading
    * - ``QuickControl_PP``
      - PhaseTech Spectroscopy
      - QuickControl 1D pump–probe ASCII files (``.info`` + ``.scan`` + ``.spec``) with automatic Magic Angle channel ordering
@@ -142,6 +151,12 @@ listed above. Loaders are registered under one or more data-type names and resol
    * - ``PyMESS_t2scan``
      - PyMESS HDF5
      - 2D-IR population waiting-time (:math:`t_2`) scan HDF5 datasets (``.h5``)
+   * - ``Glotaran_ASCII``
+     - Glotaran / TIMP
+     - Time-explicit or wavelength-explicit ASCII exchange files (``.ascii``)
+   * - ``Glotaran_NC``
+     - Glotaran / pyglotaran
+     - CF-1.8 compliant NetCDF4/HDF5 datasets (``.nc``) via ``h5py`` dimension scales
    * - ``Exported_TXT``
      - Generic exports
      - Wavelength-vs-delay tabular text files (``.txt``)
@@ -173,6 +188,22 @@ and each subsequent row begins with a delay value followed by the signal at ever
 coordinate. PDAT files store averaged data already in :math:`\text{mOD}`, so no rescaling is
 applied on read. Per-point standard deviations are optionally stored in a sibling ``.pdatn`` file
 with an identical layout.
+
+Surface Xplorer (``.ufs``), Glotaran & FAIR HDF5 Interoperability
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+- **Surface Xplorer (**\ ``Helios_UFS``\ **):** Directly parses binary ``.ufs`` files (IEEE-754
+  big-endian v1/v2 streams), preserves metadata blocks (sample, solvent, excitation wavelength),
+  converts ``DA`` values to :math:`\text{mOD}`, sanitises non-finite values, and discovers sibling
+  ``_scan*.ufs`` single-scan files automatically.
+- **Glotaran / pyglotaran (**\ ``Glotaran_ASCII``, ``Glotaran_NC``\ **):** Reads and writes both
+  legacy Glotaran/TIMP time-/wavelength-explicit ``.ascii`` files and CF-1.8 NetCDF4 ``.nc`` files
+  via ``Dataset1D.to_glotaran_ascii()`` and ``Dataset1D.to_glotaran_nc()`` (built directly on
+  ``h5py`` dimension scales without external ``netCDF4`` or ``xarray`` dependencies).
+- **FAIR HDF5 v2.0 (**\ ``HDF5``\ **):** ``Dataset1D.to_hdf5()`` and :func:`pymorgan.oneD.load.load_1D_hdf5`
+  store raw/corrected arrays, chirp fits, masks, scatter parameters, units, and full JSON
+  processing provenance (``history_json``), which is restored automatically on reload via
+  :func:`pymorgan.load_auto` or ``pm.load_1D(..., data_type="HDF5")``.
 
 PyMESS HDF5 Slow-Modulation & Multi-Signal Schemas
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

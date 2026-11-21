@@ -79,12 +79,13 @@ a dependency of this package.
   diagonal and cross-peak bands ($\omega_1 \ne \omega_3$) with parameter linking and cross-peak bath
   correlation ($\eta_{AB}$), Variable Projection (VarPro) analytical pathway amplitudes
   ($A_{\text{GSB}}, A_{\text{ESA}}$), and joint 2D + 1st-order FTIR fitting.
-- **Pluggable loader registry** — register new instrument formats with a
-  decorator.
-  - **1-D Time-Resolved**: `UniGE_fsTA` (with automatic non-transient `.dat` file filtering and `CalibratedProbe.csv` / `pix2lam.mat` detection), `UniGE_nsTA`, `HARPIA_TA`, `Helios_TA`, `QuickControl_PP`, `MESS_TRIR`, `MESS_TRUVIS`, `PyMESS_PP`, `PyMESS_Aniso`, `PyMESS_t2scan` (PyMESS HDF5 datasets including slow-modulation states with per-state single scans and multi-signal fast modulation), `PDAT`, `UoS_IRpp`, `Exported_TXT`.
-  - **2-D Spectroscopy**: `P2DAT`, `MESS_2DIR`, `PyMESS_2D` (`PyMESS_2DIR`), `QuickControl_2D`, `UoS_2DIR`, `RAL_RAW`, `RAL_Proc`.
+- **Pluggable loader registry & universal auto-detection (`pymorgan.detect`)** — register new instrument formats with a
+  decorator, or detect and load any supported file/folder directly with `pm.detect_format(path)` / `pm.load_auto(path)` and GUI drag-and-drop (*File → Open…*, `Ctrl+O`).
+  - **1-D Time-Resolved & Interop**: `UniGE_fsTA` (with automatic non-transient `.dat` file filtering and `CalibratedProbe.csv` / `pix2lam.mat` detection), `UniGE_nsTA`, `HARPIA_TA`, `Helios_TA`, `Helios_UFS` (Surface Xplorer `.ufs` binary files & `_scan*` discovery), `QuickControl_PP`, `MESS_TRIR`, `MESS_TRUVIS`, `PyMESS_PP`, `PyMESS_Aniso`, `PyMESS_t2scan` (PyMESS HDF5 datasets including slow-modulation states with per-state single scans and multi-signal fast modulation), `RAL_IRpp`, `PDAT`, `HDF5` (FAIR/NeXus HDF5 v2.0 with embedded provenance), `Glotaran_ASCII` (`.ascii`), `Glotaran_NC` (`.nc` NetCDF4/HDF5 dimension scales), `UoS_IRpp`, `Exported_TXT`.
+  - **2-D Spectroscopy & Interop**: `P2DAT`, `HDF5_2D` (FAIR 2D HDF5 with multi-detector & history round-trip), `MESS_2DIR`, `PyMESS_2D` (`PyMESS_2DIR`), `QuickControl_2D`, `UoS_2DIR` (Sheffield `.2D` + `.DT`/`.LG`/`CalibratedProbe.csv`/`w0.csv`), `RAL_RAW` (LIFEtime raw interferograms), `RAL_Proc` (LIFEtime processed delay slices with multi-detector `DET1` / `DET2` / combined channel switching via `set_active_detector`).
   - **Calibration Datasets**: UniGE fsTA / nsTA, UniGE TRIR Absorbance / ΔA, UniGE TRUVIS-II, HARPIA UV/Vis, UoS TRIR, UZH Lab 2, RAL LIFEtime, PyMESS `.h5`.
   - **Steady-State**: FTIR / OPUS (`ftir`, `opus`), UV-Vis (`uvvis`), fluorimeter (`fluorimeter`), and generic delimited files (`csv`, `txt`, `xy`).
+- **Reproducible workflows, Undo/Redo, recipes, batch processing & `.pmproj` sessions** — non-destructive copy-on-write Undo/Redo (`Ctrl+Z` / `Ctrl+Shift+Z` / `Ctrl+Y`), inspection via *Edit → Processing History…*, standalone runnable script export (`ds.to_python_script()`), declarative `.pmrecipe.toml` processing recipes (`pymorgan.recipe`), parallel/CLI/GUI batch execution (`pymorgan batch` / `pymorgan-batch` & *File → Batch Process Folder…*), portable TOML workspace sessions (`.pmproj`, `Ctrl+S` / `Ctrl+Shift+S`), *File → Recent Folders* MRU history, and zero-I/O dataset browser search (`Ctrl+F` / `Esc`).
 - **Steady-state spectra** — `Spectrum` / `SpectrumSeries` for absorption,
   emission and excitation, with automatic CSV/TXT delimiter detection.
 - **Centralised, GUI-friendly settings** — style profile, font scale, axis-label
@@ -148,23 +149,29 @@ PyMORGAN includes built-in loaders for a wide range of ultrafast time-resolved s
 | **1D Time-Resolved** | `UniGE_fsTA` | UniGE femtosecond Transient Absorption (`.dat` raw/processed TA datasets; auto-filters non-transient calibration files; checks `CalibratedProbe.csv` and `pix2lam.mat`) |
 | | `UniGE_nsTA` | UniGE nanosecond Transient Absorption |
 | | `HARPIA_TA` | Light Conversion HARPIA transient absorption spectrometer datasets |
-| | `Helios_TA` | Ultrafast Systems Helios TA spectrometer datasets |
+| | `Helios_TA` | Ultrafast Systems Helios TA CSV datasets |
+| | `Helios_UFS` | Ultrafast Systems Surface Xplorer binary datasets (`.ufs`) with metadata and `_scan*` discovery |
 | | `QuickControl_PP` | PhaseTech Spectroscopy QuickControl 1D pump–probe ASCII datasets (`.info` + `.scan` + `.spec`), with automatic isotropic Magic Angle channel ordering |
 | | `MESS_TRIR` | MESS Transient IR spectrometer datasets (TRIR) |
 | | `MESS_TRUVIS` | MESS Transient UV-Vis / TRUVIS-II spectrometer datasets |
 | | `PyMESS_PP` | PyMESS Pump-Probe transient absorption HDF5 datasets (`.h5`), supporting slow-modulation states (`/data/slow_modulation/state_XX_*` + `*_individual_scans`) and multi-signal fast modulation (`/data/signals/signal_XX_*`) |
 | | `PyMESS_Aniso` | PyMESS slow-modulation polarization anisotropy HDF5 datasets (`.h5`) with parallel, perpendicular, magic-angle, and anisotropy states |
 | | `PyMESS_t2scan` | PyMESS 2D-IR population waiting-time ($t_2$) scan HDF5 datasets (`.h5`) |
-| | `PDAT` | Standard PyMORGAN 1D binary/text transient dataset format |
+| | `RAL_IRpp` | Rutherford Appleton Laboratory LIFEtime 1D IR pump–probe CSV datasets |
+| | `PDAT` | Standard PyMORGAN 1D text transient dataset format (`.pdat` + `.pdatn`) |
+| | `HDF5` | PyMORGAN FAIR/NeXus 1D HDF5 archive (`.h5` / `.hdf5`) embedding chirp, mask, scatter & full JSON processing history |
+| | `Glotaran_ASCII` | Glotaran / TIMP time-explicit or wavelength-explicit ASCII files (`.ascii`) |
+| | `Glotaran_NC` | Glotaran / pyglotaran CF-1.8 NetCDF4 datasets (`.nc`) read & written natively via `h5py` dimension scales |
 | | `UoS_IRpp` | University of Sheffield IR pump–probe datasets |
 | | `Exported_TXT` | Generic wavelength-vs-delay tabular text files (`.txt`) |
-| **2D Spectroscopy** | `P2DAT` | Standard PyMORGAN 2D binary/text dataset format |
+| **2D Spectroscopy** | `P2DAT` | Standard PyMORGAN 2D text dataset format (`.p2dat`) |
+| | `HDF5_2D` | PyMORGAN FAIR 2D HDF5 archive (`.h5` / `.hdf5`) storing time/frequency cubes, detector channels, and provenance history |
 | | `MESS_2DIR` | MESS 2D-IR spectrometer population-time maps (with single-scan loading) |
 | | `PyMESS_2D` | Unified PyMESS 2D HDF5 datasets (`.h5`, alias `PyMESS_2DIR`), supporting time-domain shaper/interferometer and frequency-domain maps, slow-modulation state cubes, and per-state single scans |
 | | `QuickControl_2D` | PhaseTech Spectroscopy QuickControl 2D spectroscopy ASCII datasets (`.info` + `.scan` + `.wts`), supporting time-domain shaper and frequency-domain maps with Magic Angle state selection |
-| | `UoS_2DIR` | University of Sheffield 2D-IR population-time maps |
-| | `RAL_RAW` | Rutherford Appleton Laboratory LIFEtime raw 2D-IR maps |
-| | `RAL_Proc` | Rutherford Appleton Laboratory LIFEtime processed 2D-IR maps |
+| | `UoS_2DIR` | University of Sheffield 2D-IR population-time maps (`.2D` + `.DT` / `.LG` / `CalibratedProbe.csv` / `w0.csv`) with dual-detector switching |
+| | `RAL_RAW` | Rutherford Appleton Laboratory LIFEtime raw 2D-IR time-domain interferograms with multi-detector (`DET1`, `DET2`, `Combined (DET1+DET2)`) switching |
+| | `RAL_Proc` | Rutherford Appleton Laboratory LIFEtime processed 2D-IR delay slices with multi-detector switching |
 | **Calibration** | Spectrometer / Shaper | UniGE fsTA / nsTA, UniGE TRIR Absorbance / ΔA, UniGE TRUVIS-II, HARPIA UV/Vis, UoS TRIR, UZH Lab 2, RAL LIFEtime, PyMESS `.h5` |
 | **Steady-State** | `ftir`, `opus`, `uvvis`, `fluorimeter`, `csv`, `txt`, `xy` | FTIR absorption, Bruker OPUS files, UV-Vis, fluorimeter emission/excitation, and generic CSV/TXT/XY delimited matrices |
 
@@ -235,8 +242,9 @@ Console scripts installed with the package:
 
 | Script | Purpose |
 |--------|--------|
-| `pymorgan-suite` | Launch the unified PyMORGAN & PyRATE-TA Suite Launcher |
+| `pymorgan` / `pymorgan-suite` | Launch PyMORGAN GUI (also supports `pymorgan batch ...`) / Suite Launcher |
 | `pymorgan-gui` | Launch the PyMORGAN graphical interface directly |
+| `pymorgan-batch` | Headless batch processor applying `.pmrecipe.toml` recipes across files or folders |
 | `pymorgan-setup-env` | Configure a local Conda / system / virtualenv Python to import `pymorgan` & `pyrate_ta` |
 | `pymorgan-install-fonts` | Install bundled TeX Gyre Heros fonts into Matplotlib |
 | `pymorgan-edit-gui` | Open the GUI layout in Qt Designer |
@@ -250,16 +258,22 @@ import pymorgan as pm
 pm.load_settings("settings.toml")   # aesthetics: profile, labels, cmap, ...
 pm.apply_style()
 
-# --- Time-resolved (1-D): load -> process -> plot ---
-data = pm.load_1D("scan.pdat", data_type="PDAT")
+# --- Time-resolved (1-D): auto-detect, load -> process -> script/export -> plot ---
+data = pm.load_auto("measurement.ufs")              # auto-detects Helios_UFS, PDAT, HDF5, Glotaran, 2D, ...
 data.background_correct(tmin=-20, tmax=-5)
+print(data.to_python_script())                        # export exact reproducible Python script
+data.to_hdf5("processed_1d.h5")                       # FAIR HDF5 v2.0 with embedded provenance
+data.to_glotaran_nc("processed_1d.nc")                # CF-1.8 NetCDF4 for pyglotaran
 data.plot_contour(Zscale=20)
 data.plot_spectra([0.5, 1, 5, 20, 100], doSmooth=1, x_axis_unit="nm", secondary_axis=True)
 ax, t, Y = data.plot_kinetics([2132, 2218], plotStyle="-")   # Y is the extracted data
 
-# --- 2-D (2D-IR / 2D-ES / 2D-VE / 2D-EV): one population-time (t2) map ---
+# --- 2-D (2D-IR / 2D-ES / 2D-VE / 2D-EV): load -> detector switch -> export ---
 d2 = pm.load_2D("scan.p2dat", data_type="P2DAT")
 d2.plot_map(0.5)
+
+# --- Batch processing via CLI ---
+# pymorgan batch --recipe pipeline.pmrecipe.toml --input ./raw_scans --output ./processed --recursive --workers 4
 
 # --- Spectrometer & Pulse Shaper Wavelength Calibration ---
 from pymorgan.cal import load_experimental_spectrum, load_reference_spectrum, fit_wavelength_axis
@@ -321,6 +335,10 @@ Additional interactive dialogs and tools:
 - **Make Movie** (`Make Movie…`) — exports a lightweight, high-compatibility animated
   **GIF**, **WebP**, or **APNG** movie of 2-D maps stepping through all population times $t_2$
   (powered natively by Pillow with zero external `ffmpeg` dependency).
+- **Reproducible Workflows, Sessions & Interop Tools**:
+  - **Undo / Redo & History (**\ *Edit → Undo / Redo* `Ctrl+Z` / `Ctrl+Shift+Z`, *Edit → Processing History…*\ **):** Non-destructive step-by-step history with undo/redo, selective revert, standalone Python script generation (*Edit → Copy/Export Python Script*), and `.pmrecipe.toml` recipe export.
+  - **Batch Processor (**\ *File → Batch Process Folder…*\ **):** Apply `.pmrecipe.toml` recipes across files/folders with format auto-detection, parallel workers, dry-run preview, and CSV/JSON reports (`pymorgan batch` / `pymorgan-batch`).
+  - **Project Sessions (`.pmproj`) & Quick Navigation:** Save and reopen full workspace sessions (*File → Open / Save Project*, `Ctrl+S` / `Ctrl+Shift+S`), jump between recent data folders (*File → Recent Folders* and path autocompletion), filter large dataset browsers instantaneously (`Ctrl+F` / `Esc`), drag-and-drop any file or folder (including `.pmproj` and `.pmrecipe.toml`), or export directly via *File → Export → Export HDF5 / Export Glotaran…*.
 
 The 1-D and 2-D dataset lists share one root folder and stay in sync; long
 operations disable the interface while they run; and *View → Restore Default
@@ -332,7 +350,7 @@ back to `settings.toml`.
 
 ```
 src/pymorgan/
-  oneD/          load · process · scatter · plot · chirp · stitch · svd · registry · dataset (Dataset1D)
+  oneD/          load · process · scatter · plot · chirp · stitch · svd · interop · registry · dataset (Dataset1D)
   twoD/          load · process · plot · analyse · kubo_fit · progress · dataset (Dataset2D)
   steadyState/   Spectrum · SpectrumSeries · SpectrumKind · loader registry
   cal/           spectrometer & pulse shaper wavelength calibration (load, fit, models, export)
@@ -346,11 +364,18 @@ src/pymorgan/
     busy.py                re-entrancy guard for long operations
     plot_controls.py       plot-controls panel · settings_panel.py settings editor
     picker.py · canvas.py · cal_canvas.py · widgetplot.py · theme.py · widgets.py
+    history_dialog.py · batch_dialog.py
     scatter_dialog.py · chirp_dialog.py · chirp_progress_dialog.py · shockwave_dialog.py
     kubo_dialog.py · movie_dialog.py · twoD_gaussian_dialog.py
     twoD_integral_dialog.py · twoD_subtraction_dialog.py
     icons/                 application icons and badges
-  settings.py            Settings (TOML auto-merge, profiles, label/unit conventions, GUI field specs)
+  detect.py              universal format auto-detection (detect_format, load_auto)
+  hdf5_meta.py           FAIR HDF5 metadata, compressed datasets, and provenance attrs
+  provenance.py          ProcessingStep, HistoryManager (Undo/Redo), and Python script export
+  recipe.py              declarative .pmrecipe.toml processing recipes
+  batch.py               headless & CLI batch processing engine (pymorgan-batch / pymorgan batch)
+  project.py             portable TOML project sessions (.pmproj)
+  settings.py            Settings (TOML auto-merge, profiles, label/unit conventions, recent_dirs)
   settings.default.toml  canonical default settings template shipped with the package
   log.py                 logger factory and console configuration
   helpers.py             shared utilities (unit conversion, colourmaps, formatting)
