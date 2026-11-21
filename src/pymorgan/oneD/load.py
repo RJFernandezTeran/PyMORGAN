@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import re
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from os import PathLike
 from pathlib import Path
 from typing import Any
@@ -2690,6 +2690,787 @@ def _pymess_pp_describe(path: Path) -> dict:
         return {"n_spectra": 1, "n_slowmod": 1}
 
 
+def _pymess_parse_float(val: Any) -> float | None:
+    """Parse an HDF5 attribute into a finite float, or ``None`` if empty/invalid."""
+    if val is None:
+        return None
+    s = _pymess_attr_str(val).strip()
+    if not s or s.lower() in ("none", "nan", "inf", "-inf", "+inf"):
+        return None
+    try:
+        x = float(s)
+    except (ValueError, TypeError):
+        return None
+    return x if np.isfinite(x) else None
+
+
+def _pymess_parse_int(val: Any) -> int | None:
+    """Parse an HDF5 attribute into an integer, or ``None`` if empty/invalid."""
+    x = _pymess_parse_float(val)
+    if x is None:
+        return None
+    r = round(x)
+    return int(r) if abs(x - r) < 1e-9 else int(x)
+
+
+def _pymess_parse_bool(val: Any) -> bool | None:
+    """Parse an HDF5 boolean/string attribute, returning ``None`` if unrecognized."""
+    if val is None:
+        return None
+    if isinstance(val, (bool, np.bool_)):
+        return bool(val)
+    s = _pymess_attr_str(val).strip().lower()
+    if s in ("true", "1", "yes", "on"):
+        return True
+    if s in ("false", "0", "no", "off"):
+        return False
+    return None
+
+
+def _pymess_format_rep_rate(hz: float) -> str:
+    """Format laser repetition rate in Hz or kHz."""
+    if hz >= 1000.0:
+        return f"{hz / 1000.0:g} kHz"
+    return f"{hz:g} Hz"
+
+
+def _pymess_format_timestamp(meta_dict: dict[str, str]) -> str:
+    """Format PyMESS ``timestamp`` or ``date``/``time_hhmmss`` into ``YYYY-MM-DD HH:MM:SS``."""
+    ts = str(meta_dict.get("timestamp", "") or "").strip()
+    if re.fullmatch(r"\d{8}_\d{6}", ts):
+        d, t = ts[:8], ts[9:]
+        return f"{d[:4]}-{d[4:6]}-{d[6:8]} {t[:2]}:{t[2:4]}:{t[4:6]}"
+    date_s = str(meta_dict.get("date", "") or "").strip()
+    time_s = str(meta_dict.get("time_hhmmss", "") or "").strip()
+    if re.fullmatch(r"\d{8}", date_s):
+        d_fmt = f"{date_s[:4]}-{date_s[4:6]}-{date_s[6:8]}"
+        if re.fullmatch(r"\d{6}", time_s):
+            return f"{d_fmt} {time_s[:2]}:{time_s[2:4]}:{time_s[4:6]}"
+        return d_fmt
+    return ts
+
+
+def _extract_pymess_metadata_bundle(
+    f: h5py.File,
+) -> tuple[dict[str, str], dict[str, str], dict[str, str], list[int] | None]:
+    """Extract PyMESS ``metadata``, ``shaper``, ``fast_modulation`` attrs and ``t2_n_batches``."""
+    meta_dict: dict[str, str] = {}
+    if "metadata" in f:
+        for k, v in f["metadata"].attrs.items():
+            meta_dict[str(k)] = _pymess_attr_str(v)
+
+    shaper_dict: dict[str, str] = {}
+    if "metadata/shaper" in f and isinstance(f["metadata/shaper"], h5py.Group):
+        for k, v in f["metadata/shaper"].attrs.items():
+            shaper_dict[str(k)] = _pymess_attr_str(v)
+    elif "2D_Spectra" in f and isinstance(f["2D_Spectra"], h5py.Group):
+        for sk in sorted(f["2D_Spectra"].keys()):
+            sgrp = f["2D_Spectra"][sk]
+            if (
+                isinstance(sgrp, h5py.Group)
+                and "shaper" in sgrp
+                and isinstance(sgrp["shaper"], h5py.Group)
+            ):
+                for k, v in sgrp["shaper"].attrs.items():
+                    shaper_dict[str(k)] = _pymess_attr_str(v)
+                break
+
+    fast_mod_dict: dict[str, str] = {}
+    if "metadata/fast_modulation" in f and isinstance(f["metadata/fast_modulation"], h5py.Group):
+        for k, v in f["metadata/fast_modulation"].attrs.items():
+            fast_mod_dict[str(k)] = _pymess_attr_str(v)
+
+    t2_n_batches: list[int] | None = None
+    if "data/t2_n_batches" in f and isinstance(f["data/t2_n_batches"], h5py.Dataset):
+        try:
+            arr = np.asarray(f["data/t2_n_batches"][:]).ravel()
+            vals = [
+                int(round(float(x)))
+                for x in arr
+                if np.isfinite(float(x)) and int(round(float(x))) > 0
+            ]
+            if vals:
+                t2_n_batches = vals
+        except Exception:
+            pass
+    if t2_n_batches is None and meta_dict.get("t2_n_batches_csv"):
+        vals = []
+        for item in str(meta_dict["t2_n_batches_csv"]).split(","):
+            iv = _pymess_parse_int(item)
+            if iv is not None and iv > 0:
+                vals.append(iv)
+        if vals:
+            t2_n_batches = vals
+
+    return meta_dict, shaper_dict, fast_mod_dict, t2_n_batches
+
+
+def _format_pymess_sample_info(
+    meta_dict: dict[str, str],
+    *,
+    mode: str,
+    shaper_attrs: dict[str, Any] | None = None,
+    fast_mod_attrs: dict[str, Any] | None = None,
+    t2_n_batches: Sequence[int] | None = None,
+    is_slow_mod: bool = False,
+    k_slow: int = 1,
+    state_names: Sequence[str] | None = None,
+    w0_cm1: float | None = None,
+    n_t2: int | None = None,
+) -> tuple[str, str]:
+    """Build consistent ``(compact_info, full_info)`` summaries from PyMESS HDF5 metadata."""
+    meta = {str(k): _pymess_attr_str(v).strip() for k, v in (meta_dict or {}).items()}
+    shaper = {str(k): _pymess_attr_str(v).strip() for k, v in (shaper_attrs or {}).items()}
+    fast_mod = {str(k): _pymess_attr_str(v).strip() for k, v in (fast_mod_attrs or {}).items()}
+
+    compact: list[str] = []
+
+    # 1. Mode (non-standard modes)
+    if mode == "shaper_t2_scan":
+        compact.append("Mode: Shaper t\u2082 Scan (2D tab)")
+    elif mode == "2d_freq_domain":
+        compact.append("Mode: Frequency-Domain 2D")
+    elif mode == "2d_time_domain":
+        if w0_cm1 is not None and np.isfinite(w0_cm1):
+            compact.append(f"Mode: Time-Domain 2D (\u03c9\u2080 = {w0_cm1:.1f} cm\u207b\u00b9)")
+        else:
+            compact.append("Mode: Time-Domain 2D")
+
+    # 2-4. Sample, Solvent & Sample Details
+    sample_id = meta.get("sample_id", "")
+    if sample_id and sample_id.lower() != "none":
+        compact.append(f"Sample: {sample_id}")
+
+    solvent = meta.get("solvent", "")
+    if solvent and solvent.lower() != "none":
+        compact.append(f"Solvent: {solvent}")
+
+    sample_details: list[str] = []
+    conc = meta.get("concentration_od", "")
+    if conc and conc.lower() != "none":
+        sample_details.append(f"OD {conc}")
+    pathlen = meta.get("cell_pathlength", "")
+    if pathlen and pathlen.lower() != "none":
+        sample_details.append(f"Path {pathlen}")
+    temp = meta.get("temperature", "")
+    if temp and temp.lower() != "none":
+        sample_details.append(f"Temp {temp}")
+    if sample_details:
+        compact.append(f"Sample Details: {' \u00b7 '.join(sample_details)}")
+
+    # 5. Acquisition (Nscans x Nbatches x Nshots @ rep_rate)
+    acq_summary = meta.get("acquisition_summary", "")
+    n_scans = _pymess_parse_int(meta.get("num_scans"))
+    if n_scans is None or n_scans <= 0:
+        m_sc = re.search(r"(\d+)\s*scans?", acq_summary, flags=re.IGNORECASE)
+        if m_sc:
+            n_scans = int(m_sc.group(1))
+        else:
+            n_scans = _pymess_parse_int(meta.get("num_scans_completed"))
+    if n_scans is not None and n_scans <= 0:
+        n_scans = None
+
+    n_shots = _pymess_parse_int(meta.get("shots_per_batch"))
+    if n_shots is None or n_shots <= 0:
+        m_sh = re.search(r"(\d+)\s*shots?", acq_summary, flags=re.IGNORECASE)
+        n_shots = int(m_sh.group(1)) if m_sh else None
+    if n_shots is not None and n_shots <= 0:
+        n_shots = None
+
+    batch_vals: list[int] = [int(b) for b in (t2_n_batches or []) if int(b) > 0]
+    if not batch_vals and meta.get("t2_n_batches_csv"):
+        for item in meta["t2_n_batches_csv"].split(","):
+            iv = _pymess_parse_int(item)
+            if iv is not None and iv > 0:
+                batch_vals.append(iv)
+
+    batch_part = ""
+    if mode == "pump_probe":
+        nb = _pymess_parse_int(meta.get("num_batches"))
+        if nb is None or nb <= 0:
+            m_b = re.search(r"(\d+)\s*batch(?:es)?", acq_summary, flags=re.IGNORECASE)
+            nb = int(m_b.group(1)) if m_b else None
+        if nb is not None and nb > 0:
+            batch_part = f"{nb} batch" if nb == 1 else f"{nb} batches"
+    elif mode in ("shaper_t2_scan", "2d_time_domain", "2d_freq_domain"):
+        if batch_vals:
+            if len(set(batch_vals)) == 1:
+                b = batch_vals[0]
+                per_t2 = mode.startswith("2d_") and (
+                    len(batch_vals) > 1 or (n_t2 is not None and n_t2 > 1)
+                )
+                suffix = "/t\u2082" if per_t2 else ""
+                batch_part = f"{b} batch{'' if b == 1 else 'es'}{suffix}"
+            else:
+                batch_part = f"{min(batch_vals)}\u2013{max(batch_vals)} batches/t\u2082"
+        else:
+            nb = _pymess_parse_int(meta.get("num_batches"))
+            if nb is not None and nb > 0:
+                per_t2 = mode.startswith("2d_") and (n_t2 is not None and n_t2 > 1)
+                suffix = "/t\u2082" if per_t2 else ""
+                batch_part = f"{nb} batch{'' if nb == 1 else 'es'}{suffix}"
+            else:
+                m_b = re.search(r"(\d+)\s*batch(?:es)?", acq_summary, flags=re.IGNORECASE)
+                if m_b:
+                    nb = int(m_b.group(1))
+                    if nb > 1 or (nb == 1 and mode == "shaper_t2_scan"):
+                        batch_part = f"{nb} batch" if nb == 1 else f"{nb} batches"
+
+    rep_hz = _pymess_parse_float(meta.get("rep_rate_hz"))
+    rep_str = _pymess_format_rep_rate(rep_hz) if (rep_hz is not None and rep_hz > 0) else ""
+
+    acq_parts: list[str] = []
+    if n_scans is not None:
+        acq_parts.append(f"{n_scans} scan" if n_scans == 1 else f"{n_scans} scans")
+    if batch_part:
+        acq_parts.append(batch_part)
+    if n_shots is not None:
+        acq_parts.append(f"{n_shots} shot" if n_shots == 1 else f"{n_shots} shots")
+    if acq_parts and rep_str:
+        compact.append(f"Acquisition: {' \u00d7 '.join(acq_parts)} @ {rep_str}")
+    elif acq_parts:
+        compact.append(f"Acquisition: {' \u00d7 '.join(acq_parts)}")
+    elif rep_str:
+        compact.append(f"Acquisition: {rep_str}")
+
+    # 6. Scan mode & noise-weighted averaging (1D pump-probe)
+    scan_mode = meta.get("scan_mode", "")
+    noise_w = _pymess_parse_bool(meta.get("noise_weighted"))
+    if mode == "pump_probe":
+        if scan_mode:
+            suffix = " (noise-weighted)" if noise_w is True else ""
+            compact.append(f"Scan Mode: {scan_mode}{suffix}")
+        elif noise_w is True:
+            compact.append("Averaging: Noise-weighted")
+
+    # 7. Pump wavelength / wavenumber & power (skip zero/unset values)
+    pump_wl = _pymess_parse_float(meta.get("pump_wl_nm") or meta.get("pump_wavelength_nm"))
+    pump_wn = _pymess_parse_float(meta.get("pump_wn_cm1"))
+    pump_pwr = _pymess_parse_float(meta.get("pump_power_mw") or meta.get("pump_power"))
+    pump_pwr_unit = meta.get("pump_power_unit", "") or "mW"
+    pump_source = meta.get("pump_source", "").lower()
+    prefer_wn = ("cm" in pump_source) or ("\u1e7d" in pump_source)
+
+    pump_parts: list[str] = []
+    if prefer_wn and pump_wn is not None and pump_wn > 0:
+        pump_parts.append(f"{pump_wn:g} cm\u207b\u00b9")
+    elif pump_wl is not None and pump_wl > 0:
+        pump_parts.append(f"{pump_wl:.1f} nm")
+    elif pump_wn is not None and pump_wn > 0:
+        pump_parts.append(f"{pump_wn:g} cm\u207b\u00b9")
+    if pump_pwr is not None and pump_pwr > 0:
+        pump_parts.append(f"{pump_pwr:g} {pump_pwr_unit}")
+    if pump_parts:
+        compact.append(f"Pump: {', '.join(pump_parts)}")
+
+    # 8. Polarization, Waveplates & Slow Mod / States
+    pump_pol = meta.get("pump_polarization", "")
+    probe_pol = meta.get("probe_polarization", "")
+    if pump_pol and probe_pol:
+        compact.append(f"Polarization: Pump {pump_pol}, Probe {probe_pol}")
+    elif pump_pol:
+        compact.append(f"Pump Polarization: {pump_pol}")
+    elif probe_pol:
+        compact.append(f"Probe Polarization: {probe_pol}")
+
+    wp_pos = meta.get("waveplate_positions", "")
+    if wp_pos:
+        compact.append(f"Waveplates: {wp_pos}")
+
+    if mode in ("pump_probe", "shaper_t2_scan") and is_slow_mod:
+        cadence = meta.get("slow_modulation_cadence", "") or "unknown cadence"
+        compact.append(f"Slow Mod: {k_slow} states ({cadence})")
+    elif mode.startswith("2d_") and state_names:
+        compact.append(f"States: {', '.join(str(s) for s in state_names)}")
+
+    # 9. Fast Modulation
+    fast_mod_str = meta.get("fast_modulation", "") or fast_mod.get("preset_name", "") or fast_mod.get("preset_id", "")
+    if fast_mod_str:
+        compact.append(f"Fast Mod: {fast_mod_str}")
+
+    # 10. Pulse Shaper (compact)
+    sh_mode_low = shaper.get("mode", "").lower()
+    sh_sub_low = shaper.get("shaper_mode", "").lower()
+    is_fd_shaper = (mode == "2d_freq_domain") or sh_mode_low.startswith("freq") or sh_sub_low.startswith("freq")
+    if mode in ("shaper_t2_scan", "2d_time_domain", "2d_freq_domain") and shaper:
+        sh_parts: list[str] = []
+        n_frames = _pymess_parse_int(shaper.get("num_frames"))
+        pc = _pymess_parse_int(shaper.get("phase_cycle"))
+        mask_len = _pymess_parse_int(shaper.get("mask_sequence_length"))
+        amp = _pymess_parse_float(shaper.get("amplitude"))
+
+        if is_fd_shaper:
+            shape_name = shaper.get("shape_name", "")
+            width = _pymess_parse_float(shaper.get("width"))
+            unit_name = shaper.get("unit_name", "").replace("cm-1", "cm\u207b\u00b9")
+            if shape_name:
+                if width is not None and width > 0:
+                    w_txt = f"{width:g} {unit_name}".strip()
+                    sh_parts.append(f"{shape_name} {w_txt}")
+                else:
+                    sh_parts.append(shape_name)
+            if n_frames is not None and n_frames > 0:
+                sh_parts.append(f"{n_frames}-fr PC" if pc == 1 else f"{n_frames}-fr")
+            if mask_len is not None and mask_len > 0:
+                sh_parts.append(f"{mask_len} masks")
+            if amp is not None and amp > 0:
+                sh_parts.append(f"{amp:g}% amp")
+        else:
+            pulse_form = shaper.get("pulse_form", "")
+            if pulse_form:
+                sh_parts.append(pulse_form)
+            if n_frames is not None and n_frames > 0:
+                sh_parts.append(f"{n_frames}-fr PC" if pc == 1 else f"{n_frames}-fr")
+            if mask_len is not None and mask_len > 0:
+                sh_parts.append(f"{mask_len} masks")
+            carrier_wn = _pymess_parse_float(shaper.get("carrier_wavenumber_cm1"))
+            if carrier_wn is not None and carrier_wn > 0:
+                if carrier_wn > 500 or abs(carrier_wn - round(carrier_wn)) < 0.05:
+                    sh_parts.append(f"{carrier_wn:.0f} cm\u207b\u00b9")
+                else:
+                    sh_parts.append(f"{carrier_wn:g} cm\u207b\u00b9")
+            if amp is not None and amp > 0:
+                sh_parts.append(f"{amp:g}% amp")
+            corr_flags: list[str] = []
+            if _pymess_parse_int(shaper.get("bragg_correct")) == 1:
+                corr_flags.append("Bragg")
+            if _pymess_parse_int(shaper.get("linear_correction")) == 1:
+                corr_flags.append("Lin")
+            gvd = _pymess_parse_float(shaper.get("dispersion_gvd_fs2"))
+            tod = _pymess_parse_float(shaper.get("dispersion_tod_fs3"))
+            fod = _pymess_parse_float(shaper.get("dispersion_fod_fs4"))
+            if _pymess_parse_int(shaper.get("dispersion_correct")) == 1 and any(
+                v is not None and v != 0.0 for v in (gvd, tod, fod)
+            ):
+                corr_flags.append("Disp")
+            if corr_flags:
+                sh_parts.append("/".join(corr_flags))
+        if sh_parts:
+            compact.append(f"Shaper: {' \u00b7 '.join(sh_parts)}")
+
+    # 11. Spectrometer
+    spec_sum = meta.get("spectrometer_summary", "")
+    if spec_sum:
+        compact.append(f"Spectrometer: {spec_sum}")
+    else:
+        spec_parts: list[str] = []
+        spec_cwn = _pymess_parse_float(meta.get("spectrometer_cwn_cm1"))
+        spec_cwl = _pymess_parse_float(meta.get("spectrometer_cwl_nm"))
+        if spec_cwn is not None and spec_cwn > 0 and spec_cwl is not None and spec_cwl > 0:
+            spec_parts.append(f"{spec_cwn:.1f} cm\u207b\u00b9 ({spec_cwl:.0f} nm)")
+        elif spec_cwn is not None and spec_cwn > 0:
+            spec_parts.append(f"{spec_cwn:.1f} cm\u207b\u00b9")
+        elif spec_cwl is not None and spec_cwl > 0:
+            spec_parts.append(f"{spec_cwl:.1f} nm")
+        spec_gr = meta.get("spectrometer_grating", "")
+        if spec_gr:
+            spec_parts.append(spec_gr)
+        spec_slit = _pymess_parse_float(meta.get("spectrometer_slit_um"))
+        if spec_slit is not None and spec_slit > 0:
+            spec_parts.append(f"Slit {spec_slit:g} \u00b5m")
+        if spec_parts:
+            compact.append(f"Spectrometer: {' \u00b7 '.join(spec_parts)}")
+
+    # 12. Referencing / B-matrix
+    dis_ref = _pymess_parse_bool(meta.get("disable_referencing"))
+    use_b = _pymess_parse_bool(meta.get("use_b_matrix"))
+    b_mode = meta.get("b_matrix_update_mode", "")
+    if dis_ref is True:
+        compact.append("Referencing: Disabled")
+    elif use_b is True:
+        compact.append(f"Referencing: B-matrix ({b_mode})" if b_mode else "Referencing: B-matrix On")
+    elif use_b is False:
+        compact.append("Referencing: Standard (no B-matrix)")
+
+    # 13. Stage (pump-probe)
+    if mode == "pump_probe":
+        stage_id = meta.get("stage_id", "")
+        stage_t0 = _pymess_parse_float(meta.get("stage_t0_mm"))
+        if stage_id and stage_t0 is not None:
+            compact.append(f"Stage: {stage_id} (t\u2080 = {stage_t0:g} mm)")
+        elif stage_id:
+            compact.append(f"Stage: {stage_id}")
+        elif stage_t0 is not None:
+            compact.append(f"Stage t\u2080: {stage_t0:g} mm")
+
+    # 14. Setup short ID & PyMESS version
+    raw_setup_id = meta.get("setup_id", "")
+    raw_setup_name = meta.get("setup_name", "")
+    setup_short = ""
+    if raw_setup_id and raw_setup_id.lower() not in ("setup_unknown", "unknown"):
+        setup_short = raw_setup_id
+    elif raw_setup_name and raw_setup_name.lower() != "ultrafast spectroscopy setup":
+        setup_short = raw_setup_name
+
+    ver = meta.get("pymess_version", "").lstrip("vV")
+    if setup_short and ver:
+        compact.append(f"Setup: {setup_short} (PyMESS v{ver})")
+    elif setup_short:
+        compact.append(f"Setup: {setup_short}")
+    elif ver:
+        compact.append(f"PyMESS: v{ver}")
+
+    # 15. Comments
+    comments = meta.get("comments", "")
+    if comments and comments.lower() != "none":
+        compact.append(f"Comments: {comments}")
+
+    # ------------------------------------------------------------------ #
+    # Extended ("show all available info") metadata lines                 #
+    # ------------------------------------------------------------------ #
+    extra: list[str] = []
+
+    preset_name = meta.get("preset_name", "")
+    if preset_name:
+        extra.append(f"Preset: {preset_name}")
+    exp_mode = meta.get("experiment_mode", "")
+    if exp_mode:
+        extra.append(f"Experiment Mode: {exp_mode}")
+    if mode != "pump_probe":
+        if scan_mode:
+            suffix = " (noise-weighted)" if noise_w is True else ""
+            extra.append(f"Scan Mode: {scan_mode}{suffix}")
+        elif noise_w is True:
+            extra.append("Averaging: Noise-weighted")
+
+    batches_mode = meta.get("n_batches_mode", "")
+    if batches_mode:
+        extra.append(f"Batches Mode: {batches_mode}")
+    if len(batch_vals) > 1:
+        extra.append(f"Batches per t\u2082: {', '.join(str(b) for b in batch_vals)}")
+    tot_b = _pymess_parse_int(meta.get("total_batches_per_scan"))
+    if tot_b is not None and tot_b > 0:
+        extra.append(f"Total Batches/Scan: {tot_b}")
+
+    save_as = meta.get("save_as", "")
+    sig_type = meta.get("signal_type", "")
+    sig_unit = meta.get("signal_unit", "")
+    if save_as:
+        extra.append(f"Signal: {save_as}")
+    elif sig_type:
+        extra.append(f"Signal: {sig_type} ({sig_unit})" if sig_unit else f"Signal: {sig_type}")
+
+    abs_formula = meta.get("absorbance_formula", "")
+    if abs_formula:
+        extra.append(f"Absorbance Formula: {abs_formula}")
+
+    if fast_mod:
+        cyc = _pymess_parse_int(fast_mod.get("cycle_length"))
+        fm_desc = fast_mod.get("description", "")
+        fm_inv = _pymess_parse_bool(fast_mod.get("invert_pp_signal"))
+        if cyc is not None or fm_desc:
+            fm_txt = f"{cyc} shots" if cyc is not None else ""
+            if fm_desc:
+                fm_txt = f"{fm_txt} \u2014 {fm_desc}" if fm_txt else fm_desc
+            if fm_inv is True:
+                fm_txt += " (inverted)"
+            extra.append(f"Fast Mod Cycle: {fm_txt}")
+
+    slow_enabled = is_slow_mod or (_pymess_parse_bool(meta.get("slow_modulation_enabled")) is True)
+    if slow_enabled:
+        sm_chan = meta.get("slow_modulation_channel", "")
+        sm_type = meta.get("slow_modulation_mod_type", "")
+        sm_names = meta.get("slow_modulation_state_names", "")
+        if sm_chan or sm_type:
+            ch_txt = f"{sm_chan} ({sm_type})" if (sm_chan and sm_type) else (sm_chan or sm_type)
+            extra.append(f"Slow Mod Channel: {ch_txt}")
+        if sm_names:
+            extra.append(f"Slow Mod States: {sm_names}")
+
+    t2_stage = meta.get("t2_stage_id", "")
+    t1_stage = meta.get("t1_stage_id", "")
+    linked_stage = meta.get("linked_stage_id", "")
+    stage_sum = meta.get("stage_summary", "")
+    if t2_stage:
+        extra.append(f"Stage (t\u2082): {t2_stage}")
+    if t1_stage:
+        extra.append(f"Stage (t\u2081): {t1_stage}")
+    if linked_stage:
+        extra.append(f"Linked Stage: {linked_stage}")
+    if stage_sum:
+        extra.append(f"Stage Summary: {stage_sum}")
+    rel_del = _pymess_parse_float(meta.get("relative_delay_fs"))
+    if rel_del is not None and rel_del != 0.0:
+        extra.append(f"Relative Delay: {rel_del:g} fs")
+    cont_ori = meta.get("contour_orientation", "")
+    if cont_ori:
+        extra.append(f"Contour Orientation: {cont_ori}")
+
+    if shaper:
+        sh_m_parts = [
+            p for p in (shaper.get("mode", ""), shaper.get("shaper_mode", ""), shaper.get("pulse_form", "")) if p
+        ]
+        if sh_m_parts:
+            extra.append(f"Shaper Mode: {' / '.join(sh_m_parts)}")
+
+        final_fs = _pymess_parse_float(shaper.get("final_fs"))
+        step_fs = _pymess_parse_float(shaper.get("step_fs"))
+        if not is_fd_shaper and final_fs is not None and final_fs > 0 and step_fs is not None and step_fs > 0:
+            extra.append(f"Shaper t\u2081: 0\u2013{final_fs:g} fs (\u0394t\u2081 = {step_fs:g} fs)")
+
+        rf_eff = _pymess_parse_float(
+            shaper.get("effective_rotating_frame_cm1") or shaper.get("rotating_frame_cm1")
+        )
+        rf_scan = _pymess_parse_float(shaper.get("rotating_frame_scanned_cm1"))
+        rf_fix = _pymess_parse_float(shaper.get("rotating_frame_fixed_cm1"))
+        if not is_fd_shaper and any(v is not None for v in (rf_eff, rf_scan, rf_fix)):
+            rf_str = f"eff {rf_eff:g} cm\u207b\u00b9" if rf_eff is not None else ""
+            rf_split = []
+            if rf_scan is not None:
+                rf_split.append(f"scanned {rf_scan:g}")
+            if rf_fix is not None:
+                rf_split.append(f"fixed {rf_fix:g}")
+            if rf_split:
+                rf_str = f"{rf_str} ({', '.join(rf_split)} cm\u207b\u00b9)".strip()
+            if rf_str:
+                extra.append(f"Rotating Frame: {rf_str}")
+
+        if is_fd_shaper:
+            f_first = _pymess_parse_float(shaper.get("first"))
+            f_last = _pymess_parse_float(shaper.get("last"))
+            f_bins = _pymess_parse_int(shaper.get("num_freq_bins"))
+            f_unit = shaper.get("unit_name", "").replace("cm-1", "cm\u207b\u00b9")
+            if f_first is not None and f_last is not None and f_bins is not None and f_bins > 1:
+                u_txt = f" {f_unit}" if f_unit else ""
+                extra.append(f"Shaper Window: {f_first:g}\u2013{f_last:g}{u_txt} ({f_bins} bins)")
+            shape_nm = shaper.get("shape_name", "")
+            f_width = _pymess_parse_float(shaper.get("width"))
+            if shape_nm:
+                if f_width is not None and f_width > 0:
+                    w_txt = f"{f_width:g} {f_unit}".strip()
+                    extra.append(f"Shaper Pulse: {shape_nm} (width {w_txt})")
+                else:
+                    extra.append(f"Shaper Pulse: {shape_nm}")
+
+        cyc_parts: list[str] = []
+        nf = _pymess_parse_int(shaper.get("num_frames"))
+        if nf is not None and nf > 0:
+            cyc_parts.append(f"{nf} frames")
+        pc = _pymess_parse_int(shaper.get("phase_cycle"))
+        if pc is not None:
+            cyc_parts.append(f"phase cycle {'On' if pc == 1 else 'Off'}")
+        ch = _pymess_parse_int(shaper.get("chop"))
+        if ch is not None:
+            cyc_parts.append(f"chop {'On' if ch == 1 else 'Off'}")
+        ml = _pymess_parse_int(shaper.get("mask_sequence_length"))
+        if ml is not None and ml > 0:
+            cyc_parts.append(f"{ml} masks")
+        dr = _pymess_parse_int(shaper.get("direction"))
+        if dr is not None:
+            cyc_parts.append(f"dir {dr}")
+        if cyc_parts:
+            extra.append(f"Shaper Cycling: {', '.join(cyc_parts)}")
+
+        c_wn = _pymess_parse_float(shaper.get("carrier_wavenumber_cm1"))
+        c_mhz = _pymess_parse_float(shaper.get("carrier_frequency_mhz"))
+        amp = _pymess_parse_float(shaper.get("amplitude"))
+        p_amp = _pymess_parse_float(shaper.get("peak_amplitude"))
+        car_parts: list[str] = []
+        if c_wn is not None and c_wn > 0:
+            c_txt = f"{c_wn:.1f} cm\u207b\u00b9"
+            if c_mhz is not None and c_mhz > 0:
+                c_txt += f" ({c_mhz:g} MHz)"
+            car_parts.append(c_txt)
+        if amp is not None and amp > 0:
+            a_txt = f"amp {amp:g}%"
+            if p_amp is not None and p_amp > 0:
+                a_txt += f" (peak {p_amp:g}%)"
+            car_parts.append(a_txt)
+        if car_parts:
+            extra.append(f"Shaper Carrier: {', '.join(car_parts)}")
+
+        bc = _pymess_parse_int(shaper.get("bragg_correct"))
+        bc_pct = _pymess_parse_float(shaper.get("bragg_correction_pct"))
+        lc = _pymess_parse_int(shaper.get("linear_correction"))
+        dc = _pymess_parse_int(shaper.get("dispersion_correct"))
+        corr_det: list[str] = []
+        if bc is not None:
+            bc_txt = f"Bragg {'On' if bc == 1 else 'Off'}"
+            if bc == 1 and bc_pct is not None:
+                bc_txt += f" ({bc_pct:g}%)"
+            corr_det.append(bc_txt)
+        if lc is not None:
+            corr_det.append(f"Linear {'On' if lc == 1 else 'Off'}")
+        if dc is not None:
+            corr_det.append(f"Dispersion {'On' if dc == 1 else 'Off'}")
+        if corr_det:
+            extra.append(f"Shaper Corrections: {', '.join(corr_det)}")
+
+        d_lam = _pymess_parse_float(shaper.get("dispersion_lambda_nm"))
+        gvd = _pymess_parse_float(shaper.get("dispersion_gvd_fs2"))
+        tod = _pymess_parse_float(shaper.get("dispersion_tod_fs3"))
+        fod = _pymess_parse_float(shaper.get("dispersion_fod_fs4"))
+        any_disp_nz = any(v is not None and v != 0.0 for v in (gvd, tod, fod))
+        if (dc == 1 or any_disp_nz) and any(v is not None for v in (d_lam, gvd, tod, fod)):
+            d_parts: list[str] = []
+            if d_lam is not None and d_lam > 0:
+                d_parts.append(f"\u03bb\u2080 = {d_lam:g} nm")
+            if gvd is not None:
+                d_parts.append(f"GVD = {gvd:g} fs\u00b2")
+            if tod is not None:
+                d_parts.append(f"TOD = {tod:g} fs\u00b3")
+            if fod is not None:
+                d_parts.append(f"FOD = {fod:g} fs\u2074")
+            if d_parts:
+                extra.append(f"Shaper Dispersion: {', '.join(d_parts)}")
+
+        s_mhz = _pymess_parse_float(shaper.get("sampling_frequency_mhz"))
+        l_samp = _pymess_parse_int(shaper.get("length_samples"))
+        if (s_mhz is not None and s_mhz > 0) or (l_samp is not None and l_samp > 0):
+            sp_parts = []
+            if s_mhz is not None and s_mhz > 0:
+                sp_parts.append(f"{s_mhz:g} MHz")
+            if l_samp is not None and l_samp > 0:
+                sp_parts.append(f"{l_samp} samples")
+            extra.append(f"Shaper Sampling: {', '.join(sp_parts)}")
+
+        p1 = _pymess_parse_float(shaper.get("calibration_p1"))
+        p2 = _pymess_parse_float(shaper.get("calibration_p2"))
+        p3 = _pymess_parse_float(shaper.get("calibration_p3"))
+        if p1 is not None and p2 is not None and p3 is not None:
+            extra.append(f"Shaper Calibration: p\u2081={p1:g}, p\u2082={p2:g}, p\u2083={p3:g}")
+
+        ft = shaper.get("file_timestamp", "")
+        if ft:
+            extra.append(f"Mask Timestamp: {ft}")
+
+    det_name = meta.get("detector_name", "")
+    det_type = meta.get("detector_type", "")
+    det_pix = _pymess_parse_int(meta.get("detector_num_pixels"))
+    if det_name or det_type or (det_pix is not None and det_pix > 0):
+        det_desc = " / ".join(x for x in (det_name, det_type) if x)
+        if det_pix is not None and det_pix > 0:
+            det_str = f"{det_desc} ({det_pix} px)" if det_desc else f"{det_pix} px"
+        else:
+            det_str = det_desc
+        extra.append(f"Detector: {det_str}")
+    det_on = meta.get("detector_on_time", "")
+    if det_on:
+        extra.append(f"Detector On: {det_on}")
+
+    ts_fmt = _pymess_format_timestamp(meta)
+    if ts_fmt:
+        extra.append(f"Recorded: {ts_fmt}")
+    if raw_setup_name and raw_setup_name != setup_short:
+        extra.append(f"Setup Name: {raw_setup_name}")
+    lab = meta.get("setup_laboratory", "")
+    if lab:
+        extra.append(f"Laboratory: {lab}")
+
+    cal_file = meta.get("probe_calibration_file", "")
+    cal_at = meta.get("probe_calibration_embedded_at", "")
+    if cal_file:
+        extra.append(f"Embedded Cal: {cal_file} ({cal_at})" if cal_at else f"Embedded Cal: {cal_file}")
+
+    # Any future / unknown non-empty metadata attributes
+    handled_or_internal = {
+        "sample_id",
+        "solvent",
+        "concentration_od",
+        "cell_pathlength",
+        "temperature",
+        "scan_mode",
+        "noise_weighted",
+        "pump_polarization",
+        "probe_polarization",
+        "waveplate_positions",
+        "slow_modulation_cadence",
+        "slow_modulation_enabled",
+        "slow_modulation_num_states",
+        "slow_modulation_state_names",
+        "slow_modulation_state_devices",
+        "slow_modulation_state_targets",
+        "slow_modulation_channel",
+        "slow_modulation_mod_type",
+        "fast_modulation",
+        "fast_modulation_preset_dict",
+        "spectrometer_summary",
+        "spectrometer_cwl_nm",
+        "spectrometer_cwn_cm1",
+        "spectrometer_grating",
+        "spectrometer_slit_um",
+        "disable_referencing",
+        "use_b_matrix",
+        "b_matrix_update_mode",
+        "stage_id",
+        "stage_t0_mm",
+        "setup_id",
+        "setup_name",
+        "setup_laboratory",
+        "pymess_version",
+        "comments",
+        "preset_name",
+        "experiment_mode",
+        "n_batches_mode",
+        "total_batches_per_scan",
+        "save_as",
+        "signal_type",
+        "signal_unit",
+        "absorbance_formula",
+        "t2_stage_id",
+        "t1_stage_id",
+        "linked_stage_id",
+        "stage_summary",
+        "relative_delay_fs",
+        "contour_orientation",
+        "detector_name",
+        "detector_type",
+        "detector_num_pixels",
+        "detector_on_time",
+        "probe_calibration_file",
+        "probe_calibration_embedded_at",
+        "probe_calibration_source",
+        "probe_calibration_unit",
+        "log_notes",
+        "filename_stem",
+        "date",
+        "time_hhmmss",
+        "timestamp",
+        "detector_powered",
+        "save_indiv_scans",
+        "save_single_batch",
+        "t2_delays_fs_csv",
+        "t2_delay_fs",
+        "t2_n_batches_csv",
+        "n_t2_delays",
+        "n_t2_delays_configured",
+        "interferometer_config",
+        "shaper_summary",
+        "pump_power_unit",
+        "pump_source",
+        "pump_wl_nm",
+        "pump_wavelength_nm",
+        "pump_wn_cm1",
+        "pump_power_mw",
+        "pump_power",
+        "measurement_type",
+        "domain_mode",
+        "acquisition_summary",
+        "num_scans",
+        "num_scans_completed",
+        "num_batches",
+        "shots_per_batch",
+        "rep_rate_hz",
+    }
+    skip_prefixes = (
+        "auto_close_",
+        "auto_off_",
+        "auto_update_",
+        "spectrometer_calib_",
+        "wp1_",
+        "wp2_",
+    )
+    for k in sorted(meta.keys()):
+        if k in handled_or_internal or k.startswith(skip_prefixes) or "_waveplate_" in k:
+            continue
+        v = meta[k]
+        if v and v.lower() != "none":
+            extra.append(f"{k}: {v}")
+
+    full = compact + extra
+    return "\n".join(compact), "\n".join(full)
+
+
 def _read_pymess_shaper_t2_scan(
     f: h5py.File,
     path: Path,
@@ -2734,10 +3515,7 @@ def _read_pymess_shaper_t2_scan(
             return a[0, :, :]
         return a
 
-    meta_dict: dict[str, str] = {}
-    if "metadata" in f:
-        for k, v in f["metadata"].attrs.items():
-            meta_dict[str(k)] = _pymess_attr_str(v)
+    meta_dict, shaper_dict, fast_mod_dict, t2_n_batches = _extract_pymess_metadata_bundle(f)
 
     is_slow_mod = str(meta_dict.get("slow_modulation_enabled", "False")).lower() in ("true", "1")
     k_slow = int(meta_dict.get("slow_modulation_num_states", 1)) if is_slow_mod else 1
@@ -3002,26 +3780,20 @@ def _read_pymess_shaper_t2_scan(
                     pass
         Units["pymess_calibration"] = calib_dict
 
-    info_lines = ["Mode: Shaper t2 Scan (2D tab)"]
-    if "sample_id" in meta_dict and meta_dict["sample_id"]:
-        info_lines.append(f"Sample: {meta_dict['sample_id']}")
-    if "solvent" in meta_dict and meta_dict["solvent"]:
-        info_lines.append(f"Solvent: {meta_dict['solvent']}")
-    if "fast_modulation" in meta_dict and meta_dict["fast_modulation"]:
-        info_lines.append(f"Fast Modulation: {meta_dict['fast_modulation']}")
-    if "pump_polarization" in meta_dict and meta_dict["pump_polarization"]:
-        info_lines.append(f"Pump Polarization: {meta_dict['pump_polarization']}")
-    if "probe_polarization" in meta_dict and meta_dict["probe_polarization"]:
-        info_lines.append(f"Probe Polarization: {meta_dict['probe_polarization']}")
-    if "waveplate_positions" in meta_dict and meta_dict["waveplate_positions"]:
-        info_lines.append(f"Waveplates: {meta_dict['waveplate_positions']}")
-    if is_slow_mod:
-        cadence = meta_dict.get("slow_modulation_cadence", "unknown cadence")
-        info_lines.append(f"Slow Modulation: {k_slow} states ({cadence})")
-    if "comments" in meta_dict and meta_dict["comments"]:
-        info_lines.append(f"Comments: {meta_dict['comments']}")
-    if info_lines:
-        Units["sample_info"] = "\n".join(info_lines)
+    compact_info, full_info = _format_pymess_sample_info(
+        meta_dict,
+        mode="shaper_t2_scan",
+        shaper_attrs=shaper_dict,
+        fast_mod_attrs=fast_mod_dict,
+        t2_n_batches=t2_n_batches,
+        is_slow_mod=is_slow_mod,
+        k_slow=k_slow,
+        state_names=state_names,
+    )
+    if compact_info:
+        Units["sample_info"] = compact_info
+    if full_info:
+        Units["sample_info_full"] = full_info
 
     if Nscans > 0:
         Units["scan_ids"] = list(range(Nscans))
@@ -3099,10 +3871,7 @@ def read_PyMESS_PP(
         unitsT = "ps"
 
         # 2. Check for Slow Modulation & extract signal matrices
-        meta_dict = {}
-        if "metadata" in f:
-            for k, v in f["metadata"].attrs.items():
-                meta_dict[str(k)] = _pymess_attr_str(v)
+        meta_dict, shaper_dict, fast_mod_dict, _ = _extract_pymess_metadata_bundle(f)
 
         is_slow_mod = str(meta_dict.get("slow_modulation_enabled", "False")).lower() in ("true", "1")
         k_slow = int(meta_dict.get("slow_modulation_num_states", 1)) if is_slow_mod else 1
@@ -3355,28 +4124,19 @@ def read_PyMESS_PP(
             Units["pymess_calibration"] = calib_dict
 
         # 7. Format a human-readable sample info summary
-        info_lines = []
-        if "sample_id" in meta_dict and meta_dict["sample_id"]:
-            info_lines.append(f"Sample: {meta_dict['sample_id']}")
-        if "solvent" in meta_dict and meta_dict["solvent"]:
-            info_lines.append(f"Solvent: {meta_dict['solvent']}")
-        for wl_key in ("pump_wl_nm", "pump_wavelength_nm"):
-            if wl_key in meta_dict and meta_dict[wl_key]:
-                info_lines.append(f"Pump Wavelength: {meta_dict[wl_key]} nm")
-                break
-        if "pump_power_mw" in meta_dict and meta_dict["pump_power_mw"]:
-            info_lines.append(f"Pump Power: {meta_dict['pump_power_mw']} mW")
-        if "pump_polarization" in meta_dict and meta_dict["pump_polarization"]:
-            info_lines.append(f"Pump Polarization: {meta_dict['pump_polarization']}")
-        if "probe_polarization" in meta_dict and meta_dict["probe_polarization"]:
-            info_lines.append(f"Probe Polarization: {meta_dict['probe_polarization']}")
-        if is_slow_mod:
-            cadence = meta_dict.get("slow_modulation_cadence", "unknown cadence")
-            info_lines.append(f"Slow Modulation: {k_slow} states ({cadence})")
-        if "comments" in meta_dict and meta_dict["comments"]:
-            info_lines.append(f"Comments: {meta_dict['comments']}")
-        if info_lines:
-            Units["sample_info"] = "\n".join(info_lines)
+        compact_info, full_info = _format_pymess_sample_info(
+            meta_dict,
+            mode="pump_probe",
+            shaper_attrs=shaper_dict,
+            fast_mod_attrs=fast_mod_dict,
+            is_slow_mod=is_slow_mod,
+            k_slow=k_slow,
+            state_names=state_names,
+        )
+        if compact_info:
+            Units["sample_info"] = compact_info
+        if full_info:
+            Units["sample_info_full"] = full_info
 
         if Nscans > 0:
             Units["scan_ids"] = list(range(Nscans))
@@ -3415,11 +4175,35 @@ def load_pymess_anisotropy(
         raise FileNotFoundError(f"PyMESS HDF5 file not found: {datafilename}")
 
     with h5py.File(path, "r", swmr=True) as f:
-        meta = {str(k): _pymess_attr_str(v) for k, v in f.get("metadata", {}).attrs.items()}
+        meta, shaper_dict, fast_mod_dict, t2_n_batches = _extract_pymess_metadata_bundle(f)
+        is_slow_mod_aniso = _pymess_parse_bool(meta.get("slow_modulation_enabled")) is True
         raw_state_names = meta.get("slow_modulation_state_names", "")
-        state_names = (
-            [s.strip().lower() for s in str(raw_state_names).split(",")] if raw_state_names else []
+        raw_state_list = (
+            [s.strip() for s in str(raw_state_names).split(",") if s.strip()]
+            if raw_state_names
+            else []
         )
+        k_slow_aniso = (
+            (_pymess_parse_int(meta.get("slow_modulation_num_states")) or len(raw_state_list) or 2)
+            if is_slow_mod_aniso
+            else 1
+        )
+        aniso_mode = (
+            "shaper_t2_scan"
+            if ("data/t1_delays_fs" in f and "data/delays_fs" not in f)
+            else "pump_probe"
+        )
+        compact_info, full_info = _format_pymess_sample_info(
+            meta,
+            mode=aniso_mode,
+            shaper_attrs=shaper_dict,
+            fast_mod_attrs=fast_mod_dict,
+            t2_n_batches=t2_n_batches,
+            is_slow_mod=is_slow_mod_aniso,
+            k_slow=k_slow_aniso,
+            state_names=raw_state_list,
+        )
+        state_names = [s.lower() for s in raw_state_list]
 
         par_idx, perp_idx = None, None
         for idx, nm in enumerate(state_names):
@@ -3492,6 +4276,11 @@ def load_pymess_anisotropy(
         if cal_level_resolved is not None:
             u["cal_level"] = cal_level_resolved
         u["sample"] = str(meta.get("sample_id", "Unknown"))
+        u["pymess_metadata"] = meta
+        if compact_info:
+            u["sample_info"] = compact_info
+        if full_info:
+            u["sample_info_full"] = full_info
         z_3d = data_2d[:, :, np.newaxis]
         z_ss = z_3d[:, :, :, np.newaxis]
         return Dataset1D(

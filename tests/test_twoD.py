@@ -1498,3 +1498,160 @@ def test_2d_axis_order_buttons_gui(tmp_path):
     finally:
         pm.update_settings(pump_axis=orig_pump_axis, twoD_freq_unit=orig_freq_unit)
         win.close()
+
+
+def test_twoD_kinetics_and_slices_unit_aware(qapp, tmp_path, monkeypatch):
+    """2D non-interactive kinetics, area integration, slice dialogs, and delay prompts respect twoD_freq_unit & delay units."""
+    import matplotlib.pyplot as plt
+    from PyQt6.QtWidgets import QApplication, QInputDialog, QMessageBox
+
+    def _fail_on_modal(_parent, title, msg, *_a, **_kw):
+        raise AssertionError(f"Unexpected modal dialog ({title}): {msg}")
+
+    monkeypatch.setattr(QMessageBox, "warning", _fail_on_modal)
+    monkeypatch.setattr(QMessageBox, "information", _fail_on_modal)
+    monkeypatch.setattr(QMessageBox, "critical", _fail_on_modal)
+
+    from pymorgan import helpers as hlp
+    from pymorgan.gui.main_window import MainWindow
+
+    app = QApplication.instance() or QApplication([])
+    assert app is not None
+
+    pump = np.linspace(1960.0, 2040.0, 9)
+    probe = np.linspace(1950.0, 2050.0, 11)
+    delays = np.array([-2.0, 0.5, 5.0, 20.0])
+    # Encode each (pump_idx, probe_idx) pixel with a unique curve shape + amplitude
+    Z = np.zeros((len(pump), len(probe), len(delays)), dtype=float)
+    t_shape = np.array([0.0, 1.0, 0.5, 0.25])
+    for ip in range(len(pump)):
+        for ipr in range(len(probe)):
+            Z[ip, ipr, :] = (ip * 100 + ipr + 1) * t_shape
+
+    ds = Dataset2D(Z, pump, probe, delays, hlp.units2dic("cm-1", "ps", "mOD"))
+
+    created_figs = []
+    monkeypatch.setattr(plt, "show", lambda *a, **kw: created_figs.append(plt.gcf()))
+
+    orig_freq_unit = pm.get_settings().twoD_freq_unit
+    win = MainWindow(init_rootdir=False)
+    try:
+        win.MainTabs.setCurrentIndex(1)
+        win.twoD_dataset = ds
+        win.twoD_plot_controls.set_dataset(ds, 0)
+        win.twoD_interactive_chk.setChecked(False)
+        win._twoD_preview_contour()
+        app.processEvents()
+
+        # --- 1. Single Coordinate non-interactive in nm (scaled to 10^3 nm above 5000 nm) ---
+        pm.update_settings(twoD_freq_unit="nm")
+        win._twoD_render_timer.stop()
+        win._twoD_preview_contour()
+        app.processEvents()
+
+        ip_t, ipr_t = 3, 7
+        p_disp = float(win._twoD_display_meta()["to_display"](float(pump[ip_t])))
+        pr_disp = float(win._twoD_display_meta()["to_display"](float(probe[ipr_t])))
+        prompts = []
+
+        monkeypatch.setattr(
+            QInputDialog, "getItem", lambda *_a, **_kw: ("Single Coordinate", True)
+        )
+        monkeypatch.setattr(
+            QInputDialog,
+            "getText",
+            lambda _p, title, label, text="": (
+                prompts.append((title, label)),
+                (f"{p_disp:.4f},{pr_disp:.4f}", True),
+            )[1],
+        )
+        win._on_twoD_kinetics_clicked()
+        app.processEvents()
+
+        assert "nm" in prompts[-1][1]
+        ax_k1 = created_figs[-1].axes[0]
+        np.testing.assert_allclose(np.asarray(ax_k1.get_lines()[0].get_ydata()), Z[ip_t, ipr_t, :])
+        lbl_k1 = ax_k1.get_legend().get_texts()[0].get_text()
+        assert "nm" in lbl_k1 and "cm" not in lbl_k1
+
+        # --- 2. Area Integration non-interactive in eV + RectangleSelector small span check ---
+        pm.update_settings(twoD_freq_unit="eV")
+        win._twoD_render_timer.stop()
+        win._twoD_preview_contour()
+        app.processEvents()
+
+        assert win._rect_span_ok(win.twoDaxes.ax, (0.246, 0.250, 0.246, 0.250)) is True
+
+        p_ev_lo = float(hlp.convert_spectral(float(pump[4]), "cm-1", "eV"))
+        p_ev_hi = float(hlp.convert_spectral(float(pump[6]), "cm-1", "eV"))
+        pr_ev_lo = float(hlp.convert_spectral(float(probe[5]), "cm-1", "eV"))
+        pr_ev_hi = float(hlp.convert_spectral(float(probe[8]), "cm-1", "eV"))
+        prompts.clear()
+        monkeypatch.setattr(
+            QInputDialog, "getItem", lambda *_a, **_kw: ("Area Integration", True)
+        )
+        monkeypatch.setattr(
+            QInputDialog,
+            "getText",
+            lambda _p, title, label, text="": (
+                prompts.append((title, label)),
+                (f"{p_ev_lo:.5f}:{p_ev_hi:.5f},{pr_ev_lo:.5f}:{pr_ev_hi:.5f}", True),
+            )[1],
+        )
+        win._on_twoD_kinetics_clicked()
+        app.processEvents()
+
+        assert "eV" in prompts[-1][1]
+        ax_area = created_figs[-1].axes[0]
+        assert len(ax_area.get_lines()) >= 1
+        lbl_area = ax_area.get_legend().get_texts()[0].get_text()
+        assert lbl_area.startswith("Int. [") and lbl_area.endswith("eV")
+
+        # --- 3. 2D fixed-pump slice in nm + delay prompt showing ps & unit suffix parsing ---
+        pm.update_settings(twoD_freq_unit="nm")
+        win._twoD_render_timer.stop()
+        win._twoD_preview_contour()
+        app.processEvents()
+
+        dbl_prompts = []
+        delay_prompts = []
+        monkeypatch.setattr(
+            QInputDialog,
+            "getItem",
+            lambda *_a, **_kw: ("Along fixed pump WN", True),
+        )
+        monkeypatch.setattr(
+            QInputDialog,
+            "getDouble",
+            lambda _p, title, label, val, *_a, **_kw: (
+                dbl_prompts.append((title, label)),
+                (p_disp, True),
+            )[1],
+        )
+        monkeypatch.setattr(
+            QInputDialog,
+            "getText",
+            lambda _p, title, label, text="": (
+                delay_prompts.append((title, label, text)),
+                ("500 fs, 5", True),
+            )[1],
+        )
+        captured_slices = []
+        orig_pump_slice = win._plot_pump_slice
+        monkeypatch.setattr(
+            win,
+            "_plot_pump_slice",
+            lambda pw, t2d, xl: (captured_slices.append((pw, t2d)), orig_pump_slice(pw, t2d, xl))[1],
+        )
+        win._on_twoD_slices_clicked()
+        app.processEvents()
+
+        assert "nm" in dbl_prompts[-1][1]
+        assert "in ps" in delay_prompts[-1][1] and "-2 to 20 ps" in delay_prompts[-1][1]
+        assert captured_slices[-1][0] == pytest.approx(float(pump[ip_t]), abs=1e-2)
+        assert captured_slices[-1][1] == pytest.approx([0.5, 5.0])
+    finally:
+        for fig in created_figs:
+            plt.close(fig)
+        pm.update_settings(twoD_freq_unit=orig_freq_unit)
+        win.close()

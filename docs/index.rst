@@ -40,9 +40,9 @@ dimensionality:
       :link-type: doc
 
       Load 13+ instrument formats (including PyMESS ``.h5`` slow-modulation & multi-signal schemas,
-      HARPIA, Helios, QuickControl, TRIR), correct background, solvent, shockwaves & Cauchy chirp dispersion,
-      stitch wavelength/time windows, compute time derivatives, perform SVD, and calculate
-      polarisation anisotropy.
+      HARPIA, Helios, QuickControl, TRIR), remove dynamic multi-band pump scatter, correct
+      background, solvent, shockwaves & Cauchy chirp dispersion, stitch wavelength/time windows,
+      compute time derivatives, perform SVD, and calculate polarisation anisotropy.
 
    .. grid-item-card:: 🗺️ 2D Spectroscopy (2D-IR, 2D-ES, 2D-EV, 2D-VE)
       :link: user_guide/twoD

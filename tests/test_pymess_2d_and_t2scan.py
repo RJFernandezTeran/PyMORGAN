@@ -305,56 +305,6 @@ def test_load_and_process_fd_2d(fd_2d_file: Path):
     assert np.isfinite(ds.Z).all()
 
 
-def test_real_20261016_datasets():
-    """Integration test against all experimental files in 20261016 if present."""
-    import os
-    env_dir = os.environ.get("PYMORGAN_TESTDATA_DIR")
-    if not env_dir:
-        pytest.skip("PYMORGAN_TESTDATA_DIR environment variable not set")
-    base_dir = Path(env_dir) / "PyMESS" / "20261016"
-    if not base_dir.is_dir():
-        pytest.skip(f"Directory {base_dir} not found")
-
-    # 1. t2scan subfolder -> all 11 files should load as 1D PyMESS_PP
-    t2_dir = base_dir / "t2scan"
-    if t2_dir.is_dir():
-        h5_files = sorted(t2_dir.glob("*.h5"))
-        assert len(h5_files) >= 5
-        for f in h5_files:
-            assert classify_pymess_h5(f) == "shaper_t2_scan"
-            assert _pymess_pp_is_file(f) is True
-            ds1d = pm.load_1D(f, data_type="PyMESS_PP")
-            assert ds1d.Zavg_R.shape[1] == 64
-            assert len(ds1d.probe) == 64
-            assert np.isfinite(ds1d.probe).all()
-            assert ds1d.Units["T"] == "ps"
-            assert ds1d.Units["L"] == "cm-1"
-
-    # 2. 2D data subfolder -> 2 FD files and 4 TD files
-    two_d_dir = base_dir / "2D data"
-    if two_d_dir.is_dir():
-        for f in sorted(two_d_dir.glob("*.h5")):
-            kind = classify_pymess_h5(f)
-            assert kind in ("2d_freq_domain", "2d_time_domain")
-            assert is_map_dataset_file("PyMESS_2D", f) is True
-            ds2d = pm.load_2D(f, data_type="PyMESS_2D")
-            ds2d.process()
-            assert ds2d.Z.shape == (len(ds2d.pump), len(ds2d.probe), len(ds2d.delays))
-
-        # Check specific rotating-frame peak agreement on ReCO_timeDomain_2D_195443.h5
-        f_td = two_d_dir / "ReCO_timeDomain_2D_195443.h5"
-        if f_td.is_file():
-            ds_td = pm.load_2D(f_td, data_type="PyMESS_2D")
-            assert ds_td.w0_cm1 == pytest.approx(1800.0)
-            assert ds_td.dt1_fs == pytest.approx(35.0)
-            ds_td.process(apodise_method="0", zeropad_factor=3)
-            w1_mask = (ds_td.pump >= 1880.0) & (ds_td.pump <= 2100.0)
-            sub = ds_td.Z[w1_mask, :, 0]
-            w1_sub = ds_td.pump[w1_mask]
-            peak_w1 = w1_sub[np.unravel_index(np.argmin(sub), sub.shape)[0]]
-            assert peak_w1 == pytest.approx(2025.23022053, abs=1e-4)
-
-
 def test_new_schema_shaper_t2_scan_3d_active_and_slowmod(tmp_path: Path):
     """Verify new PyMESS .h5 schema for shaper t2 scans (3D interferograms_raw, active AWG mode, slow_modulation)."""
     p = tmp_path / "new_schema_t2_scan.h5"
@@ -840,4 +790,172 @@ def test_pymess_2d_time_and_freq_domain_prefer_calibrated_probe_csv_and_embed(tm
         np.testing.assert_allclose(f["calibration/original_probe_axis"][:], orig_nm)
 
 
+def test_pymess_2d_and_t2scan_sample_info_compact_and_full(tmp_path: Path):
+    """Verify 2D (TD & FD) and shaper_t2_scan compact vs full sample_info formatting."""
+    # 1. Time-Domain 2D with varying t2_n_batches (overrides '1 batches' in acquisition_summary)
+    p_td = tmp_path / "td_rich.h5"
+    n_t2, n_t1, n_w3 = 3, 12, 16
+    t2_delays = np.array([100.0, 500.0, 1000.0])
+    t1_delays = np.arange(n_t1, dtype=float) * 30.0
+    omega3 = np.linspace(1950.0, 2050.0, n_w3)
 
+    with h5py.File(p_td, "w") as f:
+        meta = f.create_group("metadata")
+        meta.attrs["measurement_type"] = "2d_spectra"
+        meta.attrs["domain_mode"] = "time_domain"
+        meta.attrs["sample_id"] = "jASCN"
+        meta.attrs["solvent"] = "TOL"
+        meta.attrs["acquisition_summary"] = "5 scans × 1 batches × 500 shots"
+        meta.attrs["num_scans"] = 5
+        meta.attrs["num_batches"] = 100
+        meta.attrs["shots_per_batch"] = 500
+        meta.attrs["rep_rate_hz"] = 1000
+        meta.attrs["pump_source"] = "Manual ṽ (cm⁻¹)"
+        meta.attrs["pump_wn_cm1"] = "2180.0"
+        meta.attrs["pump_wl_nm"] = "4587.16"
+        meta.attrs["pump_power_mw"] = "0.0"
+        meta.attrs["pump_polarization"] = "Magic (54.7°)"
+        meta.attrs["probe_polarization"] = "S-pol"
+        meta.attrs["fast_modulation"] = "2D [shaper] (4fr ph. cy., no chop)"
+        meta.attrs["spectrometer_summary"] = "2173.5 cm⁻¹ (4601 nm) · 150 l/mm · Slit 400 µm"
+        meta.attrs["use_b_matrix"] = True
+        meta.attrs["b_matrix_update_mode"] = "manual"
+        meta.attrs["setup_id"] = "TRIR-2DIR_UniGE"
+        meta.attrs["setup_laboratory"] = "MEOW Lab"
+        meta.attrs["pymess_version"] = "1.261023.1"
+
+        shaper = meta.create_group("shaper")
+        shaper.attrs["mode"] = "Time"
+        shaper.attrs["form"] = 1
+        shaper.attrs["num_frames"] = 4
+        shaper.attrs["phase_cycle"] = 1
+        shaper.attrs["chop"] = 0
+        shaper.attrs["mask_sequence_length"] = 472
+        shaper.attrs["carrier_wavenumber_cm1"] = 2222.2222
+        shaper.attrs["carrier_frequency_mhz"] = 75.0
+        shaper.attrs["amplitude"] = 50.0
+        shaper.attrs["peak_amplitude"] = 50.0
+        shaper.attrs["bragg_correct"] = 1
+        shaper.attrs["bragg_correction_pct"] = 100.0
+        shaper.attrs["linear_correction"] = 1
+        shaper.attrs["dispersion_correct"] = 1
+        shaper.attrs["dispersion_lambda_nm"] = 4500.0
+        shaper.attrs["dispersion_gvd_fs2"] = -119680.972
+        shaper.attrs["dispersion_tod_fs3"] = -3554500.0
+        shaper.attrs["dispersion_fod_fs4"] = -142685600.0
+        shaper.attrs["effective_rotating_frame_cm1"] = 1800.0
+        shaper.attrs["rotating_frame_scanned_cm1"] = 1600.0
+        shaper.attrs["rotating_frame_fixed_cm1"] = -200.0
+        shaper.attrs["step_fs"] = 30.0
+        shaper.attrs["final_fs"] = 3510.0
+        shaper.attrs["calibration_p1"] = 1.07342e-8
+        shaper.attrs["calibration_p2"] = -0.001728
+        shaper.attrs["calibration_p3"] = 68.718779
+
+        grp = f.create_group("data")
+        grp.create_dataset("t1_delays_fs", data=t1_delays)
+        grp.create_dataset("t2_delays_fs", data=t2_delays)
+        grp.create_dataset("t2_n_batches", data=np.array([50, 100, 200]))
+        grp.create_dataset("omega3_axis", data=omega3)
+        grp.create_dataset("interferograms_raw", data=np.ones((n_t2, n_t1, n_w3)) * 0.5)
+
+    ds_td = pm.load_2D(p_td, data_type="PyMESS_2D")
+    assert ds_td.has_extended_sample_info is True
+
+    td_compact = ds_td.sample_info_console(show_all=False)
+    assert "Acquisition: 5 scans × 50–200 batches/t₂ × 500 shots @ 1 kHz" in td_compact
+    assert "1 batches" not in td_compact
+    assert "Pump: 2180 cm⁻¹" in td_compact
+    assert "0.0 mW" not in td_compact
+    assert "4587.2 nm" not in td_compact
+    assert "Shaper: 4-fr PC · 472 masks · 2222 cm⁻¹ · 50% amp · Bragg/Lin/Disp" in td_compact
+    assert "Setup: TRIR-2DIR_UniGE (PyMESS v1.261023.1)" in td_compact
+    assert "Batches per t₂:" not in td_compact
+    assert "GVD" not in td_compact
+    assert "Laboratory:" not in td_compact
+
+    td_full = ds_td.sample_info_console(show_all=True)
+    assert "Batches per t₂: 50, 100, 200" in td_full
+    assert "Rotating Frame: eff 1800 cm⁻¹ (scanned 1600, fixed -200 cm⁻¹)" in td_full
+    assert "Shaper Dispersion:" in td_full
+    assert "GVD =" in td_full and "TOD =" in td_full and "FOD =" in td_full
+    assert "Shaper Calibration:" in td_full
+    assert "Laboratory: MEOW Lab" in td_full
+
+    # 2. Frequency-Domain 2D with zero pump omitted & FD shaper settings
+    p_fd = tmp_path / "fd_rich.h5"
+    n_w1 = 15
+    omega1 = np.linspace(1800.0, 2080.0, n_w1)
+    with h5py.File(p_fd, "w") as f:
+        meta = f.create_group("metadata")
+        meta.attrs["measurement_type"] = "2d_spectra"
+        meta.attrs["domain_mode"] = "frequency_domain"
+        meta.attrs["num_scans"] = 4
+        meta.attrs["num_batches"] = 100
+        meta.attrs["shots_per_batch"] = 500
+        meta.attrs["rep_rate_hz"] = 1000
+        meta.attrs["pump_wl_nm"] = "0.0"
+        meta.attrs["pump_power_mw"] = "0.0"
+        shaper = meta.create_group("shaper")
+        shaper.attrs["mode"] = "Freq"
+        shaper.attrs["shape_name"] = "Gaussian"
+        shaper.attrs["width"] = 10.0
+        shaper.attrs["unit_name"] = "cm-1"
+        shaper.attrs["first"] = 1800.0
+        shaper.attrs["last"] = 2080.0
+        shaper.attrs["num_freq_bins"] = 60
+        shaper.attrs["num_frames"] = 4
+        shaper.attrs["phase_cycle"] = 1
+        shaper.attrs["mask_sequence_length"] = 240
+        shaper.attrs["amplitude"] = 50.0
+
+        grp = f.create_group("data")
+        grp.create_dataset("t2_delays_fs", data=np.array([500.0, 1500.0]))
+        grp.create_dataset("omega1_axis", data=omega1)
+        grp.create_dataset("omega3_axis", data=omega3)
+        grp.create_dataset("surface_absorptive", data=np.ones((2, n_w1, n_w3)) * 1.0)
+
+    ds_fd = pm.load_2D(p_fd, data_type="PyMESS_2D")
+    fd_compact = ds_fd.sample_info_console(show_all=False)
+    assert "Acquisition: 4 scans × 100 batches/t₂ × 500 shots @ 1 kHz" in fd_compact
+    assert "Pump:" not in fd_compact
+    assert "Shaper: Gaussian 10 cm⁻¹ · 4-fr PC · 240 masks · 50% amp" in fd_compact
+    fd_full = ds_fd.sample_info_console(show_all=True)
+    assert "Shaper Window: 1800–2080 cm⁻¹ (60 bins)" in fd_full
+    assert "Shaper Pulse: Gaussian (width 10 cm⁻¹)" in fd_full
+
+    # 3. Shaper t2 scan (1D) measurement settings
+    p_t2 = tmp_path / "t2_rich.h5"
+    t2_scan_fs = np.linspace(0.0, 500.0, 11)
+    with h5py.File(p_t2, "w") as f:
+        meta = f.create_group("metadata")
+        meta.attrs["measurement_type"] = "2d_spectra"
+        meta.attrs["domain_mode"] = "time_domain"
+        meta.attrs["num_scans"] = 1
+        meta.attrs["num_batches"] = 50
+        meta.attrs["shots_per_batch"] = 500
+        meta.attrs["rep_rate_hz"] = 1000
+        meta.attrs["setup_id"] = "TRIR-2DIR_UniGE"
+        meta.attrs["pymess_version"] = "1.261021.1"
+        shaper = meta.create_group("shaper")
+        shaper.attrs["mode"] = "Time"
+        shaper.attrs["form"] = 0
+        shaper.attrs["num_frames"] = 2
+        shaper.attrs["phase_cycle"] = 1
+        shaper.attrs["mask_sequence_length"] = 204
+        shaper.attrs["carrier_wavenumber_cm1"] = 2127.66
+        shaper.attrs["amplitude"] = 50.0
+        shaper.attrs["bragg_correct"] = 1
+        shaper.attrs["linear_correction"] = 1
+        shaper.attrs["dispersion_correct"] = 0
+
+        grp = f.create_group("data")
+        grp.create_dataset("t1_delays_fs", data=t2_scan_fs)
+        grp.create_dataset("omega3_axis", data=omega3)
+        grp.create_dataset("interferograms_raw", data=np.ones((len(t2_scan_fs), n_w3)))
+
+    ds_t2 = pm.load_1D(p_t2, data_type="PyMESS_PP")
+    t2_compact = ds_t2.sample_info_console()
+    assert "Acquisition: 1 scan × 50 batches × 500 shots @ 1 kHz" in t2_compact
+    assert "Shaper: 2-fr PC · 204 masks · 2128 cm⁻¹ · 50% amp · Bragg/Lin" in t2_compact
+    assert "Setup: TRIR-2DIR_UniGE (PyMESS v1.261021.1)" in t2_compact

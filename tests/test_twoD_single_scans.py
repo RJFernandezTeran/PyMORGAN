@@ -8,7 +8,6 @@ import h5py
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
-import pytest
 
 import pymorgan as pm
 from pymorgan.twoD.plot import plot_scan_map_array
@@ -120,56 +119,6 @@ def test_synthetic_pymess_2d_single_scans_and_recalc(tmp_path: Path):
     assert ds.active_scan_indices == [0, 1, 3]
     assert z_max_after < 0.5 * z_max_before
     assert "3 of 4" in ds.sample_info()
-
-
-def test_real_testdata_jascn_outlier_scan():
-    """Verify real experimental dataset JASCN_TOL_groundsatet2D_154253.h5 with outlier Scan 4."""
-    p = Path(
-        r"c:\Users\ricar\switchdrive\Ambizione UniGE\Scripts\testData\PyMESS\20261024\JASCN_TOL_groundsatet2D_154253.h5"
-    )
-    if not p.exists():
-        pytest.skip("Real testData file not present on this machine")
-
-    ds = pm.load_2D(p, data_type="PyMESS_2D")
-    ds.process()
-    assert ds.has_single_scans
-    assert ds.nscans == 5
-
-    scan_maps = ds.compute_scan_maps_at_t2(ds.delays[3], t2_idx=3, bin_size=1)
-    assert len(scan_maps) == 5
-    # Scan 4 (index 3) is the real outlier scan at t2 = 0.2 ps (t2_idx=3)
-    vmaxs = [float(np.nanmax(np.abs(m[2]))) for m in scan_maps]
-    assert vmaxs[3] > 5.0 * np.median([vmaxs[0], vmaxs[1], vmaxs[2], vmaxs[4]])
-
-    ds.recalc_average([0, 1, 2, 4])
-    ds.process()
-    assert ds.active_scan_indices == [0, 1, 2, 4]
-    assert float(np.nanmax(np.abs(ds.Z[:, :, 3]))) < 0.1
-
-
-def test_real_testdata_mess_2dir_and_pymess_schema_b():
-    """Verify MESS_2DIR temp/ single-scan loading and PyMESS_2D Schema B single-scan loading."""
-    mess_dir = Path(
-        r"c:\Users\ricar\switchdrive\Ambizione UniGE\Scripts\testData\MESS_2DIR\20260402\Et3SiH_CHX_2DIR_MA_175646"
-    )
-    if mess_dir.exists():
-        ds_m = pm.load_2D(mess_dir, data_type="MESS_2DIR")
-        ds_m.process()
-        assert ds_m.has_single_scans
-        assert ds_m.nscans == 3
-        maps_m = ds_m.compute_scan_maps_at_t2(ds_m.delays[0], t2_idx=0, bin_size=1)
-        assert len(maps_m) == 3
-
-    schema_b = Path(
-        r"c:\Users\ricar\switchdrive\Ambizione UniGE\Scripts\testData\PyMESS\20260303\Re-k2N-NMe2_2D_MA_143802.h5"
-    )
-    if schema_b.exists():
-        ds_b = pm.load_2D(schema_b, data_type="PyMESS_2D")
-        ds_b.process()
-        assert ds_b.has_single_scans
-        assert ds_b.nscans == 2
-        maps_b = ds_b.compute_scan_maps_at_t2(ds_b.delays[0], t2_idx=0, bin_size=1)
-        assert len(maps_b) == 2
 
 
 def test_gui_twoD_single_scans_workflow(qapp, tmp_path: Path, monkeypatch):

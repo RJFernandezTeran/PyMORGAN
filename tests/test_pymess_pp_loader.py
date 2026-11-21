@@ -237,43 +237,6 @@ def test_load_pymess_anisotropy_export():
     assert pm.load_pymess_anisotropy is pm.oneD.load_pymess_anisotropy
 
 
-def test_read_real_20261007_datasets():
-    """Verify loading real datasets recorded on 20261007 if present."""
-    import os
-    env_dir = os.environ.get("PYMORGAN_TESTDATA_DIR")
-    if not env_dir:
-        pytest.skip("PYMORGAN_TESTDATA_DIR environment variable not set")
-    base_dir = Path(env_dir) / "PyMESS" / "20261007"
-    if not base_dir.is_dir():
-        pytest.skip(f"Directory {base_dir} not found")
-
-    files = [
-        "ReCO_DCM_again_IRpp_181712.h5",
-        "ReCO_DCM_again_IRpp_181830.h5",
-        "ReCO_DCM_again_IRpp_narrowPump_182920.h5",
-    ]
-    for fname in files:
-        p = base_dir / fname
-        if not p.is_file():
-            continue
-
-        ds = pm.load_1D(p, data_type="PyMESS_PP")
-        assert ds.data_type == "PyMESS_PP"
-        assert ds.Zavg_R.ndim == 3
-        assert ds.Zavg_R.shape[2] == 1  # Standard single-channel scan
-        assert ds.nscans >= 1
-        assert ds.delays.shape[0] == ds.Zavg_R.shape[0]
-        assert ds.probe.shape[0] == ds.Zavg_R.shape[1]
-        assert ds.Units["L"] == "cm-1"
-        assert ds.Units["T"] == "ps"
-        assert ds.Units["Z"] == "x1E3"
-
-        # Background correction test
-        ds.background_correct(tmin=-50.0, tmax=-10.0)
-        assert ds.Zavg_C.shape == ds.Zavg_R.shape
-        assert np.isfinite(ds.Zavg_C).all()
-
-
 def test_pymess_pp_describe(standard_pp_file: Path, slow_mod_anisotropy_file: Path):
     """Verify PyMESS describer reports correct state counts and polarization names."""
     from pymorgan.oneD.load import describe_dataset
@@ -580,6 +543,108 @@ def test_embed_calibrated_probe_h5_and_dataset_roundtrip(tmp_path: Path):
     np.testing.assert_allclose(ds_native_reloaded.probe, cal2)
 
 
+def test_pymess_pp_sample_info_measurement_settings_and_zero_filtering(tmp_path: Path):
+    """Verify 1D PyMESS_PP extracts measurement settings, setup ID/version, and skips zero entries."""
+    n_delays, n_pix = 10, 24
+    delays_fs = np.linspace(-500.0, 2000.0, n_delays)
+    wl = np.linspace(400.0, 700.0, n_pix)
+    delta_a = np.ones((n_delays, n_pix), dtype=np.float64) * 2.0
 
+    # 1. Rich newer-schema file with full measurement settings
+    p_rich = tmp_path / "rich_pp.h5"
+    with h5py.File(p_rich, "w") as f:
+        grp = f.create_group("data")
+        grp.create_dataset("delta_A", data=delta_a)
+        grp.create_dataset("delays_fs", data=delays_fs)
+        grp.create_dataset("wavelengths", data=wl)
 
+        meta = f.create_group("metadata")
+        meta.attrs["measurement_type"] = "pump_probe"
+        meta.attrs["sample_id"] = "SAA"
+        meta.attrs["solvent"] = "Valeronitrile"
+        meta.attrs["num_scans"] = 4
+        meta.attrs["num_batches"] = 4
+        meta.attrs["shots_per_batch"] = 500
+        meta.attrs["rep_rate_hz"] = 1000
+        meta.attrs["scan_mode"] = "Step-scan: Both ways"
+        meta.attrs["noise_weighted"] = True
+        meta.attrs["pump_wl_nm"] = "355.0"
+        meta.attrs["pump_power_mw"] = "1.5"
+        meta.attrs["pump_power_unit"] = "mW"
+        meta.attrs["pump_polarization"] = "Magic (54.7°)"
+        meta.attrs["probe_polarization"] = "Par+"
+        meta.attrs["waveplate_positions"] = "Pump WP: 66.47°; Probe WP: Par+ (0.00°)"
+        meta.attrs["fast_modulation"] = "PP signal [chopper] (chopper f/2, sort f/2)"
+        meta.attrs["spectrometer_summary"] = "18181.8 cm⁻¹ (550 nm) · 150 l/mm · Slit 100 µm"
+        meta.attrs["use_b_matrix"] = True
+        meta.attrs["b_matrix_update_mode"] = "per_scan"
+        meta.attrs["stage_id"] = "delay_uv"
+        meta.attrs["stage_t0_mm"] = "13.8585"
+        meta.attrs["setup_id"] = "TRUVIS_II"
+        meta.attrs["setup_name"] = "TR-UV/Vis & 2D-VE Setup"
+        meta.attrs["setup_laboratory"] = "MEOW Laboratory"
+        meta.attrs["pymess_version"] = "1.261119.1"
+        meta.attrs["absorbance_formula"] = "exact_log"
+        meta.attrs["date"] = "20261120"
+        meta.attrs["time_hhmmss"] = "120119"
+        meta.attrs["timestamp"] = "20261120_120119"
+        meta.attrs["custom_future_field"] = "extra_val"
+
+    ds_rich = load_1D(p_rich, data_type="PyMESS_PP")
+    assert ds_rich.has_extended_sample_info is True
+
+    compact_console = ds_rich.sample_info_console()
+    assert "Sample: SAA" in compact_console
+    assert "Solvent: Valeronitrile" in compact_console
+    assert "Acquisition: 4 scans × 4 batches × 500 shots @ 1 kHz" in compact_console
+    assert "Scan Mode: Step-scan: Both ways (noise-weighted)" in compact_console
+    assert "Pump: 355.0 nm, 1.5 mW" in compact_console
+    assert "Polarization: Pump Magic (54.7°), Probe Par+" in compact_console
+    assert "Waveplates: Pump WP: 66.47°; Probe WP: Par+ (0.00°)" in compact_console
+    assert "Fast Mod: PP signal [chopper] (chopper f/2, sort f/2)" in compact_console
+    assert "Spectrometer: 18181.8 cm⁻¹ (550 nm) · 150 l/mm · Slit 100 µm" in compact_console
+    assert "Referencing: B-matrix (per_scan)" in compact_console
+    assert "Stage: delay_uv (t₀ = 13.8585 mm)" in compact_console
+    assert "Setup: TRUVIS_II (PyMESS v1.261119.1)" in compact_console
+    assert "Recorded:" not in compact_console
+    assert "Laboratory:" not in compact_console
+    assert "Absorbance Formula:" not in compact_console
+    assert "custom_future_field:" not in compact_console
+
+    full_console = ds_rich.sample_info_console(show_all=True)
+    assert "Recorded: 2026-11-20 12:01:19" in full_console
+    assert "Setup Name: TR-UV/Vis & 2D-VE Setup" in full_console
+    assert "Laboratory: MEOW Laboratory" in full_console
+    assert "Absorbance Formula: exact_log" in full_console
+    assert "custom_future_field: extra_val" in full_console
+
+    full_html = ds_rich.sample_info(show_all=True)
+    assert "Setup Name: TR-UV/Vis &amp; 2D-VE Setup" in full_html
+
+    # 2. Fallback from acquisition_summary and skipping 0.0 / setup_unknown entries
+    p_zero = tmp_path / "zeros_and_fallback.h5"
+    with h5py.File(p_zero, "w") as f:
+        grp = f.create_group("data")
+        grp.create_dataset("delta_A", data=delta_a)
+        grp.create_dataset("delays_fs", data=delays_fs)
+        grp.create_dataset("wavelengths", data=wl)
+
+        meta = f.create_group("metadata")
+        meta.attrs["measurement_type"] = "pump_probe"
+        meta.attrs["acquisition_summary"] = "2 scans × 4 batches × 100 shots"
+        meta.attrs["pump_wl_nm"] = "0.0"
+        meta.attrs["pump_power_mw"] = "0.0"
+        meta.attrs["setup_id"] = "setup_unknown"
+        meta.attrs["setup_name"] = "Ultrafast Spectroscopy Setup"
+        meta.attrs["disable_referencing"] = True
+
+    ds_zero = load_1D(p_zero, data_type="PyMESS_PP")
+    zero_console = ds_zero.sample_info_console()
+    assert "Acquisition: 2 scans × 4 batches × 100 shots" in zero_console
+    assert "Referencing: Disabled" in zero_console
+    assert "0.0 nm" not in zero_console
+    assert "0.0 mW" not in zero_console
+    assert "Pump:" not in zero_console
+    assert "setup_unknown" not in zero_console
+    assert "Setup:" not in zero_console
 

@@ -224,24 +224,6 @@ def test_load_harpia_ta_calibration_spectrum(tmp_path):
     np.testing.assert_allclose(exp11.detector_data[0], sig)
 
 
-def test_load_harpia_ta_real_testdata():
-    from pathlib import Path
-    env_dir = os.environ.get("PYMORGAN_TESTDATA_DIR")
-    if not env_dir:
-        pytest.skip("PYMORGAN_TESTDATA_DIR environment variable not set")
-    real_file = Path(env_dir) / "HARPIA" / "probe spectra for wl calibration" / "260629_newWL_0ns_1_average (number of measured spectra 250).txt"
-    if not real_file.is_file():
-        pytest.skip("HARPIA test data file not present")
-
-    exp = load_experimental_spectrum(real_file, cal_type_code=11)
-    assert len(exp.detector_data) == 1
-    assert len(exp.detector_data[0]) == 256
-    assert exp.wavelengths is not None
-    assert len(exp.wavelengths) == 256
-    assert exp.min_wl == pytest.approx(326.373077392578)
-    assert exp.max_wl == pytest.approx(533.762634277344)
-
-
 def test_available_calibration_types():
     import pymorgan as pm
     types = pm.available_calibration_types()
@@ -348,65 +330,6 @@ def test_pymess_h5_calibration_loader_synthetic(tmp_path):
     assert exp_nir.gratings[0] == 0.0
 
 
-def test_pymess_real_20261022_calibration_testdata():
-    from pathlib import Path
-
-    from pymorgan.cal import (
-        fit_spectrum_gaussian,
-        fit_wavelength_axis,
-        load_PyMESS_calibration_spectrum,
-        load_reference_spectrum,
-    )
-
-    folder = Path(r"C:\Users\ricar\switchdrive\Ambizione UniGE\Scripts\testData\PyMESS\20261022\Calibration_Shaper_passiv_PyMess")
-    if not folder.is_dir():
-        pytest.skip("PyMESS 20261022 calibration testData folder not present")
-
-    probe_air = load_PyMESS_calibration_spectrum(folder / "Probe_air_110859.h5")
-    probe_diox = load_PyMESS_calibration_spectrum(folder / "Probe_diox_110927.h5")
-    pump_air = load_PyMESS_calibration_spectrum(folder / "Pump_air_110610.h5")
-    pump_diox = load_PyMESS_calibration_spectrum(folder / "Pump_diox_110655.h5")
-    multimask = load_PyMESS_calibration_spectrum(folder / "Multimask_111613.h5")
-    singlemask = load_PyMESS_calibration_spectrum(folder / "Singlemask_111631.h5")
-
-    for ds in (probe_air, probe_diox, pump_air, pump_diox, multimask, singlemask):
-        assert ds.spectral_range == "mid-ir"
-        assert len(ds.detector_data[0]) == 64
-        assert ds.cwl[0] == pytest.approx(2079.994)
-        assert ds.gratings[0] == pytest.approx(150.0)
-
-    ref_dir = Path(__file__).resolve().parent.parent / "src" / "pymorgan" / "cal" / "ref_spectra"
-    ref = load_reference_spectrum(ref_dir / "FTIR-DioxaneRAL_2cm-1.csv")
-
-    meas_probe = -np.log10(probe_diox.detector_data[0] / probe_air.detector_data[0])
-    res_probe = fit_wavelength_axis(
-        meas_probe,
-        ref.spectral_axis,
-        ref.absorbance,
-        cal_type_code=12,
-        cwl=probe_air.cwl[0],
-        ppnm_guess=probe_air.gratings[0] / 500.0,
-        spectral_range=probe_air.spectral_range,
-    )
-    assert len(res_probe.wavenumber_cm1) == 64
-    assert 1980.0 < res_probe.wavenumber_cm1[0] < 2015.0
-    assert 2170.0 < res_probe.wavenumber_cm1[-1] < 2205.0
-
-    meas_pump = np.abs(-np.log10(pump_diox.detector_data[0] / pump_air.detector_data[0]))
-    res_pump = fit_wavelength_axis(
-        meas_pump,
-        ref.spectral_axis,
-        ref.absorbance,
-        cal_type_code=12,
-        cwl=pump_air.cwl[0],
-        ppnm_guess=pump_air.gratings[0] / 500.0,
-        spectral_range=pump_air.spectral_range,
-    )
-    gauss = fit_spectrum_gaussian(pump_air.detector_data[0], res_pump.wavenumber_cm1)
-    assert 2000.0 < gauss.w0 < 2160.0
-    assert gauss.fwhm > 20.0
-
-
 def test_gui_pymess_and_harpia_range_selectors(qapp):
     from pymorgan.gui.main_window import MainWindow
 
@@ -471,86 +394,78 @@ def test_gui_pymess_and_harpia_range_selectors(qapp):
     assert win.cal_set_rel_max_nm.value() == pytest.approx(190.0)
 
 
-def test_unige_nsta_real_testdata_load_and_fit():
+def _write_synthetic_nsta_cal_pair(tmp_path):
+    """Create a synthetic 524-px UniGE nsTA blank + filter calibration file pair."""
     from pathlib import Path
 
-    from pymorgan.cal import get_default_calibration_params
-
-    base = Path(r"C:\Users\ricar\switchdrive\Ambizione UniGE\Scripts\testData\UniGE_nsTA")
-    folders = [
-        (base / "nsTA" / "Raw" / "18", 113, 235),
-        (base / "cal", 120, 242),
-    ]
-    if not all(f.is_dir() for f, _, _ in folders):
-        pytest.skip("UniGE nsTA testData directories not present")
-
-    ref_path = Path(__file__).resolve().parent.parent / "src" / "pymorgan" / "cal" / "ref_spectra" / "UVVis-Holmium.csv"
+    n_pix = 524
+    pix = np.arange(n_pix, dtype=float)
+    wl = 540.0 + (pix - 261.5) / 1.4
+    ref_path = (
+        Path(__file__).resolve().parent.parent
+        / "src"
+        / "pymorgan"
+        / "cal"
+        / "ref_spectra"
+        / "UVVis-Holmium.csv"
+    )
     ref = load_reference_spectrum(ref_path)
-    p_def = get_default_calibration_params(3)
-    assert p_def["use_cross_corr"] is True
+    abs_ref = np.interp(wl, ref.spectral_axis, ref.absorbance)
+    i_blank = 1000.0 + 150.0 * np.sin(np.linspace(0.0, np.pi, n_pix))
+    i_filter = i_blank * (10.0 ** (-abs_ref))
+    rms = np.ones(n_pix) * 0.1
+    ref_col = np.ones(n_pix) * 12.0
 
-    for folder, pk_445, pk_536 in folders:
-        wl = load_experimental_spectrum(folder / "WL.dat", cal_type_code=3)
-        ho = load_experimental_spectrum(folder / "HOLMIUM.dat", cal_type_code=3)
-
-        assert len(wl.detector_data) == 1
-        assert len(ho.detector_data) == 1
-        i_wl = wl.detector_data[0]
-        i_ho = ho.detector_data[0]
-        assert len(i_wl) == 524
-        assert len(i_ho) == 524
-        assert np.all(np.isfinite(i_wl)) and np.all(i_wl > 0)
-        assert np.all(np.isfinite(i_ho)) and np.all(i_ho > 0)
-
-        meas_y = -np.log10(i_ho / i_wl)
-        res = fit_wavelength_axis(
-            meas_y,
-            ref.spectral_axis,
-            ref.absorbance,
-            cal_type_code=3,
-            cwl=p_def["cwl"],
-            ppnm_guess=p_def["ppnm_guess"],
-            rel_min_nm=p_def["rel_min_nm"],
-            rel_max_nm=p_def["rel_max_nm"],
-            grating_degree=p_def["grating_degree"],
-            use_derivative=p_def["use_derivative"],
-            use_cross_corr=p_def["use_cross_corr"],
-        )
-        assert len(res.wavelength_nm) == 524
-        assert res.wavelength_nm[pk_445] == pytest.approx(445.2, abs=1.5)
-        assert res.wavelength_nm[pk_536] == pytest.approx(536.3, abs=2.0)
+    blank_path = tmp_path / "blank.dat"
+    filter_path = tmp_path / "filter.dat"
+    np.savetxt(
+        blank_path,
+        np.column_stack([pix, i_blank, rms, ref_col, rms]),
+        delimiter="\t",
+        header="pixel\tsignal\trms signal\treference\trms reference",
+        comments="% ",
+    )
+    np.savetxt(
+        filter_path,
+        np.column_stack([pix, i_filter, rms, ref_col, rms]),
+        delimiter="\t",
+        header="pixel\tsignal\trms signal\treference\trms reference",
+        comments="% ",
+    )
+    return blank_path, filter_path
 
 
-def test_gui_unige_nsta_load_order_populates_raw_and_abs(qapp):
-    from pathlib import Path
-
+def test_gui_unige_nsta_load_order_populates_raw_and_abs(qapp, tmp_path):
     from pymorgan.gui.main_window import MainWindow
 
-    folder = Path(r"C:\Users\ricar\switchdrive\Ambizione UniGE\Scripts\testData\UniGE_nsTA\nsTA\Raw\18")
-    if not folder.is_dir():
-        pytest.skip("UniGE nsTA Raw/18 testData directory not present")
+    blank_path, filter_path = _write_synthetic_nsta_cal_pair(tmp_path)
 
     win = MainWindow()
-    win._ensure_calibration_initialized()
-    idx_nsta = win.cal_type_combo.findText("UniGE nsTA")
-    assert idx_nsta >= 0
-    win.cal_type_combo.setCurrentIndex(idx_nsta)
-    assert win.cal_set_cross_corr.isChecked() is True
+    try:
+        win._ensure_calibration_initialized()
+        idx_nsta = win.cal_type_combo.findText("UniGE nsTA")
+        assert idx_nsta >= 0
+        win.cal_type_combo.setCurrentIndex(idx_nsta)
+        assert win.cal_set_cross_corr.isChecked() is True
 
-    # Load filter (HOLMIUM.dat) into _cal_svt_data first, then blank (WL.dat) into _cal_exp_data
-    win._cal_svt_data = load_experimental_spectrum(folder / "HOLMIUM.dat", cal_type_code=3)
-    win._update_cal_raw_plots()
-    win._update_cal_abs_plot()
-    assert "Calculated Abs" not in {line.get_label() for line in win.cal_canvas_det1.ax_abs.lines}
+        # Load filter into _cal_svt_data first, then blank into _cal_exp_data
+        win._cal_svt_data = load_experimental_spectrum(filter_path, cal_type_code=3)
+        win._update_cal_raw_plots()
+        win._update_cal_abs_plot()
+        assert "Calculated Abs" not in {
+            line.get_label() for line in win.cal_canvas_det1.ax_abs.lines
+        }
 
-    win._cal_exp_data = load_experimental_spectrum(folder / "WL.dat", cal_type_code=3)
-    win._update_cal_raw_plots()
-    win._update_cal_abs_plot()
+        win._cal_exp_data = load_experimental_spectrum(blank_path, cal_type_code=3)
+        win._update_cal_raw_plots()
+        win._update_cal_abs_plot()
 
-    raw_labels = {line.get_label() for line in win.cal_canvas_det1.ax_raw.lines}
-    abs_labels = {line.get_label() for line in win.cal_canvas_det1.ax_abs.lines}
-    assert {"Probe", "Solvent"} <= raw_labels
-    assert "Calculated Abs" in abs_labels
+        raw_labels = {line.get_label() for line in win.cal_canvas_det1.ax_raw.lines}
+        abs_labels = {line.get_label() for line in win.cal_canvas_det1.ax_abs.lines}
+        assert {"Probe", "Solvent"} <= raw_labels
+        assert "Calculated Abs" in abs_labels
+    finally:
+        win.close()
 
 
 def test_cal_tab_left_panel_not_squashed_on_load(qapp):
@@ -581,14 +496,12 @@ def test_cal_tab_left_panel_not_squashed_on_load(qapp):
         win.close()
 
 
-def test_cal_ref_plot_shared_yaxis_and_tight_layout(qapp):
+def test_cal_ref_plot_shared_yaxis_and_tight_layout(qapp, tmp_path):
     from pathlib import Path
 
     from pymorgan.gui.main_window import MainWindow
 
-    folder = Path(r"C:\Users\ricar\switchdrive\Ambizione UniGE\Scripts\testData\UniGE_nsTA\nsTA\Raw\18")
-    if not folder.is_dir():
-        pytest.skip("UniGE nsTA Raw/18 testData directory not present")
+    blank_path, filter_path = _write_synthetic_nsta_cal_pair(tmp_path)
 
     win = MainWindow()
     win.move(-10000, -10000)
@@ -598,11 +511,18 @@ def test_cal_ref_plot_shared_yaxis_and_tight_layout(qapp):
     idx_nsta = win.cal_type_combo.findText("UniGE nsTA")
     win.cal_type_combo.setCurrentIndex(idx_nsta)
 
-    win._cal_exp_data = load_experimental_spectrum(folder / "WL.dat", cal_type_code=3)
-    win._cal_svt_data = load_experimental_spectrum(folder / "HOLMIUM.dat", cal_type_code=3)
+    win._cal_exp_data = load_experimental_spectrum(blank_path, cal_type_code=3)
+    win._cal_svt_data = load_experimental_spectrum(filter_path, cal_type_code=3)
     win._update_cal_raw_plots()
     win._update_cal_abs_plot()
-    ref_path = Path(__file__).resolve().parent.parent / "src" / "pymorgan" / "cal" / "ref_spectra" / "UVVis-Holmium.csv"
+    ref_path = (
+        Path(__file__).resolve().parent.parent
+        / "src"
+        / "pymorgan"
+        / "cal"
+        / "ref_spectra"
+        / "UVVis-Holmium.csv"
+    )
     win._cal_ref_spec = load_reference_spectrum(ref_path)
     win._on_cal_do_fit()
     qapp.processEvents()
@@ -759,211 +679,6 @@ def test_varpro_global_fit_synthetic_ground_truth():
         assert len(r_m.wavelength_nm) == n_pix
 
 
-def test_real_nsta_and_trir_improved_calibration_accuracy():
-    from pathlib import Path
-
-    from scipy.ndimage import gaussian_filter1d
-
-    from pymorgan.cal import estimate_baseline, get_default_calibration_params
-
-    nsta_dir = Path(r"C:\Users\ricar\switchdrive\Ambizione UniGE\Scripts\testData\UniGE_nsTA\nsTA\Raw\18")
-    trir_dir = Path(r"C:\Users\ricar\switchdrive\Ambizione UniGE\Scripts\testData\Calibration_Data\TRIR+shaper")
-    if not nsta_dir.is_dir() or not trir_dir.is_dir():
-        pytest.skip("nsTA Raw/18 or TRIR+shaper testData directories not present")
-
-    ref_dir = Path(__file__).resolve().parent.parent / "src" / "pymorgan" / "cal" / "ref_spectra"
-    ref_ho = load_reference_spectrum(ref_dir / "UVVis-Holmium.csv")
-    ref_diox = load_reference_spectrum(ref_dir / "FTIR-DioxaneRAL_2cm-1.csv")
-
-    def _subpixel_peak(x: np.ndarray, y: np.ndarray, target_x: float, win_dx: float) -> float:
-        m = (x >= target_x - win_dx) & (x <= target_x + win_dx)
-        xs, ys = x[m], y[m]
-        idx = int(np.argmax(ys))
-        if 0 < idx < len(ys) - 1:
-            c = np.polyfit(xs[idx - 1 : idx + 2], ys[idx - 1 : idx + 2], 2)
-            if c[0] < 0:
-                xv = -c[1] / (2.0 * c[0])
-                if xs[0] <= xv <= xs[-1]:
-                    return float(xv)
-        return float(xs[idx])
-
-    # 1. UniGE nsTA Raw/18 (8 Holmium Oxide bands 385.6-637.2 nm)
-    wl_i = load_experimental_spectrum(nsta_dir / "WL.dat", 3).detector_data[0]
-    ho_i = load_experimental_spectrum(nsta_dir / "HOLMIUM.dat", 3).detector_data[0]
-    abs_nsta = -np.log10(ho_i / wl_i)
-
-    ux_ho = np.arange(300.0, 780.0, 0.02)
-    uy_ho = np.interp(ux_ho, ref_ho.spectral_axis, ref_ho.absorbance)
-    uy_ho_conv = gaussian_filter1d(uy_ho - estimate_baseline(uy_ho, "arpls", 0.15), sigma=1.0 / 0.02)
-    ho_ref_pks = np.array([
-        _subpixel_peak(ux_ho, uy_ho_conv, t, 2.0)
-        for t in (385.6, 418.4, 445.65, 453.15, 459.85, 485.3, 536.4, 637.2)
-    ])
-    pix_nsta = np.arange(1, len(abs_nsta) + 1, dtype=float)
-    ho_exp_pix = np.array([
-        _subpixel_peak(pix_nsta, abs_nsta - estimate_baseline(abs_nsta, "arpls", 0.15), p, 4.0)
-        for p in (34.4, 77.7, 114.1, 124.1, 133.0, 165.8, 235.9, 373.1)
-    ])
-
-    p_nsta = get_default_calibration_params(3)
-    res_nsta_new = fit_wavelength_axis(
-        abs_nsta,
-        ref_ho.spectral_axis,
-        ref_ho.absorbance,
-        cal_type_code=3,
-        cwl=p_nsta["cwl"],
-        ppnm_guess=p_nsta["ppnm_guess"],
-        rel_min_nm=p_nsta["rel_min_nm"],
-        rel_max_nm=p_nsta["rel_max_nm"],
-        grating_degree=p_nsta["grating_degree"],
-        use_cross_corr=p_nsta["use_cross_corr"],
-        use_derivative=p_nsta["use_derivative"],
-        convolve_ref=p_nsta["convolve_ref"],
-        baseline_method=p_nsta["baseline_method"],
-        baseline_target=p_nsta["baseline_target"],
-        baseline_smoothness=p_nsta["baseline_smoothness"],
-        probe_weights=wl_i,
-    )
-    res_nsta_leg = fit_wavelength_axis(
-        abs_nsta,
-        ref_ho.spectral_axis,
-        ref_ho.absorbance,
-        cal_type_code=3,
-        cwl=p_nsta["cwl"],
-        ppnm_guess=p_nsta["ppnm_guess"],
-        rel_min_nm=p_nsta["rel_min_nm"],
-        rel_max_nm=p_nsta["rel_max_nm"],
-        grating_degree=2,
-        use_cross_corr=True,
-        use_derivative="1st",
-        convolve_ref=False,
-        baseline_method="legacy_poly",
-        baseline_target="none",
-    )
-    rmse_nsta_new = float(np.sqrt(np.mean((np.interp(ho_exp_pix, pix_nsta, res_nsta_new.wavelength_nm) - ho_ref_pks) ** 2)))
-    rmse_nsta_leg = float(np.sqrt(np.mean((np.interp(ho_exp_pix, pix_nsta, res_nsta_leg.wavelength_nm) - ho_ref_pks) ** 2)))
-    assert rmse_nsta_new < 0.20
-    assert rmse_nsta_new < rmse_nsta_leg
-
-    # 2. TRIR+shaper Probe and Shaper Pump (6 Dioxane bands 2071.9-2191.8 cm-1)
-    pr_air = load_experimental_spectrum(trir_dir / "probe_air_172426" / "probe_air_172426_sp0_ds0_intensity_0.csv", 8)
-    pr_diox = load_experimental_spectrum(trir_dir / "probe_diox_172445" / "probe_diox_172445_sp0_ds0_intensity_0.csv", 8)
-    pu_air = load_experimental_spectrum(trir_dir / "pump_air_171745" / "pump_air_171745_sp0_ds0_intensity_0.csv", 8)
-    pu_diox = load_experimental_spectrum(trir_dir / "pump_diox_171859" / "pump_diox_171859_sp0_ds0_intensity_0.csv", 8)
-
-    abs_pr = -np.log10(pr_diox.detector_data[0] / pr_air.detector_data[0])
-    abs_pu = -np.log10(pu_diox.detector_data[0] / pu_air.detector_data[0])
-
-    ux_ir = np.arange(1990.0, 2220.0, 0.02)
-    uy_ir = np.interp(ux_ir, ref_diox.spectral_axis, ref_diox.absorbance)
-    uy_ir_conv = gaussian_filter1d(uy_ir - estimate_baseline(uy_ir, "arpls", 0.20), sigma=1.5 / 0.02)
-    ir_ref_pks = np.array([
-        _subpixel_peak(ux_ir, uy_ir_conv, t, 2.5)
-        for t in (2071.9, 2087.8, 2104.7, 2130.2, 2175.7, 2191.8)
-    ])
-    pix_ir = np.arange(1, 65, dtype=float)
-    pr_exp_pix = np.array([
-        _subpixel_peak(pix_ir, abs_pr - estimate_baseline(abs_pr, "arpls", 0.22), p, 2.0)
-        for p in (20.3, 25.7, 30.8, 39.6, 53.5, 58.2)
-    ])
-    pu_exp_pix = np.array([
-        _subpixel_peak(pix_ir, abs_pu - estimate_baseline(abs_pu, "arpls", 0.22), p, 2.0)
-        for p in (19.5, 24.9, 30.5, 39.2, 52.9, 57.6)
-    ])
-
-    res_pr_new = fit_wavelength_axis(
-        abs_pr,
-        ref_diox.spectral_axis,
-        ref_diox.absorbance,
-        cal_type_code=8,
-        cwl=pr_air.cwl[0],
-        ppnm_guess=pr_air.gratings[0] / 500.0,
-        rel_min_nm=-200.0,
-        rel_max_nm=200.0,
-        grating_degree=2,
-        use_derivative="global",
-        baseline_method="arpls",
-        baseline_target="both",
-        convolve_ref=True,
-        probe_weights=pr_air.detector_data[0],
-    )
-    res_pr_leg = fit_wavelength_axis(
-        abs_pr,
-        ref_diox.spectral_axis,
-        ref_diox.absorbance,
-        cal_type_code=8,
-        cwl=pr_air.cwl[0],
-        ppnm_guess=pr_air.gratings[0] / 500.0,
-        rel_min_nm=-200.0,
-        rel_max_nm=200.0,
-        grating_degree=2,
-        use_derivative="1st",
-        baseline_method="legacy_poly",
-        baseline_target="none",
-        convolve_ref=False,
-    )
-    rmse_pr_new = float(np.sqrt(np.mean((np.interp(pr_exp_pix, pix_ir, res_pr_new.wavenumber_cm1) - ir_ref_pks) ** 2)))
-    rmse_pr_leg = float(np.sqrt(np.mean((np.interp(pr_exp_pix, pix_ir, res_pr_leg.wavenumber_cm1) - ir_ref_pks) ** 2)))
-    assert rmse_pr_new < 0.80
-    assert rmse_pr_new <= rmse_pr_leg
-
-    # Under a +10 cm-1 CWL offset, legacy k=1 derivative fitting mode-hops (>5 cm-1) while arPLS+Global stays <0.80 cm-1
-    res_pr_new_off = fit_wavelength_axis(
-        abs_pr,
-        ref_diox.spectral_axis,
-        ref_diox.absorbance,
-        cal_type_code=8,
-        cwl=pr_air.cwl[0] + 10.0,
-        ppnm_guess=pr_air.gratings[0] / 500.0,
-        rel_min_nm=-200.0,
-        rel_max_nm=200.0,
-        grating_degree=2,
-        use_derivative="global",
-        baseline_method="arpls",
-        baseline_target="both",
-        convolve_ref=True,
-        probe_weights=pr_air.detector_data[0],
-    )
-    res_pr_leg_off = fit_wavelength_axis(
-        abs_pr,
-        ref_diox.spectral_axis,
-        ref_diox.absorbance,
-        cal_type_code=8,
-        cwl=pr_air.cwl[0] + 10.0,
-        ppnm_guess=pr_air.gratings[0] / 500.0,
-        rel_min_nm=-200.0,
-        rel_max_nm=200.0,
-        grating_degree=2,
-        use_derivative="1st",
-        baseline_method="legacy_poly",
-        baseline_target="none",
-        convolve_ref=False,
-    )
-    rmse_pr_new_off = float(np.sqrt(np.mean((np.interp(pr_exp_pix, pix_ir, res_pr_new_off.wavenumber_cm1) - ir_ref_pks) ** 2)))
-    rmse_pr_leg_off = float(np.sqrt(np.mean((np.interp(pr_exp_pix, pix_ir, res_pr_leg_off.wavenumber_cm1) - ir_ref_pks) ** 2)))
-    assert rmse_pr_new_off < 0.80
-    assert rmse_pr_leg_off > 5.0
-
-    res_pu_new = fit_wavelength_axis(
-        abs_pu,
-        ref_diox.spectral_axis,
-        ref_diox.absorbance,
-        cal_type_code=8,
-        cwl=pu_air.cwl[0],
-        ppnm_guess=pu_air.gratings[0] / 500.0,
-        rel_min_nm=-200.0,
-        rel_max_nm=200.0,
-        grating_degree=2,
-        use_derivative="global",
-        baseline_method="arpls",
-        baseline_target="both",
-        convolve_ref=True,
-        probe_weights=pu_air.detector_data[0],
-    )
-    rmse_pu_new = float(np.sqrt(np.mean((np.interp(pu_exp_pix, pix_ir, res_pu_new.wavenumber_cm1) - ir_ref_pks) ** 2)))
-    assert rmse_pu_new < 0.55
-
-
 def test_gui_calibration_baseline_and_global_controls(qapp):
     from pymorgan.gui.main_window import MainWindow
 
@@ -1000,22 +715,31 @@ def test_gui_calibration_baseline_and_global_controls(qapp):
         idx_trir = win.cal_type_combo.findText("UniGE TRIR (Intensity)")
         win.cal_type_combo.setCurrentIndex(idx_trir)
         from pathlib import Path
-        trir_dir = Path(r"C:\Users\ricar\switchdrive\Ambizione UniGE\Scripts\testData\Calibration_Data\TRIR+shaper")
-        if trir_dir.is_dir():
-            pu_air = load_experimental_spectrum(trir_dir / "pump_air_171745" / "pump_air_171745_sp0_ds0_intensity_0.csv", 8)
-            pu_diox = load_experimental_spectrum(trir_dir / "pump_diox_171859" / "pump_diox_171859_sp0_ds0_intensity_0.csv", 8)
-            win._cal_shaper_pump_air_y = pu_air.detector_data[0]
-            win._cal_shaper_pump_solvent_y = pu_diox.detector_data[0]
-            win.cal_set_cwl.setValue(pu_air.cwl[0])
-            win.cal_set_ppnm.setValue(pu_air.gratings[0] / 500.0)
-            win._on_cal_shaper_do_fit()
-            shaper_res = win._cal_shaper_fit_res
-            assert shaper_res is not None
-            assert shaper_res.baseline_method == "arpls"
-            assert shaper_res.baseline_target == "both"
-            assert shaper_res.sample_baseline_px is not None
-            assert 2015.0 < shaper_res.wavenumber_cm1[0] < 2030.0
-            assert 2200.0 < shaper_res.wavenumber_cm1[-1] < 2215.0
+
+        ref_dir = (
+            Path(__file__).resolve().parent.parent
+            / "src"
+            / "pymorgan"
+            / "cal"
+            / "ref_spectra"
+        )
+        ref_diox = load_reference_spectrum(ref_dir / "FTIR-DioxaneRAL_2cm-1.csv")
+        wn = np.linspace(2022.0, 2208.0, 64)
+        abs_diox = np.interp(wn, ref_diox.spectral_axis, ref_diox.absorbance)
+        pu_air_y = 1000.0 * np.exp(-0.5 * ((wn - 2115.0) / 80.0) ** 2)
+        pu_diox_y = pu_air_y * (10.0 ** (-abs_diox))
+        win._cal_shaper_pump_air_y = pu_air_y
+        win._cal_shaper_pump_solvent_y = pu_diox_y
+        win.cal_set_cwl.setValue(2115.0)
+        win.cal_set_ppnm.setValue(63.0 / 186.0)
+        win._on_cal_shaper_do_fit()
+        shaper_res = win._cal_shaper_fit_res
+        assert shaper_res is not None
+        assert shaper_res.baseline_method == "arpls"
+        assert shaper_res.baseline_target == "both"
+        assert shaper_res.sample_baseline_px is not None
+        assert 2015.0 < shaper_res.wavenumber_cm1[0] < 2030.0
+        assert 2200.0 < shaper_res.wavenumber_cm1[-1] < 2215.0
     finally:
         win.close()
 

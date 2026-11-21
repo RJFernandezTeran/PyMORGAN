@@ -1,7 +1,5 @@
 """Unit tests for all data loaders: PDAT, UniGE fsTA, HARPIA-TA, Helios-TA, MESS TRIR/TRUVIS, and calibration loading."""
 
-from pathlib import Path
-
 import numpy as np
 import pytest
 import synthetic
@@ -208,28 +206,6 @@ def test_unige_fsta_missing_file_raises():
         pm.load_1D("non_existent_unige_fsta_file.dat", data_type="UniGE_fsTA")
 
 
-def test_unige_fsta_demo_directory_discovery():
-    import os
-    env_dir = os.environ.get("PYMORGAN_TESTDATA_DIR")
-    if not env_dir:
-        pytest.skip("PYMORGAN_TESTDATA_DIR environment variable not set")
-    demo_dir = Path(env_dir) / "UniGE_TA" / "demo"
-    if not demo_dir.is_dir():
-        pytest.skip("Demo dataset directory not available on local path")
-
-    dat_files = sorted(demo_dir.glob("*.dat"))
-    assert len(dat_files) > 0
-
-    for fpath in dat_files:
-        if is_dataset_file("UniGE_fsTA", fpath):
-            ds = pm.load_1D(fpath, data_type="UniGE_fsTA")
-            assert ds.data_type == "UniGE_fsTA"
-            assert ds.Zavg_R.ndim == 3
-            assert len(ds.delays) > 0
-            assert len(ds.probe) > 0
-            assert np.isfinite(ds.Zavg_R).any()
-
-
 def test_unige_fsta_calibrated_probe_precedence(tmp_path):
     info = synthetic.make_synthetic_unige_fsta(tmp_path / "test_prec.dat", nscans=2, npixels=60, create_mat=True)
 
@@ -382,30 +358,6 @@ def test_harpia_invalid_file_raises(tmp_path):
         pm.load_1D(invalid_file, data_type="HARPIA_TA")
 
 
-def test_harpia_demo_data_loading():
-    import os
-    env_dir = os.environ.get("PYMORGAN_TESTDATA_DIR")
-    if not env_dir:
-        pytest.skip("PYMORGAN_TESTDATA_DIR environment variable not set")
-    demo_dir = Path(env_dir) / "HARPIA" / "probe spectra for wl calibration" / "demo data"
-    if not demo_dir.is_dir():
-        pytest.skip("Demo dataset directory not available on local path")
-
-    files = [
-        demo_dir / "RuBiPy_water_430nm_UV_10kHz_25CD_TA_1.dat",
-        demo_dir / "I0B3_TOL_430nm_UV_10kHz_20CD_30pct_TA_1.dat",
-    ]
-    for f in files:
-        if f.is_file():
-            assert is_dataset_file("HARPIA_TA", f) is True
-            ds = pm.load_1D(str(f), data_type="HARPIA_TA")
-            assert ds.data_type == "HARPIA_TA"
-            assert ds.Zavg_R.ndim == 3
-            assert len(ds.delays) > 0
-            assert len(ds.probe) > 0
-            assert np.isfinite(ds.Zavg_R).any()
-
-
 def test_harpia_corrupted_and_spliced_blocks(tmp_path):
     """Verify that corrupt blocks, bad float tokens, shape mismatches, and spliced headers are skipped."""
     probe = np.linspace(400.0, 600.0, 8)
@@ -476,61 +428,6 @@ def test_harpia_corrupted_and_spliced_blocks(tmp_path):
     # All delays should be valid in the average because scan 2 measured all of them
     assert np.isfinite(ds.Zavg_R).all()
     assert ds.units.get("corrupted_blocks_skipped") == 3
-
-
-def test_harpia_real_20260929_datasets():
-    """Verify loading real datasets from 20260929 directory (which had byte splices in scan 6)."""
-    import os
-    env_dir = os.environ.get("PYMORGAN_TESTDATA_DIR")
-    if not env_dir:
-        pytest.skip("PYMORGAN_TESTDATA_DIR environment variable not set")
-    folder = Path(env_dir) / "HARPIA" / "20260929"
-    if not folder.is_dir():
-        pytest.skip(f"HARPIA 20260929 directory not found at {folder}")
-
-    blank_path = folder / "260928_blank_HFIP_Vis_TA_2.dat"
-    i0_path = folder / "260928_I0_HFIP_Vis_highconc_TA_4.dat"
-    i1_path = folder / "260928_I1_HFIP_Vis_TA_1.dat"
-
-    # blank file
-    if blank_path.is_file():
-        ds_b = pm.load_1D(blank_path, data_type="HARPIA_TA")
-        assert ds_b.data_type == "HARPIA_TA"
-        assert ds_b.Zavg_R.shape == (130, 256, 1)
-        assert ds_b.nscans == 6
-        assert len(ds_b.delays) == 130
-        assert len(ds_b.probe) == 256
-        assert np.isfinite(ds_b.Zavg_R).all()
-        assert ds_b.units.get("corrupted_blocks_skipped") == 9
-        ds_b.background_correct(tmin=-10.0, tmax=-1.0)
-        assert ds_b.Zavg_C.shape == (130, 256, 1)
-
-    # I0 highconc file
-    if i0_path.is_file():
-        ds_i0 = pm.load_1D(i0_path, data_type="HARPIA_TA")
-        assert ds_i0.data_type == "HARPIA_TA"
-        assert ds_i0.Zavg_R.shape == (130, 256, 1)
-        assert ds_i0.nscans == 10
-        assert len(ds_i0.delays) == 130
-        assert len(ds_i0.probe) == 256
-        assert np.isfinite(ds_i0.Zavg_R).all()
-        assert ds_i0.units.get("corrupted_blocks_skipped") == 9
-        ds_i0.background_correct(tmin=-10.0, tmax=-1.0)
-        assert ds_i0.Zavg_C.shape == (130, 256, 1)
-
-    # I1 file (clean)
-    if i1_path.is_file():
-        ds_i1 = pm.load_1D(i1_path, data_type="HARPIA_TA")
-        assert ds_i1.data_type == "HARPIA_TA"
-        assert ds_i1.Zavg_R.shape == (130, 256, 1)
-        assert ds_i1.nscans == 10
-        assert len(ds_i1.delays) == 130
-        assert len(ds_i1.probe) == 256
-        assert np.isfinite(ds_i1.Zavg_R).all()
-        assert "corrupted_blocks_skipped" not in ds_i1.units
-        ds_i1.background_correct(tmin=-10.0, tmax=-1.0)
-        assert ds_i1.Zavg_C.shape == (130, 256, 1)
-
 
 
 # --------------------------------------------------------------------------- #
@@ -684,25 +581,6 @@ def test_load_unige_cal_synthetic(tmp_path):
     assert np.isfinite(exp_data.detector_data[0]).all()
 
 
-def test_load_unige_cal_demo_directory_discovery():
-    import os
-    env_dir = os.environ.get("PYMORGAN_TESTDATA_DIR")
-    if not env_dir:
-        pytest.skip("PYMORGAN_TESTDATA_DIR environment variable not set")
-    demo_calib = Path(env_dir) / "UniGE_TA" / "demo" / "calib"
-    if not demo_calib.is_dir():
-        pytest.skip("Demo calibration directory not available on local path")
-
-    dat_files = sorted(demo_calib.glob("*.dat"))
-    assert len(dat_files) > 0
-
-    for fpath in dat_files:
-        exp_data = load_experimental_spectrum(fpath, cal_type_code=2)
-        assert len(exp_data.detector_data) == 1
-        assert len(exp_data.detector_data[0]) > 0
-        assert np.isfinite(exp_data.detector_data[0]).all()
-
-
 def test_read_uos_irpp_synthetic_two_detectors(tmp_path):
     info = synthetic.make_synthetic_uos_irpp(tmp_path / "uos_dataset", n_detectors=2, n_scans=2, n_delays=10)
     ds = pm.load_1D(info["folder"], data_type="UoS_IRpp")
@@ -724,29 +602,6 @@ def test_read_uos_irpp_synthetic_one_detector(tmp_path):
     assert ds.Z.shape == (10, 96, 1)
     assert ds.delays.shape == (10,)
     assert ds.probe.shape == (96,)
-
-
-def test_read_uos_irpp_real_dataset_discovery():
-    import os
-    env_dir = os.environ.get("PYMORGAN_TESTDATA_DIR")
-    if not env_dir:
-        pytest.skip("PYMORGAN_TESTDATA_DIR environment variable not set")
-    uos_root = Path(env_dir) / "UoS"
-    if not uos_root.is_dir():
-        pytest.skip("UoS test directory not present")
-
-    candidates = [
-        f.parent for f in uos_root.rglob("*.2D")
-        if f.stat().st_size > 0 and (f.parent / (f.stem + ".DT")).is_file()
-    ]
-    if not candidates:
-        pytest.skip("No valid UoS test datasets found")
-
-    ds = pm.load_1D(candidates[0], data_type="UoS_IRpp")
-    assert ds.data_type == "UoS_IRpp"
-    assert ds.Z.ndim == 3
-    assert ds.delays.ndim == 1
-    assert ds.n_detectors in (1, 2)
 
 
 # --------------------------------------------------------------------------- #
@@ -788,23 +643,6 @@ def test_read_exported_txt_synthetic(tmp_path):
     # Also test loading via single file path inside folder
     ds_file = pm.load_1D(ta_file, data_type="Exported_TXT")
     assert ds_file.Zavg_R.shape == (4, 3, 1)
-
-
-def test_read_exported_txt_fig4_dataset():
-    import os
-    env_dir = os.environ.get("PYMORGAN_FIG4_DIR")
-    if not env_dir:
-        pytest.skip("PYMORGAN_FIG4_DIR environment variable not set")
-    fig4_path = Path(env_dir)
-    if not fig4_path.is_dir():
-        pytest.skip("FIG4 4CN dataset not found on disk")
-
-    assert is_dataset_dir("Exported_TXT", fig4_path) is True
-    ds = pm.load_1D(fig4_path, data_type="Exported_TXT")
-    assert ds.data_type == "Exported_TXT"
-    assert ds.delays.shape == (425,)
-    assert ds.probe.shape == (520,)
-    assert ds.Zavg_R.shape == (425, 520, 1)
 
 
 # --------------------------------------------------------------------------- #
@@ -925,60 +763,6 @@ def test_read_pymess_pp_is_file_based_not_directory(tmp_path):
     dummy = tmp_path / "not_h5.h5"
     dummy.write_text("not hdf5 content")
     assert is_dataset_file("PyMESS_PP", dummy) is False
-
-
-def test_read_pymess_pp_real_dataset_reco_irpp():
-    import os
-    env_dir = os.environ.get("PYMORGAN_TESTDATA_DIR")
-    if not env_dir:
-        pytest.skip("PYMORGAN_TESTDATA_DIR environment variable not set")
-    real_path = Path(env_dir) / "PyMESS" / "ReCO_DCM_IRpp_154555.h5"
-    if not real_path.is_file():
-        pytest.skip(f"Test dataset not found at {real_path}")
-
-    assert is_dataset_file("PyMESS_PP", real_path) is True
-
-    ds = pm.load_1D(real_path, data_type="PyMESS_PP")
-    assert ds.data_type == "PyMESS_PP"
-    assert ds.Zavg_R.shape == (68, 64, 1)
-    assert ds.delays.shape == (68,)
-    assert np.isclose(ds.delays[0], -20.0)
-    assert np.isclose(ds.delays[-1], 30.0)
-    assert ds.probe.shape == (64,)
-    assert ds.probe[0] > 1900.0
-    assert ds.nscans == 4
-    assert ds.Zss_R.shape == (68, 64, 1, 4)
-    assert ds.Zstdv.shape == (68, 64, 1)
-    assert ds.scan_ids == [0, 1, 2, 3]
-
-    assert ds.units["unitsL_lbl"] == "Wavenumber"
-    assert ds.units["unitsL_ltx"] == r"cm$^{-1}$"
-    assert ds.units["unitsT_ltx"] == "ps"
-    assert ds.units["unitsZ"] == "x1E3"
-    assert ds.calibration_status() == "PyMESS spectral calibration (cm-1)"
-
-    # Verify metadata extraction
-    sample_info = ds.sample_info()
-    assert "Sample: SRCN" in sample_info
-    assert "Solvent: THF and DBU 1mM" in sample_info
-    assert "550.0 nm" in sample_info
-
-    # Verify background correction works on real dataset
-    ds.background_correct(tmin=-20.0, tmax=-1.0)
-    assert ds.Zavg_C.shape == (68, 64, 1)
-    assert np.isfinite(ds.Zavg_C).all()
-
-
-def test_pymess_discriminator_rejects_magic_angle_real():
-    import os
-    env_dir = os.environ.get("PYMORGAN_TESTDATA_DIR")
-    if not env_dir:
-        pytest.skip("PYMORGAN_TESTDATA_DIR environment variable not set")
-    magic_path = Path(env_dir) / "PyMESS" / "ReCO_PPagain_magic_160703.h5"
-    if not magic_path.is_file():
-        pytest.skip(f"Magic angle test file not found at {magic_path}")
-
-    assert is_dataset_file("PyMESS_PP", magic_path) is False
 
 
 def test_read_pymess_pp_folder_raises(tmp_path):

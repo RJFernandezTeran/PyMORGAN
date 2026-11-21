@@ -11,6 +11,7 @@ imports (matplotlib, scipy) stay inside the methods.
 
 from __future__ import annotations
 
+import html
 from collections.abc import Sequence
 from os import PathLike
 from pathlib import Path
@@ -135,6 +136,9 @@ class Dataset1D:
         self.bkg_ss = None
         self.chirp_fit = None
         self.mask_ranges = None
+        self._scatter_removal_params = None
+        self._scatter_removal_result = None
+        self._orig_Zstdv = None
 
     @property
     def Units(self) -> dict:
@@ -292,6 +296,11 @@ class Dataset1D:
         new_ds.mask_ranges = _copy.deepcopy(mask_r) if deep else mask_r
         new_ds.cal_level = getattr(self, "cal_level", None)
         new_ds.cal_source = getattr(self, "cal_source", None)
+        sc_params = getattr(self, "_scatter_removal_params", None)
+        new_ds._scatter_removal_params = _copy.deepcopy(sc_params) if deep else sc_params
+        sc_res = getattr(self, "_scatter_removal_result", None)
+        new_ds._scatter_removal_result = _copy.deepcopy(sc_res) if deep else sc_res
+        new_ds._orig_Zstdv = _dup(getattr(self, "_orig_Zstdv", None))
         return new_ds
 
     def crop(
@@ -355,6 +364,10 @@ class Dataset1D:
                 self.bkg_avg = self.bkg_avg[p_mask] if self.bkg_avg.ndim == 1 else self.bkg_avg[p_mask, :]
             if self.bkg_ss is not None:
                 self.bkg_ss = self.bkg_ss[p_mask] if self.bkg_ss.ndim == 1 else self.bkg_ss[p_mask, :]
+
+        if tmin is not None or tmax is not None or probe_min is not None or probe_max is not None:
+            self._scatter_removal_result = None
+            self._scatter_removal_params = None
 
         return self
 
@@ -612,14 +625,16 @@ class Dataset1D:
             z=hlp.signal_axis_unit(units),
         )
 
-    def sample_info(self) -> str:
-        """Return the two-line dataset summary shown in the GUI info box.
+    @property
+    def has_extended_sample_info(self) -> bool:
+        """Whether extended ('all available') sample metadata is available."""
+        u = self.units or {}
+        full = u.get("sample_info_full")
+        compact = u.get("sample_info")
+        return bool(full) and full != compact
 
-        Line 1 reports the average and maximum noise (when single-scan or
-        ``.pdatn`` data is available, else a notice). Line 2 reports the
-        signal-to-noise ratio, the data kind, the number of delays and the
-        probe-axis resolution. Units are plain text (no LaTeX markup).
-        """
+    def sample_info(self, show_all: bool = False) -> str:
+        """Return an HTML dataset summary shown in the GUI info box."""
         from .. import helpers as hlp
 
         u = self.units or {}
@@ -657,15 +672,15 @@ class Dataset1D:
         line3 = _format_1d_delay_info(self.delays, u.get("unitsT_ltx", "ps"), html=True)
         line_cal = f"<b>Calibration:</b> {self.calibration_status()}"
         lines = [line1, line2, line3, line_cal]
-        info_extra = self.units.get("sample_info")
+        info_extra = (u.get("sample_info_full") or u.get("sample_info")) if show_all else u.get("sample_info")
         if info_extra:
-            formatted_info = info_extra.replace("\n", "<br>")
+            formatted_info = html.escape(str(info_extra), quote=False).replace("\n", "<br>")
             lines.append(f"<b>Sample Info:</b><br>{formatted_info}")
         else:
             lines.append("<b>Sample Info:</b> No additional sample information available.")
         return "<br>".join(lines)
 
-    def sample_info_console(self) -> str:
+    def sample_info_console(self, show_all: bool = False) -> str:
         """Return a plain text, console-friendly summary of the 1-D dataset."""
         from .. import helpers as hlp
 
@@ -708,7 +723,7 @@ class Dataset1D:
         line3 = _format_1d_delay_info(self.delays, u.get("unitsT_ltx", "ps"), html=False)
         line_cal = f"Calibration: {self.calibration_status()}"
         lines = [line1, line2, line3, line_cal]
-        info_extra = self.units.get("sample_info")
+        info_extra = (u.get("sample_info_full") or u.get("sample_info")) if show_all else u.get("sample_info")
         if info_extra:
             lines.append(f"Sample Info:\n{info_extra}")
         else:
@@ -741,9 +756,9 @@ class Dataset1D:
             return "QuickControl monochromator calibration"
         return "Dataset probe calibration"
 
-    def print_sample_info(self) -> None:
+    def print_sample_info(self, show_all: bool = False) -> None:
         """Print the console-friendly summary of the 1-D dataset."""
-        print(self.sample_info_console())
+        print(self.sample_info_console(show_all=show_all))
 
     def _resolve(
         self,
@@ -770,6 +785,128 @@ class Dataset1D:
         self.Zavg_C, self.Zss_C, self.bkg_avg, self.bkg_ss = process.background_correct(
             self.Zavg_R, self.Zss_R, self.nscans, self.delays, tmin, tmax, do_correct=do_correct
         )
+        return self
+
+    def detect_scatter_bands(
+        self,
+        *,
+        detector: int = 0,
+        tmin: float | None = None,
+        tmax: float | None = None,
+        allow_positive: bool = False,
+    ):
+        """Auto-detect localised scatter bands from the pre-zero spectrum.
+
+        Parameters
+        ----------
+        detector : int, default 0
+            0-based detector channel index to inspect.
+        tmin, tmax : float, optional
+            Pre-zero delay window bounds. Defaults to delays ``<= -1.0`` (or
+            earliest negative delays).
+        allow_positive : bool, default False
+            Whether to detect positive sharp pre-zero artefacts alongside
+            negative scatter dips.
+
+        Returns
+        -------
+        list of ScatterBand
+            Auto-detected primary and optional coupled 2nd-order harmonic bands.
+        """
+        from .scatter import detect_scatter_bands
+
+        Z_arr = np.asarray(self.Zavg_R, dtype=float)
+        if Z_arr.ndim == 3:
+            d = int(np.clip(detector, 0, Z_arr.shape[2] - 1))
+            Z_2d = Z_arr[:, :, d]
+        else:
+            Z_2d = Z_arr
+        return detect_scatter_bands(
+            Z_2d,
+            self.delays,
+            self._detector_probe(detector),
+            tmin=tmin,
+            tmax=tmax,
+            units=self.units,
+            allow_positive=allow_positive,
+        )
+
+    def apply_scatter_removal(self, result) -> Dataset1D:
+        """Apply a computed :class:`~pymorgan.oneD.scatter.ScatterRemovalResult` in-place.
+
+        Copies the cleaned averaged and single-scan arrays, stores the removal
+        metadata, and backs up ``Zstdv`` prior to updating it when
+        ``result.Zstdv`` is provided.
+
+        Parameters
+        ----------
+        result : ScatterRemovalResult
+            Output produced by :func:`pymorgan.oneD.scatter.compute_scatter_removal`.
+
+        Returns
+        -------
+        Dataset1D
+            Returns ``self`` so calls can be chained.
+        """
+        if getattr(self, "_orig_Zstdv", None) is None and self.Zstdv is not None:
+            self._orig_Zstdv = np.copy(self.Zstdv)
+
+        self.Zavg_C = np.copy(result.Zavg_C)
+        self.Zss_C = np.copy(result.Zss_C) if result.Zss_C is not None else None
+        self.bkg_avg = np.copy(result.bkg_avg) if result.bkg_avg is not None else None
+        self.bkg_ss = np.copy(result.bkg_ss) if result.bkg_ss is not None else None
+        if result.Zstdv is not None:
+            self.Zstdv = np.copy(result.Zstdv)
+        elif getattr(self, "_orig_Zstdv", None) is not None:
+            self.Zstdv = np.copy(self._orig_Zstdv)
+
+        self._scatter_removal_result = result
+        self._scatter_removal_params = dict(result.params)
+        return self
+
+    def remove_scatter(self, bands=None, **kwargs) -> Dataset1D:
+        """Run multi-band scatter and dynamic background removal in-place.
+
+        Delegates to :func:`pymorgan.oneD.scatter.compute_scatter_removal` and
+        applies the cleaned arrays (and optional updated ``Zstdv``) to this
+        dataset. Run prior to chirp correction so unchirped scatter tied to the
+        delay stage is isolated cleanly.
+
+        Parameters
+        ----------
+        bands : list of ScatterBand, optional
+            Explicit scatter bands in native probe units. When ``None``, bands
+            are automatically detected from the pre-zero spectrum.
+        **kwargs
+            Additional keyword arguments forwarded to
+            :func:`pymorgan.oneD.scatter.compute_scatter_removal` (such as
+            ``method``, ``rank``, ``poly_deg``, ``t0_exclude``,
+            ``scale_broadband``, ``per_scan``, ``update_noise``, and
+            ``transmittance_space``).
+
+        Returns
+        -------
+        Dataset1D
+            Returns ``self`` so calls can be chained.
+        """
+        from .scatter import compute_scatter_removal
+
+        res = compute_scatter_removal(self, bands=bands, **kwargs)
+        return self.apply_scatter_removal(res)
+
+    def clear_scatter_removal(self) -> Dataset1D:
+        """Clear applied advanced scatter removal state and restore original ``Zstdv``.
+
+        Returns
+        -------
+        Dataset1D
+            Returns ``self`` so calls can be chained.
+        """
+        self._scatter_removal_result = None
+        self._scatter_removal_params = None
+        if getattr(self, "_orig_Zstdv", None) is not None:
+            self.Zstdv = np.copy(self._orig_Zstdv)
+            self._orig_Zstdv = None
         return self
 
     def recalc_average(
@@ -849,6 +986,9 @@ class Dataset1D:
         self.Zstdv = Zstdv
         self.nscans = len(scan_indices)
         self.Zavg_C = None  # Invalidate background correction cache
+        self._scatter_removal_result = None
+        self._scatter_removal_params = None
+        self._orig_Zstdv = None
         return self
 
     def mask_probe_regions(
@@ -931,6 +1071,9 @@ class Dataset1D:
                     self.bkg_ss = self.bkg_ss[keep]
 
             self.mask_ranges = ranges
+            self._scatter_removal_result = None
+            self._scatter_removal_params = None
+            self._orig_Zstdv = None
         else:
             det = detector if detector is not None else 0
             det = int(np.clip(det, 0, self.n_detectors - 1))
@@ -984,6 +1127,7 @@ class Dataset1D:
         """
         self.delays = np.asarray(self.delays, dtype=float) - float(t0_shift)
         self.Zavg_C = None
+        self.clear_scatter_removal()
         return self
 
     def subtract_solvent(

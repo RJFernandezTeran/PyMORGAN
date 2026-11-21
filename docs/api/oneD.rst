@@ -30,6 +30,13 @@ Processing & Chirp Correction (``pymorgan.oneD.process``, ``pymorgan.oneD.chirp`
    :members:
    :show-inheritance:
 
+Advanced Scatter Removal (``pymorgan.oneD.scatter``)
+----------------------------------------------------
+
+.. automodule:: pymorgan.oneD.scatter
+   :members:
+   :show-inheritance:
+
 Stitching & SVD (``pymorgan.oneD.stitch``, ``pymorgan.oneD.svd``)
 -----------------------------------------------------------------
 

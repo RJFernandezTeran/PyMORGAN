@@ -1704,3 +1704,328 @@ def test_contour_scroll_axis_zooming(qapp, tmp_path, monkeypatch):
         pm.update_settings(time_axis_scale=orig_time_scale)
         win.close()
 
+
+def test_twoD_show_all_info_toggle(qapp, tmp_path):
+    """2D Sample Info toggle stays hidden without extended metadata and switches compact/full for PyMESS_2D."""
+    import h5py
+
+    p2_info = synthetic.make_synthetic_p2dat(tmp_path / "syn.p2dat")
+
+    n_t2, n_t1, n_w3 = 2, 12, 16
+    h5_path = tmp_path / "pymess_td_2d.h5"
+    with h5py.File(h5_path, "w") as f:
+        meta = f.create_group("metadata")
+        meta.attrs["measurement_type"] = "2d_spectra"
+        meta.attrs["domain_mode"] = "time_domain"
+        meta.attrs["sample_id"] = "ToggleSample"
+        meta.attrs["num_scans"] = 3
+        meta.attrs["num_batches"] = 50
+        meta.attrs["shots_per_batch"] = 500
+        meta.attrs["rep_rate_hz"] = 1000
+        meta.attrs["setup_id"] = "TRIR-2DIR_UniGE"
+        meta.attrs["setup_laboratory"] = "MEOW Laboratory"
+        meta.attrs["pymess_version"] = "1.261023.1"
+
+        shaper = meta.create_group("shaper")
+        shaper.attrs["mode"] = "Time"
+        shaper.attrs["form"] = 1
+        shaper.attrs["num_frames"] = 4
+        shaper.attrs["phase_cycle"] = 1
+        shaper.attrs["mask_sequence_length"] = 400
+        shaper.attrs["carrier_wavenumber_cm1"] = 2000.0
+        shaper.attrs["amplitude"] = 50.0
+        shaper.attrs["effective_rotating_frame_cm1"] = 1800.0
+        shaper.attrs["step_fs"] = 30.0
+        shaper.attrs["dispersion_correct"] = 1
+        shaper.attrs["dispersion_gvd_fs2"] = -85000.0
+
+        grp = f.create_group("data")
+        grp.create_dataset("t1_delays_fs", data=np.arange(n_t1, dtype=float) * 30.0)
+        grp.create_dataset("t2_delays_fs", data=np.array([200.0, 1000.0]))
+        grp.create_dataset("omega3_axis", data=np.linspace(1950.0, 2050.0, n_w3))
+        grp.create_dataset("interferograms_raw", data=np.ones((n_t2, n_t1, n_w3)) * 0.5)
+
+    win = MainWindow()
+    try:
+        chk = win.twoD_show_all_info_chk
+        assert chk.isHidden() is True
+
+        # Load P2DAT -> no extended info -> toggle remains hidden
+        win.twoD_load_path(str(p2_info["path"]), data_type="P2DAT")
+        qapp.processEvents()
+        assert chk.isHidden() is True
+
+        # Load PyMESS_2D -> extended info available -> toggle becomes visible
+        win.twoD_load_path(str(h5_path), data_type="PyMESS_2D")
+        qapp.processEvents()
+        assert chk.isHidden() is False
+        assert chk.isChecked() is False
+
+        compact_txt = win.twoD_SampleInfo_text.toPlainText()
+        assert "Acquisition: 3 scans × 50 batches/t₂ × 500 shots @ 1 kHz" in compact_txt
+        assert "Shaper:" in compact_txt
+        assert "Setup: TRIR-2DIR_UniGE (PyMESS v1.261023.1)" in compact_txt
+        assert "Shaper Dispersion:" not in compact_txt
+        assert "Laboratory:" not in compact_txt
+
+        # Toggle ON -> full metadata shown
+        chk.setChecked(True)
+        qapp.processEvents()
+        full_txt = win.twoD_SampleInfo_text.toPlainText()
+        assert "Shaper Dispersion:" in full_txt
+        assert "Laboratory: MEOW Laboratory" in full_txt
+
+        # Toggle OFF -> returns to compact view
+        chk.setChecked(False)
+        qapp.processEvents()
+        reverted_txt = win.twoD_SampleInfo_text.toPlainText()
+        assert "Shaper Dispersion:" not in reverted_txt
+        assert "Laboratory:" not in reverted_txt
+    finally:
+        win.close()
+
+
+def test_1d_kinetics_and_zref_unit_aware_interactive_and_noninteractive(qapp, tmp_path, monkeypatch):
+    """1D interactive & non-interactive kinetics, _compute_zref, chirp pick, and auto defaults follow non-native units."""
+    import matplotlib.pyplot as plt
+    from matplotlib.backend_bases import KeyEvent, MouseEvent
+    from PyQt6.QtWidgets import QInputDialog, QMessageBox
+
+    def _fail_on_modal(_parent, title, msg, *_a, **_kw):
+        raise AssertionError(f"Unexpected modal dialog ({title}): {msg}")
+
+    monkeypatch.setattr(QMessageBox, "warning", _fail_on_modal)
+    monkeypatch.setattr(QMessageBox, "information", _fail_on_modal)
+    monkeypatch.setattr(QMessageBox, "critical", _fail_on_modal)
+
+    harp = synthetic.make_synthetic_harpia_dataset(tmp_path / "uv_harpia.dat", nscans=2)
+    pdat_ir = synthetic.make_synthetic_pdat(tmp_path / "ir_syn.pdat")
+
+    created_figs = []
+    monkeypatch.setattr(plt, "show", lambda *a, **kw: created_figs.append(plt.gcf()))
+
+    orig_x_unit = pm.get_settings().x_axis_unit
+    win = MainWindow(init_rootdir=False)
+    try:
+        win.show()
+        win.load_path(harp["path"], "HARPIA_TA")
+        qapp.processEvents()
+
+        # Inject deterministic per-pixel signals so exact snapped column is verifiable
+        win.PP_SubtactBkg_chk.setChecked(False)
+        probe_nm = np.asarray(win.dataset.probe, dtype=float)
+        delays = np.asarray(win.dataset.delays, dtype=float)
+        n_d, n_p = len(delays), len(probe_nm)
+        col_amp = np.arange(1, n_p + 1, dtype=float) * 2.0
+        Z_det = np.outer(np.linspace(1.0, 2.0, n_d), col_amp)
+        if win.dataset.Zavg_R.ndim == 3:
+            win.dataset.Zavg_R[:, :, 0] = Z_det
+        else:
+            win.dataset.Zavg_R = Z_det.copy()
+        win.dataset.Zavg_C = Z_det.copy()
+        z_ss_2 = np.stack([Z_det * 0.9, Z_det * 1.1], axis=2)
+        if win.dataset.Zss_R is not None and win.dataset.Zss_R.ndim == 4:
+            win.dataset.Zss_R = z_ss_2[:, :, np.newaxis, :]
+        else:
+            win.dataset.Zss_R = z_ss_2
+        win.dataset.Zss_C = win.dataset.Zss_R.copy()
+        win.plot_controls.set_dataset(win.dataset)
+
+        # Put a large outlier at pixel 0 (short nm = large cm-1) to verify _compute_zref()
+        win.dataset.Zavg_C[:, 0] = 1e5
+        win.dataset.Zavg_R[:, 0, 0] = 1e5
+
+        target_idx = n_p // 2
+        target_nm = float(probe_nm[target_idx])
+        target_wn = 1.0e7 / target_nm
+        target_ev = 1239.841984 / target_nm
+
+        # --- 1. UV-Vis displayed as 10^3 cm-1 (_x_scaled = True) ---
+        win.PC_xUnit.setCurrentText("cm-1")
+        win._render_timer.stop()
+        win._preview_contour()
+        qapp.processEvents()
+        assert win.plot_controls._x_scaled is True
+        assert win.plot_controls.probe_display_label() == "10\u00b3 cm\u207b\u00b9"
+
+        # Restrict X spinboxes in scaled units excluding pixel 0 -> _compute_zref must NOT double * 1000
+        wn_edge = 1.0e7 / float(probe_nm[2]) / 1000.0
+        wn_lo = 1.0e7 / float(probe_nm[-1]) / 1000.0
+        win.PC_xMin.setValue(min(wn_lo, wn_edge))
+        win.PC_xMax.setValue(max(wn_lo, wn_edge))
+        win.PC_restrictZ.setChecked(True)
+        zabs_restricted, _, _ = win.plot_controls._compute_zref()
+        assert zabs_restricted < 1000.0
+
+        # Interactive click at unscaled axis coordinate (target_wn cm-1)
+        win.PP_Interactive_TickBox.setChecked(True)
+        win._plot_cut("kinetics")
+        ax1d = win.PPaxes.ax
+        px, py = ax1d.transData.transform((target_wn, float(delays[len(delays) // 2])))
+        click_ev = MouseEvent("button_press_event", win.PPaxes.canvas, px, py, button=1)
+        click_ev.inaxes = ax1d
+        click_ev.xdata = target_wn
+        click_ev.ydata = float(delays[len(delays) // 2])
+        win.PPaxes.canvas.callbacks.process("button_press_event", click_ev)
+        key_ev = KeyEvent("key_press_event", win.PPaxes.canvas, key="enter")
+        win.PPaxes.canvas.callbacks.process("key_press_event", key_ev)
+        qapp.processEvents()
+
+        fig_wn = created_figs[-1]
+        ax_wn = fig_wn.axes[0]
+        np.testing.assert_allclose(np.asarray(ax_wn.get_lines()[0].get_ydata()), Z_det[:, target_idx])
+        assert "10^{3}" in ax_wn.get_legend().get_texts()[0].get_text()
+
+        # --- 2. UV-Vis displayed as eV: non-interactive kinetics & per-scan kinetics ---
+        win.PC_xUnit.setCurrentText("eV")
+        qapp.processEvents()
+        win.PP_Interactive_TickBox.setChecked(False)
+
+        captured_prompts = []
+
+        def fake_get_text(_parent, title, label, text=""):
+            captured_prompts.append((title, label, text))
+            return f"{target_ev:.4f}", True
+
+        monkeypatch.setattr(QInputDialog, "getText", fake_get_text)
+        win._plot_cut("kinetics")
+        qapp.processEvents()
+
+        assert captured_prompts[-1][0] == "Kinetic cuts"
+        assert "eV" in captured_prompts[-1][1]
+        fig_ev = created_figs[-1]
+        ax_ev = fig_ev.axes[0]
+        np.testing.assert_allclose(np.asarray(ax_ev.get_lines()[0].get_ydata()), Z_det[:, target_idx])
+        assert "eV" in ax_ev.get_legend().get_texts()[0].get_text()
+
+        win._plot_scan_cut("kinetics")
+        qapp.processEvents()
+        assert captured_prompts[-1][0] == "Per-scan kinetics"
+        assert "eV" in captured_prompts[-1][1]
+
+        # Manual chirp pick converts picked display X coords back to native nm before fitting
+        fitted_points = []
+        monkeypatch.setattr(
+            win.dataset,
+            "fit_chirp_manual",
+            lambda pts, detector=0, **kw: fitted_points.append(list(pts)) or None,
+        )
+        monkeypatch.setattr(win, "_finish_chirp_fit", lambda _fit: None)
+        win._fit_chirp_manual_pick({})
+        ax_ch = win.PPaxes.ax
+        x_disp_sample = 1239.841984 / float(probe_nm[target_idx])
+        c_ev = MouseEvent("button_press_event", win.PPaxes.canvas, 10, 10, button=1)
+        c_ev.inaxes = ax_ch
+        c_ev.xdata = x_disp_sample
+        c_ev.ydata = 1.0
+        win.PPaxes.canvas.callbacks.process("button_press_event", c_ev)
+        win.PPaxes.canvas.callbacks.process(
+            "key_press_event", KeyEvent("key_press_event", win.PPaxes.canvas, key="enter")
+        )
+        assert len(fitted_points) == 1
+        assert fitted_points[0][0][0] == pytest.approx(target_nm, rel=1e-4)
+
+        # --- 3. Mid-IR dataset in eV: _auto_wavelengths non-zero & legend not "0 eV" ---
+        win.load_path(pdat_ir["path"], "PDAT")
+        win.PC_xUnit.setCurrentText("eV")
+        qapp.processEvents()
+
+        ir_auto = win._auto_wavelengths()
+        assert len(ir_auto) >= 2
+        assert all(0.1 < v < 1.0 for v in ir_auto)
+
+        ir_idx = len(win.dataset.probe) // 2
+        ir_wn = float(win.dataset.probe[ir_idx])
+        ir_ev = 1239.841984 / ir_wn
+        win.PP_Interactive_TickBox.setChecked(True)
+        win._render_timer.stop()
+        win._preview_contour()
+        win._plot_cut("kinetics")
+        ax_ir = win.PPaxes.ax
+        c_ir = MouseEvent("button_press_event", win.PPaxes.canvas, 10, 10, button=1)
+        c_ir.inaxes = ax_ir
+        c_ir.xdata = ir_ev
+        c_ir.ydata = float(win.dataset.delays[len(win.dataset.delays) // 2])
+        win.PPaxes.canvas.callbacks.process("button_press_event", c_ir)
+        win.PPaxes.canvas.callbacks.process(
+            "key_press_event", KeyEvent("key_press_event", win.PPaxes.canvas, key="enter")
+        )
+        fig_ir = created_figs[-1]
+        leg_ir = fig_ir.axes[0].get_legend().get_texts()[0].get_text()
+        assert leg_ir != "0 eV" and "eV" in leg_ir
+    finally:
+        for fig in created_figs:
+            plt.close(fig)
+        pm.update_settings(x_axis_unit=orig_x_unit)
+        win.close()
+
+
+def test_transient_spectra_dialogs_display_delay_units(qapp, tmp_path, monkeypatch):
+    """1D Transient spectra & Per-scan spectra dialogs show delay units, ranges, and accept time units."""
+    import matplotlib.pyplot as plt
+    from PyQt6.QtWidgets import QInputDialog, QMessageBox
+
+    def _fail_on_modal(_parent, title, msg, *_a, **_kw):
+        raise AssertionError(f"Unexpected modal dialog ({title}): {msg}")
+
+    monkeypatch.setattr(QMessageBox, "warning", _fail_on_modal)
+    monkeypatch.setattr(QMessageBox, "information", _fail_on_modal)
+    monkeypatch.setattr(QMessageBox, "critical", _fail_on_modal)
+
+    harp = synthetic.make_synthetic_harpia_dataset(tmp_path / "spec_harpia.dat", nscans=2)
+    nsta = synthetic.make_synthetic_unige_nsta(tmp_path / "spec_nsta.dat")
+
+    monkeypatch.setattr(plt, "show", lambda *a, **kw: None)
+
+    win = MainWindow(init_rootdir=False)
+    try:
+        # 1. ps dataset (HARPIA)
+        win.load_path(harp["path"], "HARPIA_TA")
+        win.PP_Interactive_TickBox.setChecked(False)
+        qapp.processEvents()
+
+        prompts = []
+        captured_delays = []
+        monkeypatch.setattr(
+            QInputDialog,
+            "getText",
+            lambda _p, title, label, text="": (prompts.append((title, label, text)), ("500 fs, 2, 1 ns", True))[1],
+        )
+        orig_plot_spectra = win.dataset.plot_spectra
+        monkeypatch.setattr(
+            win.dataset,
+            "plot_spectra",
+            lambda d, *a, **kw: (captured_delays.append(list(d)), orig_plot_spectra(d, *a, **kw))[1],
+        )
+        win._plot_cut("spectra")
+        assert prompts[-1][0] == "Transient spectra"
+        assert "in ps" in prompts[-1][1] and "ps)" in prompts[-1][1]
+        assert captured_delays[-1] == pytest.approx([0.5, 2.0, 1000.0])
+
+        # Per-scan spectra prompt also carries delay unit & range
+        win._plot_scan_cut("spectra")
+        assert prompts[-1][0] == "Per-scan spectra"
+        assert "in ps" in prompts[-1][1]
+
+        # 2. Microsecond / nanosecond dataset (UniGE_nsTA): _auto_delays stays inside range & prompt shows unit
+        win.load_path(nsta["path"], "UniGE_nsTA")
+        qapp.processEvents()
+        expected_u = pm.helpers.plain_time_unit(win.dataset.units)
+        auto_d = win._auto_delays()
+        assert len(auto_d) >= 2
+        d_min, d_max = float(np.nanmin(win.dataset.delays)), float(np.nanmax(win.dataset.delays))
+        assert all(d_min - 1e-6 <= d <= d_max + 1e-6 for d in auto_d)
+
+        prompts.clear()
+        monkeypatch.setattr(
+            QInputDialog,
+            "getText",
+            lambda _p, title, label, text="": (prompts.append((title, label, text)), ("", False))[1],
+        )
+        win._plot_cut("spectra")
+        assert f"in {expected_u}" in prompts[-1][1]
+        assert f"{d_min:g} to {d_max:g} {expected_u}" in prompts[-1][1]
+    finally:
+        win.close()
+
+

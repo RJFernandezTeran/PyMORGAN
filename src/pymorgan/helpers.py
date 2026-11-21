@@ -505,6 +505,86 @@ def resolve_x_unit(x_axis_unit, native_unit):
     return x_axis_unit
 
 
+_PLAIN_SPECTRAL_UNITS = {
+    "px": "px",
+    "pixel": "px",
+    "pixels": "px",
+    "nm": "nm",
+    "cm-1": "cm\u207b\u00b9",
+    "cm^-1": "cm\u207b\u00b9",
+    "cm^{-1}": "cm\u207b\u00b9",
+    "cm\u207b\u00b9": "cm\u207b\u00b9",
+    "in-1": "in\u207b\u00b9",
+    "in^-1": "in\u207b\u00b9",
+    "in^{-1}": "in\u207b\u00b9",
+    "in\u207b\u00b9": "in\u207b\u00b9",
+    "eV": "eV",
+    "THz": "THz",
+}
+
+
+def plain_spectral_unit(unit_token: str, *, scaled: bool = False) -> str:
+    """Return a clean plain-text spectral unit label for GUI prompts and read-outs."""
+    tok = str(unit_token or "").strip()
+    if tok in ("", "native"):
+        tok = "nm"
+    base = _PLAIN_SPECTRAL_UNITS.get(tok, tok)
+    if scaled and base != "px":
+        return f"10\u00b3 {base}"
+    return base
+
+
+def spectral_precision(values, *, unit: str | None = None) -> int:
+    """Return an appropriate decimal-place count for displaying ``values`` in ``unit``."""
+    if unit in ("px", "pixel", "pixels"):
+        return 0
+    arr = np.asarray(values, dtype=float).ravel()
+    finite = arr[np.isfinite(arr)]
+    if finite.size == 0:
+        return 2
+    lo = float(np.min(finite))
+    hi = float(np.max(finite))
+    span = abs(hi - lo)
+    mag = max(abs(lo), abs(hi))
+    if span >= 50.0 and mag >= 50.0:
+        return 0
+    if span >= 5.0 and mag >= 5.0:
+        return 1
+    if span >= 0.5 and mag >= 0.5:
+        return 2
+    if span >= 0.01:
+        return 3
+    return 4
+
+
+def format_spectral_value(
+    value: float, *, unit: str | None = None, scaled: bool = False, rounded: bool = True
+) -> str:
+    """Format a spectral position for trace legends and titles."""
+    val = float(value)
+    if not np.isfinite(val):
+        return str(val)
+    if not rounded:
+        return f"{val:g}"
+    if unit in ("px", "pixel", "pixels"):
+        return f"{int(round(val)):g}"
+    mag = abs(val)
+    if mag >= 100.0:
+        dec = 0
+    elif mag >= 10.0:
+        dec = 1
+    elif mag >= 1.0:
+        dec = 2
+    elif mag >= 0.01:
+        dec = 3
+    else:
+        dec = 4
+    r = round(val, dec) + 0.0  # normalise -0.0 -> 0.0
+    if dec == 0:
+        return f"{int(round(r)):g}"
+    return f"{r:g}"
+
+
 def _register_scientific_colormaps():
     """Ensure Crameri scientific colour maps (vik, berlin) are registered in matplotlib."""
     import cmcrameri  # noqa: F401
@@ -715,6 +795,53 @@ _TIME_UNIT_EXPONENTS: dict[str, int] = {
     "ms": -3,
     "s": 0,
 }
+
+_TIME_UNIT_ALIASES: dict[str, str] = {
+    "fs": "fs",
+    "ps": "ps",
+    "ns": "ns",
+    "us": r"$\mu$s",
+    "\u00b5s": r"$\mu$s",
+    "\u03bcs": r"$\mu$s",
+    r"$\mu$s": r"$\mu$s",
+    r"\mus": r"$\mu$s",
+    "ms": "ms",
+    "s": "s",
+}
+
+
+def _normalize_time_unit_token(token: str | None) -> str | None:
+    """Normalize a time-unit token to its canonical key in ``_TIME_UNIT_EXPONENTS``."""
+    if token is None:
+        return None
+    cleaned = str(token).strip().replace("$", "").replace(" ", "").lower()
+    if not cleaned:
+        return None
+    return _TIME_UNIT_ALIASES.get(cleaned)
+
+
+def plain_time_unit(units_or_token) -> str:
+    """Return a clean plain-text time unit label (e.g. ``'ps'``, ``'ns'``, ``'µs'``)."""
+    raw = None
+    if units_or_token is None:
+        raw = "ps"
+    elif isinstance(units_or_token, str):
+        raw = units_or_token
+    elif isinstance(units_or_token, dict):
+        raw = units_or_token.get("unitsT_ltx") or units_or_token.get("T")
+    else:
+        units = getattr(units_or_token, "units", None)
+        if isinstance(units, dict):
+            raw = units.get("unitsT_ltx") or units.get("T")
+        elif isinstance(units, str):
+            raw = units
+    tok = str(raw or "").strip().replace("$", "")
+    if not tok:
+        return "ps"
+    compact = re.sub(r"\s+", "", tok).lower()
+    if compact in (r"\mus", "us", "\u00b5s", "\u03bcs"):
+        return "\u00b5s"
+    return tok
 
 
 def ConvertTimeUnits(t_in, Unit_in, Unit_out=None, roundT=False):
@@ -1031,7 +1158,15 @@ def add_glow(ax, x, y, colour=None, base_frac=0.04, *, color=None):
     ax.plot(x, y, color=col, linewidth=2, solid_capstyle="round")
 
 
-def parse_value_list(text: str, all_values=None) -> list[float] | None:
+_TIME_SUFFIX_RE = re.compile(
+    r"^([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)(fs|ps|ns|us|\u00b5s|\u03bcs|ms|s)$",
+    re.IGNORECASE,
+)
+
+
+def parse_value_list(
+    text: str, all_values=None, *, target_time_unit: str | None = None
+) -> list[float] | None:
     """Parse the cut-list syntax: numbers, range expressions (``start:step:stop``), or ``all``.
 
     Accepts ``1900, 1950``, ``1:0.1:5`` (start:step:stop), ``1:5``
@@ -1040,28 +1175,78 @@ def parse_value_list(text: str, all_values=None) -> list[float] | None:
     than aborting the whole list -- a typo in one of five cuts should not throw
     away the other four.
 
+    When ``target_time_unit`` is provided (e.g. ``'ps'`` or ``'ns'``), explicit
+    time-unit suffixes on individual entries (such as ``500 fs, 1 ns`` or
+    ``500fs``) are converted into ``target_time_unit``. Plain numbers and
+    ``start:step:stop`` ranges are interpreted in ``target_time_unit``.
+
     Returns ``None`` when ``all`` was asked for but no ``all_values`` was given.
     """
     text = str(text).strip().strip("'\"")
     if text.lower() == "all":
         return None if all_values is None else [float(v) for v in all_values]
 
-    values: list[float] = []
-    for token in re.split(r"[,\s]+", text):
-        token = token.strip("'\"")
-        if not token:
-            continue
-        if token.lower() == "all":
-            if all_values is None:
-                return None
-            return [float(v) for v in all_values]
-        if ":" in token:
-            values.extend(_expand_range(token))
-            continue
-        try:
-            values.append(float(token))
-        except ValueError:
-            logger.debug("Ignoring unparseable value %r.", token, exc_info=True)
+    target_canon = _normalize_time_unit_token(target_time_unit)
+    if target_canon is None:
+        values: list[float] = []
+        for token in re.split(r"[,\s]+", text):
+            token = token.strip("'\"")
+            if not token:
+                continue
+            if token.lower() == "all":
+                if all_values is None:
+                    return None
+                return [float(v) for v in all_values]
+            if ":" in token:
+                values.extend(_expand_range(token))
+                continue
+            try:
+                values.append(float(token))
+            except ValueError:
+                logger.debug("Ignoring unparseable value %r.", token, exc_info=True)
+        return values
+
+    values = []
+    for clause in text.split(","):
+        subtokens = [t.strip("'\"") for t in clause.strip().split() if t.strip("'\"")]
+        i = 0
+        while i < len(subtokens):
+            token = subtokens[i]
+            if token.lower() == "all":
+                if all_values is None:
+                    return None
+                return [float(v) for v in all_values]
+            if ":" in token:
+                values.extend(_expand_range(token))
+                i += 1
+                continue
+            m = _TIME_SUFFIX_RE.match(token)
+            if m is not None:
+                num_str, unit_str = m.groups()
+                src_u = _normalize_time_unit_token(unit_str)
+                if src_u is not None:
+                    try:
+                        converted, _ = ConvertTimeUnits(float(num_str), src_u, Unit_out=target_canon)
+                        values.append(float(converted))
+                        i += 1
+                        continue
+                    except ValueError:
+                        pass
+            try:
+                val = float(token)
+            except ValueError:
+                logger.debug("Ignoring unparseable value %r.", token, exc_info=True)
+                i += 1
+                continue
+            if i + 1 < len(subtokens):
+                next_u = _normalize_time_unit_token(subtokens[i + 1])
+                if next_u is not None:
+                    converted, _ = ConvertTimeUnits(val, next_u, Unit_out=target_canon)
+                    values.append(float(converted))
+                    i += 2
+                    continue
+            values.append(val)
+            i += 1
     return values
 
 

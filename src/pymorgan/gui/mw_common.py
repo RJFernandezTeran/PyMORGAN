@@ -148,3 +148,29 @@ def _safe_set_limits(ax, xlim, ylim):
         ax.set_ylim(top=ymax)
     else:
         ax.set_ylim(ymin, ymax)
+
+
+def delay_prompt_info(dataset) -> tuple[str, str, str]:
+    """Return ``(plain_unit, raw_unit, range_str)`` for a dataset's delay axis."""
+    import numpy as np
+
+    from pymorgan import helpers as hlp
+
+    units = getattr(dataset, "units", None) if dataset is not None else None
+    raw_unit = (
+        (units.get("unitsT_ltx") or units.get("T"))
+        if isinstance(units, dict)
+        else "ps"
+    ) or "ps"
+    plain_unit = hlp.plain_time_unit(raw_unit)
+    delays = (
+        np.asarray(getattr(dataset, "delays", []), dtype=float).ravel()
+        if dataset is not None
+        else np.array([], dtype=float)
+    )
+    finite = delays[np.isfinite(delays)]
+    if finite.size:
+        range_str = f"{float(np.min(finite)):g} to {float(np.max(finite)):g} {plain_unit}"
+    else:
+        range_str = plain_unit
+    return plain_unit, str(raw_unit), range_str

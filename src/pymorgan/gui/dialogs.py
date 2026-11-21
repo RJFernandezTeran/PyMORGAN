@@ -308,13 +308,24 @@ class SolventSubtractionDialog(QDialog):
 # --------------------------------------------------------------------------- #
 #                      Value-list prompt (cuts, delays)                       #
 # --------------------------------------------------------------------------- #
-def ask_values(parent, title: str, label: str, default, all_values=None) -> list[float] | None:
+def ask_values(
+    parent,
+    title: str,
+    label: str,
+    default,
+    all_values=None,
+    *,
+    target_time_unit: str | None = None,
+) -> list[float] | None:
     """Prompt for a list of cuts, pre-filled with ``default``.
 
     Shared by every window that asks "which delays?" or "which probe
     positions?", so the accepted syntax is the same everywhere: PyMORGAN's own
     cut plots and PyRATE-TA's pop-out traces both call this rather than each
     growing their own parser.
+
+    When ``target_time_unit`` is given, explicit time-unit suffixes (e.g.
+    ``500 fs, 1 ns``) are converted into that delay unit.
 
     Returns ``None`` if the dialog was cancelled, and an empty list if nothing
     usable was typed (the caller reports that; it is not an error here).
@@ -328,7 +339,7 @@ def ask_values(parent, title: str, label: str, default, all_values=None) -> list
     if not ok:
         return None
 
-    values = parse_value_list(text, all_values)
+    values = parse_value_list(text, all_values, target_time_unit=target_time_unit)
     if values is None:
         QMessageBox.warning(parent, title, "Could not retrieve all available values.")
         return None

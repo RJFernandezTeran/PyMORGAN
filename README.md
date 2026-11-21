@@ -102,6 +102,11 @@ a dependency of this package.
   spline-interpolated grid and refined by least-squares fitting a local model
   (quadratic/cubic/quartic, Gaussian or Lorentzian) to the measured points,
   reaching ~0.01 pixel on synthetic data instead of snapping to the pixel grid.
+- **Advanced multi-band scatter & dynamic background removal (`pymorgan.oneD.scatter`)** —
+  two-tier auto-detection of primary and coupled 2nd-order grating harmonic scatter bands,
+  joint scatter basis + smooth local TA polynomial separation (`local_svd`, `taylor`, `warped`),
+  slow-envelope broadband scaling, per-scan cleaning with recomputed `Zstdv` noise propagation,
+  and optional exact transmittance-space mode (`compute_scatter_removal` / `Dataset1D.remove_scatter`).
 - **Shockwave subtraction** — removes correlated acoustic shockwave artefacts
   (common in ns-TA/ns-TRIR experiments) by averaging a user-selected pixel
   range into a 1-D reference trace and subtracting it from all channels; exposed
@@ -290,6 +295,10 @@ tabs for 2-D interferometric phasing/FT and spectrograph/shaper wavelength
 calibration.
 
 Additional interactive dialogs and tools:
+- **Advanced scatter removal** (`Adv…` / *Pre-processing → Advanced Scatter Removal…*) — interactive
+  4-tab `ScatterRemovalDialog` (*2D Maps*, *Spectral Slices*, *Kinetics*, *Scatter Diagnostics*
+  with drag-to-pick `SpanSelector` band selection and live RMS/roughness/inter-scan STD metrics)
+  supporting per-scan cleaning, coupled 2nd-order harmonics, and `Zstdv` noise updates.
 - **Chirp correction** (`Chirp…`) — guided automatic / step-function / manual
   chirp correction with per-pixel progress reporting.
 - **Solvent subtraction** (`Subtract Solvent…`) — manual or automatic
@@ -323,7 +332,7 @@ back to `settings.toml`.
 
 ```
 src/pymorgan/
-  oneD/          load · process · plot · chirp · stitch · svd · registry · dataset (Dataset1D)
+  oneD/          load · process · scatter · plot · chirp · stitch · svd · registry · dataset (Dataset1D)
   twoD/          load · process · plot · analyse · kubo_fit · progress · dataset (Dataset2D)
   steadyState/   Spectrum · SpectrumSeries · SpectrumKind · loader registry
   cal/           spectrometer & pulse shaper wavelength calibration (load, fit, models, export)
@@ -337,7 +346,7 @@ src/pymorgan/
     busy.py                re-entrancy guard for long operations
     plot_controls.py       plot-controls panel · settings_panel.py settings editor
     picker.py · canvas.py · cal_canvas.py · widgetplot.py · theme.py · widgets.py
-    chirp_dialog.py · chirp_progress_dialog.py · shockwave_dialog.py
+    scatter_dialog.py · chirp_dialog.py · chirp_progress_dialog.py · shockwave_dialog.py
     kubo_dialog.py · movie_dialog.py · twoD_gaussian_dialog.py
     twoD_integral_dialog.py · twoD_subtraction_dialog.py
     icons/                 application icons and badges

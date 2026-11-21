@@ -16,7 +16,8 @@ maps each stage to its module and entry points.
     Stage & Module & Entry point(s) \\
     \midrule
     load    & \code{pymorgan.oneD.load}    & \code{pm.load\_1D}, \code{Dataset1D.from\_file} \\
-    process & \code{pymorgan.oneD.process} / \code{chirp} & \code{Dataset1D.background\_correct}, \code{apply\_chirp\_correction} \\
+    process & \code{pymorgan.oneD.process} / \code{scatter} & \code{Dataset1D.background\_correct}, \code{remove\_scatter} \\
+            & \code{pymorgan.oneD.chirp} / \code{stitch} / \code{svd} & \code{apply\_chirp\_correction}, \code{compute\_svd} \\
     plot    & \code{pymorgan.oneD.plot}    & \code{Dataset1D.plot\_*} \\
     analyse & \textit{(PyRATE-TA)} & \textit{separate project} \\
     \bottomrule
@@ -147,7 +148,188 @@ data.background_correct(tmin=-20, tmax=-5, do_correct=False)  # passthrough
 
 With \code{do\_correct=False} the raw signal is copied unchanged into the
 corrected fields, so downstream code can always read \code{Z} uniformly. The
-method returns \code{self}, allowing calls to be chained.
+method returns \code{self}, allowing calls to be chained. For datasets plagued
+by time-varying, drifting, or fluctuating pump scatter that static pre-zero
+subtraction fails to cancel, use the dynamic multi-band algorithm described
+next (\S\ref{sec:scatter}).
+
+\subsection{Advanced scatter and dynamic background removal}\label{sec:scatter}
+Standard static pre-zero subtraction removes a single time-independent
+spectrum averaged over $[\tau_{\mathrm{min}}, \tau_{\mathrm{max}}]$. In
+real ultrafast transient absorption experiments, pump scatter and broadband
+pre-zero backgrounds violate that static assumption for four physical reasons:
+\begin{enumerate}
+  \item \textbf{Delay-stage scatter dimming:} Movement of the mechanical
+        delay stage slightly steers or clips the pump/probe overlap and changes
+        the scattered pump intensity over nanoseconds. Subtracting the fixed
+        negative-delay peak oversubtracts at positive delays, creating a
+        phantom positive band across the pump core.
+  \item \textbf{Delay-dependent spectral walk:} The centroid or width of the
+        scatter feature shifts subtly with delay stage position or spectrometer
+        slit illumination, turning residuals into derivative-like dispersive
+        bipolar artefacts.
+  \item \textbf{Shot-to-shot and scan-to-scan jitter:} Flicker between delays
+        and laser/sample scatter drift between individual scans leave noisy
+        stripes in the averaged map and severely inflate the per-point inter-scan
+        standard deviation \code{Zstdv} around the scatter peak, distorting
+        weighted global fits in \textbf{PyRATE-TA}.
+  \item \textbf{Broadband fluorescence and far-wing dimming:} Slow delay
+        evolution of fluorescence or static scatter wings creates an apparent
+        broadband drift across all wavelengths if subtracted statically.
+\end{enumerate}
+
+To eliminate all four artefacts without suppressing genuine excited-state
+absorption, bleach, or coherent time-zero signals underneath the pump band,
+PyMORGAN provides \code{pymorgan.oneD.scatter} (exposed via
+\code{compute\_scatter\_removal}, \code{detect\_scatter\_bands}, and the
+\code{Dataset1D} methods \code{detect\_scatter\_bands}, \code{remove\_scatter},
+\code{apply\_scatter\_removal}, and \code{clear\_scatter\_removal}).
+
+\paragraph{Two-tier automatic band detection (\code{detect\_scatter\_bands}).}
+From the pre-zero averaged spectrum $B_{\mathrm{pre}}(\lambda)$ over
+$[\tau_{\mathrm{min}}, \tau_{\mathrm{max}}]$ (defaulting to $\tau \le -1$, or
+the earliest negative delays), localised bands are identified in two passes:
+\begin{itemize}
+  \item \textbf{Pass 1 (primary bands):} A median filter of odd window size
+        $k = \max(21, \lfloor 0.08\,N_{\lambda} \rceil_{\mathrm{odd}})$ separates
+        the smooth broadband background from sharp scatter features. A robust
+        noise estimate $\sigma = 1.4826\,\mathrm{MAD}$ sets a threshold
+        $\max(6\sigma, \text{floor})$ (where the floor is $0.5\,\mathrm{mOD}$ or
+        $5 \times 10^{-4}\,\mathrm{OD}$). Contiguous runs of at least $3$ pixels
+        (bridging 1--2 pixel gaps) are expanded outward pixel by pixel until the
+        signal drops below $\max(2\sigma, 1\%\,\text{peak})$, merged if
+        overlapping, and sorted by peak amplitude so Band~0 is the dominant
+        primary scatter band. Negative scatter dips are detected by default;
+        setting \code{allow\_positive=True} detects signed artefacts of either
+        polarity.
+  \item \textbf{Pass 2 (2nd-order grating harmonics):} When the probe axis is
+        calibrated in wavelength ($\mathrm{nm}$), PyMORGAN inspects a
+        $\pm 12\,\mathrm{nm}$ search window around $2\lambda_{\mathrm{pump}}$
+        (obtained from \code{pymess\_metadata["pump\_wl\_nm"]} or the Band~0
+        peak) for second-order diffraction dips. Candidates with peak
+        $\mathrm{SNR} \ge 5\sigma$ are added as enabled rank-1 coupled bands
+        (\code{couple\_to=0}), whereas $3\sigma\text{--}5\sigma$ candidates are
+        appended disabled (\code{enabled=False}) as user suggestions.
+\end{itemize}
+
+\paragraph{Mathematical decomposition (\code{compute\_scatter\_removal}).}
+Each scatter band $m$ defines a core interval $[\lambda_{\min,m}, \lambda_{\max,m}]$,
+a wing margin $w_{\mathrm{wing},m}$ (default $\max(3\Delta\lambda, 0.5\,\Delta\lambda_{\mathrm{band}})$),
+and a raised-cosine taper width $w_{\mathrm{taper},m}$ (default
+$\min(w_{\mathrm{wing},m}, \max(2\Delta\lambda, 0.25\,\Delta\lambda_{\mathrm{band}}))$):
+\begin{equation}
+  T_m(\lambda) =
+  \begin{cases}
+    1, & \lambda \in [\lambda_{\min,m}, \lambda_{\max,m}], \\
+    \frac{1}{2}\left[1 - \cos\!\left(\pi\frac{\lambda - (\lambda_{\min,m} - w_{\mathrm{taper},m})}{w_{\mathrm{taper},m}}\right)\right], & \lambda \in [\lambda_{\min,m} - w_{\mathrm{taper},m}, \lambda_{\min,m}), \\
+    \frac{1}{2}\left[1 - \cos\!\left(\pi\frac{(\lambda_{\max,m} + w_{\mathrm{taper},m}) - \lambda}{w_{\mathrm{taper},m}}\right)\right], & \lambda \in (\lambda_{\max,m}, \lambda_{\max,m} + w_{\mathrm{taper},m}], \\
+    0, & \text{otherwise.}
+  \end{cases}
+\end{equation}
+Uncoupled bands whose extended fitting windows
+$[\lambda_{\min,m} - w_{\mathrm{wing},m}, \lambda_{\max,m} + w_{\mathrm{wing},m}]$
+touch or overlap are automatically merged into joint groups. Within each group's
+fitting window, a linear baseline $b_{\mathrm{wing}}(\lambda)$ estimated from the
+core-free wings isolates the strictly localised pre-zero template
+$P_0(\lambda) = (B_{\mathrm{pre}}(\lambda) - b_{\mathrm{wing}}(\lambda))\,T(\lambda)$,
+yielding the complementary broadband background
+\begin{equation}
+  B_{\mathrm{broad}}(\lambda) = B_{\mathrm{pre}}(\lambda) - \sum_{m} P_{0,m}(\lambda).
+\end{equation}
+When \code{scale\_broadband=True} (default), a slow Savitzky--Golay-smoothed
+amplitude envelope $a_{\mathrm{smooth}}(\tau)$ of the strongest primary band
+(re-normalised so its pre-zero median equals $1.0$ and clipped to $[0.1, 2.5]$)
+scales $B_{\mathrm{broad}}$ across delays prior to local scatter removal,
+\begin{equation}
+  Y_{\mathrm{nb}}(\tau, \lambda) = Y(\tau, \lambda) - a_{\mathrm{smooth}}(\tau)\, B_{\mathrm{broad}}(\lambda),
+\end{equation}
+removing far-wing and fluorescence dimming without injecting fast laser jitter.
+
+Inside each uncoupled group's fitting window, PyMORGAN then solves at every delay
+$\tau$ a joint linear least-squares system separating a tapered scatter basis
+$\{\phi_r(\lambda)\}_{r=1}^{R}$ from a low-degree local polynomial representing
+the smooth physical TA spectrum beneath the band:
+\begin{equation}
+  Y_{\mathrm{nb}}(\tau, \lambda) \approx \sum_{r=1}^{R} c_r(\tau)\,\phi_r(\lambda) + \sum_{j=0}^{p} \beta_j(\tau)\,\tilde{\lambda}^j,
+\end{equation}
+where $\tilde{\lambda} \in [-1, 1]$ is the normalised local probe coordinate and
+$p = \code{poly\_deg}$ (default $2$). Only the scatter term
+$\sum_r c_r(\tau)\,\phi_r(\lambda)$ is subtracted inside the tapered window;
+the smooth physical TA component $\sum_j \beta_j(\tau)\,\tilde{\lambda}^j$ is
+preserved intact. Three basis modes are supported via \code{method}:
+\begin{description}
+  \item[\code{local\_svd} (Adaptive Local SVD, default)] Estimates the smooth
+        TA trend from the side wings alone, subtracts it, applies the taper
+        $T(\lambda)$, and computes a truncated SVD over delays outside
+        \code{t0\_exclude} (default $(-0.5, 1.5)$) so coherent artefacts near
+        $t_0$ never contaminate the scatter modes. The leading $R$ (\code{rank},
+        default $3$) right singular vectors are re-tapered to form
+        $\{\phi_r(\lambda)\}$, oriented to match $P_0(\lambda)$, and solved
+        jointly per delay.
+  \item[\code{taylor} (Pre-Zero Template + Derivatives)] Constructs a strictly
+        pre-zero basis from $P_0(\lambda)$ and its tapered cubic-spline
+        spectral derivatives $[P_0,\, P_0'T,\, P_0''T,\, \dots]$ up to order
+        $R-1$, directly absorbing amplitude dimming and spectral walk.
+  \item[\code{warped} (Warped Pre-Zero Template)] Performs strictly pre-zero
+        nonlinear Variable Projection (VARPRO) per delay using
+        \code{scipy.optimize.least\_squares}, optimising spectral shift
+        $\delta\lambda(\tau)$ and optional width stretch $\gamma(\tau)$ (when
+        $R \ge 2$) on a cubic-spline interpolant
+        $P_0(\lambda_{\mathrm{c}} + (\lambda - \lambda_{\mathrm{c}} - \delta\lambda)/\gamma)\,T(\lambda)$
+        while eliminating linear amplitudes and the local TA polynomial in
+        closed form.
+\end{description}
+
+\paragraph{Harmonic coupling, per-scan noise update, and optical options.}
+\begin{itemize}
+  \item \textbf{Harmonic coupling (\code{couple\_to}):} A weak harmonic band
+        with \code{couple\_to=target\_idx} avoids overfitting noisy single
+        delays by modelling its scatter purely as $\alpha\,a_{\mathrm{smooth}}^{\mathrm{target}}(\tau)\,P_{0,c}(\lambda)$,
+        where a single global scalar $\alpha \in [0, 2.5]$ is fitted outside
+        \code{t0\_exclude}.
+  \item \textbf{Per-scan cleaning and \code{Zstdv} update:} When single-scan
+        data (\code{Zss\_R}) exist and \code{per\_scan=True} (default), every
+        scan is cleaned independently before recomputing the averaged signal
+        \code{Zavg\_C}. With \code{update\_noise=True} (default), \code{Zstdv}
+        is recomputed across the cleaned scans (\code{ddof=1}), removing
+        scatter-drift inflation for downstream reduced-$\chi^2$ fitting in
+        \textbf{PyRATE-TA}. Calling \code{clear\_scatter\_removal()} restores
+        the original \code{Zstdv}.
+  \item \textbf{Transmittance space and saturation masking:} Setting
+        \code{transmittance\_space=True} transforms raw $\Delta A$ into linear
+        transmittance modulation $Y = 10^{-\Delta A/s} - 1$ ($s = 1000$ for
+        $\mathrm{mOD}$, $1$ for $\mathrm{OD}$) before decomposition and maps
+        back via $-s\log_{10}(1 + Y_{\mathrm{out}})$. When detector saturation
+        leaves unrecoverable pixels, \code{mask\_saturated=True} sets cells
+        inside enabled cores with $|Z_{\mathrm{raw}}| > \code{saturation\_threshold}$
+        (default $500\,\mathrm{mOD}$) to \code{NaN}.
+\end{itemize}
+
+\paragraph{Recommended order of operations.}
+Run advanced scatter removal \textbf{before} chirp correction
+(\S\ref{sec:chirp}). Pump scatter is physically tied to the optical delay-stage
+position and is unchirped, whereas chirp interpolation smears sharp scatter
+features across multiple pixels and mixes delays.
+
+\begin{lstlisting}
+# 1. Inspect auto-detected bands (native probe units, e.g. nm)
+bands = data.detect_scatter_bands(tmin=-20, tmax=-2)
+
+# 2. Apply dynamic multi-band removal in place (per-scan + Zstdv update)
+data.remove_scatter(method="local_svd", rank=3, per_scan=True, update_noise=True)
+
+# Or run explicitly to inspect diagnostics and before/after quality metrics
+from pymorgan.oneD.scatter import ScatterBand, compute_scatter_removal
+res = compute_scatter_removal(
+    data,
+    bands=[ScatterBand(348.2, 362.4, label="Primary"),
+           ScatterBand(704.5, 715.3, rank=1, couple_to=0, label="2nd order")],
+    method="local_svd",
+)
+print(res.metrics)
+data.apply_scatter_removal(res)
+# data.clear_scatter_removal()  # restores original Zstdv if reverting
+\end{lstlisting}
 
 \subsection{Solvent subtraction}\label{sec:solvent}
 For measurements in solution, the pure-solvent response often has to be
@@ -426,6 +608,64 @@ ax, t, Y = data.plot_kinetics([1980, 2030], plotStyle="-")      # plot + extract
 \subsection{Graphical interface — 1-D dialogs}\label{sec:oneD:gui:dialogs}
 
 Several interactive dialogs supplement the main 1-D tab.
+
+\subsubsection{Advanced scatter removal dialog}\label{sec:oneD:scatter:dialog}
+
+Accessed via \textbf{Pre-processing $\to$ Advanced Scatter Removal\ldots}
+(\code{actionAdvancedScatterRemoval}) or the compact \textbf{Adv\ldots} button
+(\code{PP\_advScatter\_btn}) next to the pre-zero background window controls,
+this split-pane dialog (\code{scatter\_dialog.py}, \code{ScatterRemovalDialog})
+drives \code{compute\_scatter\_removal} interactively with live updates:
+\begin{enumerate}
+  \item \textbf{Controls sidebar (left):}
+        \begin{itemize}
+          \item \emph{Pre-Zero \& Scope:} Detector selector (for multi-detector
+                datasets), pre-zero delay bounds matching the active dataset,
+                and toggles to clean individual scans before averaging and
+                recompute \code{Zstdv}.
+          \item \emph{Scatter Band(s):} Multi-band table displaying each band's
+                enable checkbox, editable label and min/max bounds (in the
+                active spectral display unit), and per-band mode selector
+                (\code{Auto}, \code{Rank 1}--\code{Rank 4}, or \code{Linked -> \#1}),
+                plus \textbf{Auto-Detect}, interactive \textbf{Pick on Plot},
+                add/delete (\textbf{+}/\textbf{$-$}), shared \textbf{Wing}/\textbf{Taper}
+                overrides, and an option to auto-detect positive artefacts.
+          \item \textbf{Algorithm:} Selects \emph{Adaptive Local SVD},
+                \emph{Pre-Zero Template + Deriv.}, or \emph{Warped Pre-Zero
+                Template}, together with Rank/Order, local TA polynomial degree,
+                $t_0$ exclusion window, slow-envelope broadband scaling
+                $a_{\mathrm{smooth}}(\tau)$, transmittance-space mode, and
+                saturated-pixel masking.
+        \end{itemize}
+  \item \textbf{Four-tab visual preview (right):} Shares a top view bar
+        (\textbf{Zoom} preset for Full Range or focused band, \textbf{Asinh}
+        colour scaling, and \textbf{Zscale \%}):
+        \begin{itemize}
+          \item \emph{2D Maps:} Side-by-side maps of \emph{Static Pre-Zero},
+                \emph{Advanced Clean}, and \emph{Removed Scatter (Diff)}
+                with dashed band markers and scroll-wheel zoom.
+          \item \emph{Spectral Slices:} Before-vs-after transient spectra at
+                configurable delays highlighting the scatter core regions.
+          \item \emph{Kinetics:} Before-vs-after kinetic traces at the focused
+                band's core and side wings (populated via \textbf{From Focused Band}).
+          \item \emph{Scatter Diagnostics:} Pre-zero spectrum equipped with an
+                interactive Matplotlib \code{SpanSelector} (active when
+                \textbf{Pick on Plot} is toggled), normalised scatter basis
+                shapes compared against $P_0$, and the extracted delay-dependent
+                amplitude envelope $a(\tau)$ / $a_{\mathrm{smooth}}(\tau)$ and
+                centroid shift $\delta\lambda(\tau)$.
+        \end{itemize}
+  \item \textbf{Live quality metrics and workspace state:} A footer strip reports
+        real-time before/after improvements in pre-zero core RMS, positive-delay
+        spectral second-difference roughness relative to the side-wing reference,
+        and inter-scan standard deviation. Clicking \textbf{Apply to Workspace}
+        updates the active dataset (and highlights \textbf{Adv\ldots}), while
+        \textbf{Reset to Static Bkg.} reverts to static pre-zero subtraction and
+        restores the original \code{Zstdv}. Re-applying \textbf{Subtract bkg.}
+        preserves the active advanced result while checked, whereas geometric or
+        scan modifications (\code{crop}, \code{mask\_probe\_regions},
+        \code{shift\_t0}, \code{recalc\_average}) clear it automatically.
+\end{enumerate}
 
 \subsubsection{Chirp correction dialog}
 

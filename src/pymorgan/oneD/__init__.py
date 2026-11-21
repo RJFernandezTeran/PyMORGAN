@@ -3,7 +3,11 @@
 The 1-D pipeline is organised by stage:
 
 * :mod:`pymorgan.oneD.load` — readers and the loader registry,
-* :mod:`pymorgan.oneD.process` — background subtraction (and future processing),
+* :mod:`pymorgan.oneD.process` — background subtraction, solvent/shockwave subtraction, and anisotropy,
+* :mod:`pymorgan.oneD.scatter` — multi-band scatter and dynamic background removal,
+* :mod:`pymorgan.oneD.chirp` — Cauchy dispersion fitting and chirp correction,
+* :mod:`pymorgan.oneD.stitch` — wavelength-window and timescale dataset stitching,
+* :mod:`pymorgan.oneD.svd` — singular value decomposition and low-rank filtering,
 * :mod:`pymorgan.oneD.plot` — Dataset1D-aware plotters,
 
 tied together by :class:`Dataset1D`.
@@ -53,6 +57,12 @@ from .load import (
     write_pdat,
 )
 from .process import background_correct, calculate_anisotropy
+from .scatter import (
+    ScatterBand,
+    ScatterRemovalResult,
+    compute_scatter_removal,
+    detect_scatter_bands,
+)
 from .stitch import StitchResult, stitch_time, stitch_wavelength
 from .svd import SVDResult, compute_svd
 
@@ -87,6 +97,10 @@ __all__ = [
     "load_1D_hdf5",
     "read_1D_hdf5",
     "background_correct",
+    "ScatterBand",
+    "ScatterRemovalResult",
+    "detect_scatter_bands",
+    "compute_scatter_removal",
 
     "ChirpFit",
     "cauchy_t0",

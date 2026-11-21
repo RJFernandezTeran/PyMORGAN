@@ -1203,7 +1203,9 @@ def read_PyMESS_2D(path: str, progress_tracker=None):
 
     from ..oneD.load import (
         _detect_pymess_probe_units,
+        _extract_pymess_metadata_bundle,
         _format_pymess_cal_source,
+        _format_pymess_sample_info,
         _pymess_attr_str,
         _resolve_pymess_probe_axis,
         classify_pymess_h5,
@@ -1227,10 +1229,7 @@ def read_PyMESS_2D(path: str, progress_tracker=None):
         f = h5py.File(p, "r")
 
     with f:
-        meta_dict: dict[str, str] = {}
-        if "metadata" in f:
-            for k, v in f["metadata"].attrs.items():
-                meta_dict[str(k)] = _pymess_attr_str(v)
+        meta_dict, shaper_dict, fast_mod_dict, t2_n_batches = _extract_pymess_metadata_bundle(f)
 
         shaper_attrs: dict[str, Any] = {}
         if "metadata/shaper" in f:
@@ -1799,26 +1798,19 @@ def read_PyMESS_2D(path: str, progress_tracker=None):
             units["states_data"] = states_data
             units["active_state"] = list(states_data.keys())[0]
 
-        info_lines = [
-            f"Mode: {'Frequency-Domain 2D' if is_freq_domain else f'Time-Domain 2D (w0 = {w0_cm1:.1f} cm-1)'}"
-        ]
-        if "sample_id" in meta_dict and meta_dict["sample_id"]:
-            info_lines.append(f"Sample: {meta_dict['sample_id']}")
-        if "solvent" in meta_dict and meta_dict["solvent"]:
-            info_lines.append(f"Solvent: {meta_dict['solvent']}")
-        if "fast_modulation" in meta_dict and meta_dict["fast_modulation"]:
-            info_lines.append(f"Fast Modulation: {meta_dict['fast_modulation']}")
-        if "pump_polarization" in meta_dict and meta_dict["pump_polarization"]:
-            info_lines.append(f"Pump Polarization: {meta_dict['pump_polarization']}")
-        if "probe_polarization" in meta_dict and meta_dict["probe_polarization"]:
-            info_lines.append(f"Probe Polarization: {meta_dict['probe_polarization']}")
-        if "waveplate_positions" in meta_dict and meta_dict["waveplate_positions"]:
-            info_lines.append(f"Waveplates: {meta_dict['waveplate_positions']}")
-        if states_data:
-            info_lines.append(f"Polarization States: {', '.join(states_data.keys())}")
-        if "comments" in meta_dict and meta_dict["comments"]:
-            info_lines.append(f"Comments: {meta_dict['comments']}")
-        units["sample_info"] = "\n".join(info_lines)
+        compact_info, full_info = _format_pymess_sample_info(
+            meta_dict,
+            mode="2d_freq_domain" if is_freq_domain else "2d_time_domain",
+            shaper_attrs=shaper_dict,
+            fast_mod_attrs=fast_mod_dict,
+            t2_n_batches=t2_n_batches,
+            state_names=list(states_data.keys()) if states_data else None,
+            w0_cm1=None if is_freq_domain else w0_cm1,
+            n_t2=len(t2delays_ps),
+        )
+        units["sample_info"] = compact_info
+        if full_info:
+            units["sample_info_full"] = full_info
 
     return (
         Z,

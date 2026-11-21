@@ -40,6 +40,7 @@ from PyQt6.QtWidgets import (
 )
 
 import pymorgan as pm
+from pymorgan import helpers as hlp
 from pymorgan.oneD.chirp import (
     default_chirp_filename,
     fit_chirp_automatic,
@@ -58,6 +59,7 @@ from ..mw_common import (
     _DEFAULT_SPEC_DELAYS,
     DATA_TYPE_DISPLAY_NAMES,
     _safe_set_limits,
+    delay_prompt_info,
     get_combo_datatype,
 )
 
@@ -225,6 +227,7 @@ class OneDTabMixin:
             "actionShiftT0",
             "actionFitChirp",
             "actionLoadChirpCorr",
+            "actionAdvancedScatterRemoval",
             "actionSubtractShockwave",
         ):
             act = getattr(self, act_name, None)
@@ -728,6 +731,8 @@ class OneDTabMixin:
         sub = getattr(self, "PP_SubtactBkg_chk", None)
         if sub is not None:
             sub.setChecked(self.dataset.data_type != "PDAT")
+        if hasattr(self, "_update_adv_scatter_btn_style"):
+            self._update_adv_scatter_btn_style()
 
     def _on_bkg_limit_entered(self):
         """Snap an entered background-window limit to the nearest delay, then render.
@@ -763,7 +768,15 @@ class OneDTabMixin:
         tmax_box = getattr(self, "PP_bkg_tmax", None)
         tmin = tmin_box.value() if tmin_box is not None else -20.0
         tmax = tmax_box.value() if tmax_box is not None else -5.0
-        self.dataset.background_correct(tmin, tmax, do_correct=do_correct)
+        adv_res = getattr(self.dataset, "_scatter_removal_result", None)
+        if (
+            adv_res is not None
+            and do_correct
+            and np.asarray(adv_res.Zavg_C).shape == np.asarray(self.dataset.Zavg_R).shape
+        ):
+            self.dataset.apply_scatter_removal(adv_res)
+        else:
+            self.dataset.background_correct(tmin, tmax, do_correct=do_correct)
 
         # If a solvent background subtraction has been performed, re-apply it on top
         solvent_ds = getattr(self.dataset, "_solvent_dataset", None)
@@ -935,12 +948,7 @@ class OneDTabMixin:
                 if self._interactive():
                     self._pick_cut("spectra")
                     return
-                delays = self._ask_values(
-                    "Transient spectra",
-                    "Delays to plot (comma-separated or range e.g. 1:0.1:5, 'all'):",
-                    self._auto_delays(),
-                    all_values=self.dataset.delays,
-                )
+                delays = self._ask_cut_delays("Transient spectra", self._auto_delays())
                 if not delays:
                     return
                 ax = self.dataset.plot_spectra(
@@ -958,18 +966,9 @@ class OneDTabMixin:
                 if self._interactive():
                     self._pick_cut("kinetics")
                     return
-                probe_disp = self.dataset._detector_probe(det)
-                if pc is not None:
-                    probe_disp = pc.probe_from_native(probe_disp)
-                positions = self._ask_values(
-                    "Kinetic cuts",
-                    "Probe wavelengths / wavenumbers (comma-separated or range e.g. 1:0.1:5, 'all'):",
-                    self._auto_wavelengths(),
-                    all_values=probe_disp,
-                )
+                positions = self._ask_cut_positions("Kinetic cuts", det=det)
                 if not positions:
                     return
-                positions = self._probe_to_native(positions)
                 ax = self.dataset.plot_kinetics(positions, normY=self._norm(), detector=det)[0]
                 self._inherit_cut_limits("kinetics", ax)
                 if self._save_traces_checked():
@@ -1015,12 +1014,7 @@ class OneDTabMixin:
                 if self._interactive():
                     self._pick_cut("spectra", scans=True)
                     return
-                delays = self._ask_values(
-                    "Per-scan spectra",
-                    "Delays to plot (comma-separated or range e.g. 1:0.1:5, 'all'):",
-                    self._auto_delays(),
-                    all_values=self.dataset.delays,
-                )
+                delays = self._ask_cut_delays("Per-scan spectra", self._auto_delays())
                 if not delays:
                     return
                 ax = self.dataset.plot_scan_spectra(
@@ -1034,19 +1028,9 @@ class OneDTabMixin:
                     self._pick_cut("kinetics", scans=True)
                     return
                 det = getattr(self.plot_controls, "detector", 0) if hasattr(self, "plot_controls") else 0
-                probe_disp = self.dataset._detector_probe(det)
-                pc = getattr(self, "plot_controls", None)
-                if pc is not None:
-                    probe_disp = pc.probe_from_native(probe_disp)
-                positions = self._ask_values(
-                    "Per-scan kinetics",
-                    "Probe wavelengths / wavenumbers (comma-separated or range e.g. 1:0.1:5, 'all'):",
-                    self._auto_wavelengths(central_only=True),
-                    all_values=probe_disp,
-                )
+                positions = self._ask_cut_positions("Per-scan kinetics", det=det, central_only=True)
                 if not positions:
                     return
-                positions = self._probe_to_native(positions)
                 res = self.dataset.plot_scan_kinetics(
                     positions, binsize=binsize, normY=self._norm(), detector=det
                 )[0]
@@ -1168,10 +1152,13 @@ class OneDTabMixin:
         if not hasattr(self, "_last_mask_text"):
             self._last_mask_text = ""
 
+        det = getattr(self.plot_controls, "detector", 0) if hasattr(self, "plot_controls") else 0
+        unit_lbl, range_str, _ = self._probe_prompt_info(det)
         text, ok = QInputDialog.getText(
             self,
             "Mask Probe Region",
-            "Enter probe ranges to mask out (e.g. '0,350;550,5000' or '0:350;550:5000'):",
+            f"Enter probe ranges in {unit_lbl} to mask out (range: {range_str};\n"
+            "e.g. '0,350;550,5000' or '0:350;550:5000'):",
             text=self._last_mask_text,
         )
         if not ok or not text.strip():
@@ -1375,6 +1362,67 @@ class OneDTabMixin:
             self.statusBar().showMessage(f"Shockwave kinetic trace subtracted ({p_str})")
         except Exception as exc:
             QMessageBox.critical(self, "Shockwave Subtraction Failed", str(exc))
+
+    @busy_guard("Advanced scatter removal...")
+    def _advanced_scatter_removal(self):
+        """Open the interactive multi-band scatter and dynamic background removal dialog."""
+        if self.dataset is None:
+            self.open_file()
+            if self.dataset is None:
+                return
+
+        from pymorgan.gui.scatter_dialog import ScatterRemovalDialog
+
+        det = getattr(self.plot_controls, "detector", 0) if hasattr(self, "plot_controls") and self.plot_controls is not None else 0
+        tmin_box = getattr(self, "PP_bkg_tmin", None)
+        tmax_box = getattr(self, "PP_bkg_tmax", None)
+        tmin = tmin_box.value() if tmin_box is not None else None
+        tmax = tmax_box.value() if tmax_box is not None else None
+
+        dlg = ScatterRemovalDialog(self, self.dataset, tmin=tmin, tmax=tmax, detector=det)
+        dlg.scatter_applied.connect(self._on_scatter_applied)
+        dlg.scatter_reset.connect(self._on_scatter_reset)
+        dlg.exec()
+
+    def _on_scatter_applied(self, result):
+        """Apply the chosen ScatterRemovalResult to the active workspace."""
+        if self.dataset is None:
+            return
+        self.dataset.apply_scatter_removal(result)
+
+        sub = getattr(self, "PP_SubtactBkg_chk", None)
+        if sub is not None and not sub.isChecked():
+            sub.blockSignals(True)
+            sub.setChecked(True)
+            sub.blockSignals(False)
+
+        if hasattr(self, "_update_adv_scatter_btn_style"):
+            self._update_adv_scatter_btn_style()
+        if getattr(self, "plot_controls", None) is not None:
+            self.plot_controls.set_dataset(self.dataset)
+        self._preview_contour()
+        self._update_sample_info()
+
+        n_enabled = sum(1 for b in result.bands if b.enabled)
+        method = result.params.get("method", "local_svd")
+        per_scan_txt = "per-scan" if result.metrics.get("used_per_scan") else "averaged"
+        self.statusBar().showMessage(
+            f"Applied advanced scatter removal ({method}, {n_enabled} band(s), {per_scan_txt})"
+        )
+
+    def _on_scatter_reset(self):
+        """Reset advanced scatter removal and restore static pre-zero background."""
+        if self.dataset is None:
+            return
+        self.dataset.clear_scatter_removal()
+        if hasattr(self, "_update_adv_scatter_btn_style"):
+            self._update_adv_scatter_btn_style()
+        self._apply_background()
+        if getattr(self, "plot_controls", None) is not None:
+            self.plot_controls.set_dataset(self.dataset)
+        self._preview_contour()
+        self._update_sample_info()
+        self.statusBar().showMessage("Reset to static pre-zero background subtraction.")
 
     @busy_guard("Calculating time derivative...")
     def _calculate_time_derivative(self):
@@ -1631,8 +1679,11 @@ class OneDTabMixin:
         ax = getattr(self.PPaxes, "ax", None)
         if ax is None:
             return
+        det = getattr(self.plot_controls, "detector", 0) if hasattr(self, "plot_controls") else 0
+        unit_lbl, _, _ = self._probe_prompt_info(det)
+        t_unit_plain = hlp.plain_time_unit(self.dataset.units)
         self.statusBar().showMessage(
-            "Manual chirp fit: left-click to add (wavelength, delay) points, "
+            f"Manual chirp fit: left-click to add ({unit_lbl}, {t_unit_plain}) points, "
             "right-click to remove the last, Enter to fit, Esc to cancel."
         )
 
@@ -1643,8 +1694,14 @@ class OneDTabMixin:
                 return
             self.statusBar().clearMessage()
             try:
-                det = getattr(self.plot_controls, "detector", 0) if hasattr(self, "plot_controls") else 0
-                fit = self.dataset.fit_chirp_manual(values, detector=det, **kwargs)
+                det_now = (
+                    getattr(self.plot_controls, "detector", 0)
+                    if hasattr(self, "plot_controls")
+                    else 0
+                )
+                x_nat = self._probe_axis_to_native([p[0] for p in values])
+                native_pts = [(float(x), float(p[1])) for x, p in zip(x_nat, values, strict=True)]
+                fit = self.dataset.fit_chirp_manual(native_pts, detector=det_now, **kwargs)
             except Exception as exc:
                 QMessageBox.warning(self, "Fit chirp", str(exc))
                 return
@@ -1948,8 +2005,14 @@ class OneDTabMixin:
         ax = getattr(self.PPaxes, "ax", None)
         if ax is None:
             return
+        det = getattr(self.plot_controls, "detector", 0) if hasattr(self, "plot_controls") else 0
         axis = "x" if kind == "kinetics" else "y"
-        what = "probe positions" if kind == "kinetics" else "delays"
+        if kind == "kinetics":
+            unit_lbl, _, _ = self._probe_prompt_info(det)
+            what = f"probe positions ({unit_lbl})"
+        else:
+            t_unit_plain = hlp.plain_time_unit(self.dataset.units)
+            what = f"delays ({t_unit_plain})"
         self.statusBar().showMessage(
             f"Interactive {kind}: left-click to add {what}, right-click to remove the "
             "last, Enter to plot, Esc to cancel."
@@ -1979,7 +2042,7 @@ class OneDTabMixin:
         det = getattr(pc, "detector", 0) if pc is not None else 0
         try:
             if kind == "kinetics":
-                values = self._probe_to_native(values)
+                values = self._probe_axis_to_native(values)
             if scans:
                 binsize = self._binscans_value()
                 if kind == "kinetics":
@@ -2044,34 +2107,160 @@ class OneDTabMixin:
         ax.figure.canvas.draw_idle()
 
     def _auto_delays(self) -> list:
-        dmax = float(np.nanmax(self.dataset.delays))
-        delays = [d for d in _DEFAULT_SPEC_DELAYS if d <= dmax]
-        if not delays:  # dataset shorter than the smallest default
-            pool = self.dataset.delays[self.dataset.delays > 0]
-            pool = pool if pool.size else self.dataset.delays
-            idx = np.unique(np.linspace(0, pool.size - 1, min(6, pool.size)).astype(int))
-            delays = [float(v) for v in pool[idx]]
-        return delays
+        delays_arr = np.asarray(self.dataset.delays, dtype=float).ravel()
+        finite = delays_arr[np.isfinite(delays_arr)]
+        if finite.size == 0:
+            return []
+        dmin = float(np.min(finite))
+        dmax = float(np.max(finite))
+        t_unit = hlp.plain_time_unit(getattr(self.dataset, "units", None))
+        if t_unit == "ps":
+            delays = [d for d in _DEFAULT_SPEC_DELAYS if dmin <= d <= dmax]
+            if delays:
+                return delays
 
-    def _probe_to_native(self, values):
+        pool = finite[finite > 0]
+        src = pool if pool.size else finite
+        if pool.size >= 2 and float(np.max(pool)) > float(np.min(pool)) * 1.1:
+            targets = np.geomspace(float(np.min(pool)), float(np.max(pool)), min(8, pool.size))
+            snapped, _ = hlp.find_nearest(pool, targets, unique=True)
+            chosen = [float(v) for v in np.atleast_1d(snapped)]
+        else:
+            idx = np.unique(np.linspace(0, src.size - 1, min(6, src.size)).astype(int))
+            chosen = [float(v) for v in src[idx]]
+
+        rounded = [float(f"{v:.3g}") if v != 0 else 0.0 for v in chosen]
+        deduped = list(dict.fromkeys(rounded))
+        return deduped if len(deduped) == len(chosen) else chosen
+
+    def _probe_unit_state(self, det: int | None = None) -> tuple[str, str, bool]:
+        """Return ``(native_unit, display_unit, is_scaled)`` for the active 1D dataset."""
+        ds = getattr(self, "dataset", None)
+        if ds is None:
+            return ("nm", "nm", False)
+        if hlp.is_uncalibrated_probe(ds):
+            return ("px", "px", False)
+        pc = getattr(self, "plot_controls", None)
+        if pc is not None and getattr(pc, "_dataset", None) is ds:
+            return pc._effective_x_state()
+        native = hlp.native_x_unit(ds.units)
+        display = hlp.resolve_x_unit(pm.get_settings().x_axis_unit.value, native)
+        if display != "cm-1":
+            return (native, display, False)
+        d_idx = getattr(pc, "detector", 0) if det is None and pc is not None else (det or 0)
+        probe = np.asarray(ds._detector_probe(d_idx), dtype=float)
+        probe_disp = probe if native == display else hlp.convert_spectral(probe, native, display)
+        finite = probe_disp[np.isfinite(probe_disp)]
+        scaled = bool(
+            finite.size > 0 and float(np.nanmax(np.abs(finite))) > hlp.DISPLAY_SCALE_THRESHOLD
+        )
+        return (native, display, scaled)
+
+    def _probe_to_native(self, values, *, scaled: bool = True):
         """Convert probe positions from the displayed X unit back to the native unit."""
         pc = getattr(self, "plot_controls", None)
-        return pc.probe_to_native(values) if pc is not None else values
+        if pc is not None and getattr(pc, "_dataset", None) is self.dataset:
+            return pc.probe_to_native(values, scaled=scaled)
+        if self.dataset is None:
+            return values
+        native, display, is_scaled = self._probe_unit_state()
+        values_list = [float(v) for v in np.atleast_1d(values)]
+        if display == "px":
+            return values_list
+        if scaled and is_scaled:
+            values_list = [v * 1000.0 for v in values_list]
+        if native == display:
+            return values_list
+        arr = hlp.convert_spectral(np.asarray(values_list, dtype=float), display, native)
+        return [float(v) for v in np.atleast_1d(arr)]
 
-    def _auto_wavelengths(self, n: int = 3, central_only: bool = False) -> list:
-        det = getattr(self.plot_controls, "detector", 0) if hasattr(self, "plot_controls") else 0
-        probe = self.dataset._detector_probe(det)
+    def _probe_axis_to_native(self, values):
+        """Convert unscaled matplotlib contour X coordinates to the native unit."""
+        return self._probe_to_native(values, scaled=False)
+
+    def _probe_from_native(self, values, *, scaled: bool = True):
+        """Convert probe positions from the native unit to the displayed X unit."""
+        pc = getattr(self, "plot_controls", None)
+        if pc is not None and getattr(pc, "_dataset", None) is self.dataset:
+            return pc.probe_from_native(values, scaled=scaled)
+        if self.dataset is None:
+            return values
+        native, display, is_scaled = self._probe_unit_state()
+        if display == "px":
+            return [float(v) for v in np.atleast_1d(values)]
+        if native == display:
+            arr = [float(v) for v in np.atleast_1d(values)]
+        else:
+            conv = hlp.convert_spectral(np.asarray(values, dtype=float), native, display)
+            arr = [float(v) for v in np.atleast_1d(conv)]
+        if scaled and is_scaled:
+            arr = [v / 1000.0 for v in arr]
+        return arr
+
+    def _probe_prompt_info(self, det: int = 0) -> tuple[str, str, np.ndarray]:
+        """Return ``(unit_label, range_str, probe_display)`` for cut/mask prompts."""
+        _, display, scaled = self._probe_unit_state(det)
+        unit_lbl = hlp.plain_spectral_unit(display, scaled=scaled)
+        probe_nat = self.dataset._detector_probe(det)
+        probe_disp = np.asarray(self._probe_from_native(probe_nat, scaled=True), dtype=float)
+        finite = probe_disp[np.isfinite(probe_disp)]
+        if finite.size:
+            dec = hlp.spectral_precision(finite, unit=display)
+            range_str = f"{float(np.min(finite)):.{dec}f} to {float(np.max(finite)):.{dec}f} {unit_lbl}"
+        else:
+            range_str = unit_lbl
+        return unit_lbl, range_str, probe_disp
+
+    def _ask_cut_delays(self, title: str, default: list) -> list | None:
+        t_unit_plain, t_unit_raw, t_range = delay_prompt_info(self.dataset)
+        prompt = (
+            f"Delays to plot in {t_unit_plain} (range: {t_range})\n"
+            "Comma-separated (or with units e.g. 500 fs, 1 ns), range (e.g. 1:0.1:5), or 'all':"
+        )
+        return self._ask_values(
+            title,
+            prompt,
+            default,
+            all_values=self.dataset.delays,
+            target_time_unit=t_unit_raw,
+        )
+
+    def _ask_cut_positions(self, title: str, det: int = 0, *, central_only: bool = False) -> list | None:
+        unit_lbl, range_str, probe_disp = self._probe_prompt_info(det)
+        prompt = (
+            f"Probe positions in {unit_lbl} (range: {range_str})\n"
+            "Comma-separated, range (e.g. 1:0.1:5), or 'all':"
+        )
+        positions = self._ask_values(
+            title,
+            prompt,
+            self._auto_wavelengths(det=det, central_only=central_only),
+            all_values=probe_disp,
+        )
+        if not positions:
+            return None
+        return self._probe_to_native(positions)
+
+    def _auto_wavelengths(
+        self, n: int = 3, central_only: bool = False, det: int | None = None
+    ) -> list:
+        if det is None:
+            det = getattr(self.plot_controls, "detector", 0) if hasattr(self, "plot_controls") else 0
+        probe = np.asarray(self.dataset._detector_probe(det), dtype=float)
         if probe.size == 0:
             return []
+        _, display_unit, _ = self._probe_unit_state(det)
+        probe_disp = np.asarray(self._probe_from_native(probe, scaled=True), dtype=float)
         if central_only or n == 1:
             idx = [probe.size // 2]
         else:
             idx = np.unique(np.linspace(0, probe.size - 1, min(n, probe.size)).astype(int))
-        vals = [float(probe[i]) for i in idx]
-        pc = getattr(self, "plot_controls", None)
-        if pc is not None:
-            vals = pc.probe_from_native(vals)  # show defaults in the displayed unit
-        return [round(float(v)) for v in vals]  # rounded suggestions
+        dec = hlp.spectral_precision(probe_disp, unit=display_unit)
+        vals = []
+        for i in idx:
+            v = float(probe_disp[i])
+            vals.append(int(round(v)) if dec == 0 else round(v, dec))
+        return list(dict.fromkeys(vals))
 
     def _embed_calibrated_probe_in_h5(self):
         """Embed CalibratedProbe.csv spectral calibration permanently inside an .h5 dataset."""

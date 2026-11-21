@@ -277,6 +277,7 @@ class MainWindow(
             "PP_loadChirpCorr_btn": "Load chirp correction parameters from file",
             "PP_subtractSolvent_btn": "Subtract scaled solvent background dataset",
             "PP_subtractShockwave_btn": "Subtract shockwave kinetic artefact trace",
+            "PP_advScatter_btn": "Open interactive multi-band scatter and background removal dialog",
             "PP_plotBkg_btn": "Plot fitted background subtraction curve",
             "PP_maskProbe_btn": "Mask specific probe wavelength ranges",
             "PP_shiftT0_btn": "Shift delay time axis so a chosen point becomes the new t0",
@@ -618,6 +619,16 @@ class MainWindow(
                 "#334155",
             ),
             "PP_plotBkg_btn": style(
+                "#e0f2fe",
+                "#0369a1",
+                "#bae6fd",
+                "#bae6fd",
+                "#0c4a6e",
+                "#7dd3fc",
+                "#0284c7",
+                "#0369a1",
+            ),
+            "PP_advScatter_btn": style(
                 "#e0f2fe",
                 "#0369a1",
                 "#bae6fd",
@@ -1156,6 +1167,34 @@ class MainWindow(
         if hasattr(self, "UpDir_btn") and self.UpDir_btn is not None:
             self.UpDir_btn.setMinimumWidth(self.UpDir_btn.sizeHint().width() + 10)
 
+        self._adv_scatter_idle_style = button_map["PP_advScatter_btn"]
+        self._adv_scatter_active_style = style(
+            "#dbeafe",
+            "#1e40af",
+            "#3b82f6",
+            "#bfdbfe",
+            "#1e3a8a",
+            "#93c5fd",
+            "#60a5fa",
+            "#1d4ed8",
+        )
+        self._update_adv_scatter_btn_style()
+
+    def _update_adv_scatter_btn_style(self):
+        """Highlight ``PP_advScatter_btn`` while advanced scatter removal is active."""
+        btn = getattr(self, "PP_advScatter_btn", None)
+        if btn is None:
+            return
+        ds = getattr(self, "dataset", None)
+        active = ds is not None and getattr(ds, "_scatter_removal_params", None) is not None
+        st = getattr(
+            self,
+            "_adv_scatter_active_style" if active else "_adv_scatter_idle_style",
+            None,
+        )
+        if st:
+            btn.setStyleSheet(st)
+
     def closeEvent(self, event):
         try:
             if hasattr(self, "_cancel_pending_twoD_shot_rotation"):
@@ -1488,6 +1527,12 @@ class MainWindow(
         if _auto_cal_chk is not None:
             _auto_cal_chk.toggled.connect(self._on_twoD_auto_cal_toggled)
 
+        # Connect 2D sample info "show all available info" toggle
+        _show_all_info_chk = getattr(self, "twoD_show_all_info_chk", None)
+        if _show_all_info_chk is not None:
+            _show_all_info_chk.setVisible(False)
+            _show_all_info_chk.toggled.connect(self._update_twoD_sample_info)
+
         self._connect("twoD_contour_btn", lambda: self._plot_twoD_cut("contour"))
         self._connect("twoD_kinetics_btn", self._on_twoD_kinetics_clicked)
         self._connect("twoD_surf_btn", lambda: self._plot_twoD_cut("surface"))
@@ -1521,6 +1566,7 @@ class MainWindow(
         self._connect("PP_loadChirpCorr_btn", self._load_chirp_corr)
         self._connect("PP_subtractSolvent_btn", self._subtract_solvent)
         self._connect("PP_subtractShockwave_btn", self._subtract_shockwave)
+        self._connect("PP_advScatter_btn", self._advanced_scatter_removal)
         self._connect("PP_maskProbe_btn", self._mask_probe_region)
         self._connect("PP_shiftT0_btn", self._shift_t0)
         self._connect("PP_LoadSSabs_btn", lambda _=False: self._load_steady_state("absorption"))
@@ -1597,6 +1643,7 @@ class MainWindow(
             "actionFitChirp": self._fit_chirp,
             "actionLoadChirpCorr": self._load_chirp_corr,
             "actionEmbedProbeCalH5": self._embed_calibrated_probe_in_h5,
+            "actionAdvancedScatterRemoval": self._advanced_scatter_removal,
             "actionSubtractShockwave": self._subtract_shockwave,
             "actionTimeDerivative": self._calculate_time_derivative,
             "actionStitchWavelength": self._stitch_wavelength,
@@ -1937,6 +1984,7 @@ class MainWindow(
             "actionShiftT0",
             "actionFitChirp",
             "actionLoadChirpCorr",
+            "actionAdvancedScatterRemoval",
             "actionSubtractShockwave",
         ):
             act = getattr(self, act_name, None)
@@ -2157,7 +2205,13 @@ class MainWindow(
     # ----------------------------------------------------------------- #
 
     def _ask_values(
-        self, title: str, label: str, default: list, all_values: list | np.ndarray | None = None
+        self,
+        title: str,
+        label: str,
+        default: list,
+        all_values: list | np.ndarray | None = None,
+        *,
+        target_time_unit: str | None = None,
     ) -> list | None:
         """Prompt for cuts: numbers, range expressions (``1:0.1:5``) or ``all``.
 
@@ -2167,4 +2221,6 @@ class MainWindow(
         """
         from .dialogs import ask_values
 
-        return ask_values(self, title, label, default, all_values)
+        return ask_values(
+            self, title, label, default, all_values, target_time_unit=target_time_unit
+        )

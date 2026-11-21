@@ -275,15 +275,21 @@ class ShockwaveSubtractionDialog(QDialog):
                 return
 
             probe = self.dataset.probe
-            if len(points) == 1:
-                val = points[0]
+            parent_conv = getattr(parent, "_probe_axis_to_native", None)
+            pts_native = (
+                [float(v) for v in parent_conv(points)]
+                if callable(parent_conv)
+                else [float(v) for v in points]
+            )
+            if len(pts_native) == 1:
+                val = pts_native[0]
                 if self.rb_pixels.isChecked():
                     idx = int(np.argmin(np.abs(probe - val)))
                     self.input_field.setText(str(idx + 1))
                 else:
                     self.input_field.setText(f"{val:.2f}")
             else:
-                val1, val2 = min(points), max(points)
+                val1, val2 = min(pts_native), max(pts_native)
                 if self.rb_pixels.isChecked():
                     idx1 = int(np.argmin(np.abs(probe - val1)))
                     idx2 = int(np.argmin(np.abs(probe - val2)))

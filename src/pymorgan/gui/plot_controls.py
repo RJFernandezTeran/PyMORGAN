@@ -343,16 +343,13 @@ class PlotControlsPanel(QObject):
         Z = np.asarray(self._dataset._detector_slice(self.detector), dtype=float)
         probe = np.asarray(self._dataset._detector_probe(self.detector), dtype=float)
         delays = np.asarray(self._dataset.delays, dtype=float)
-        native = hlp.native_x_unit(self._dataset.units)
+        native, display, _ = self._effective_x_state()
 
         xlim_vals = list(self.xlim())
-        if getattr(self, "_x_scaled", False):
-            xlim_vals = [v * 1000.0 for v in xlim_vals]
-
-        if self._is_uncalibrated():
+        if display == "px" or native == display:
             xl = np.asarray(xlim_vals, dtype=float)
         else:
-            xl = hlp.convert_spectral(np.asarray(xlim_vals, dtype=float), self._x_display, native)
+            xl = hlp.convert_spectral(np.asarray(xlim_vals, dtype=float), display, native)
         xlo, xhi = sorted((float(xl[0]), float(xl[1])))
         ylo, yhi = sorted(self.ylim())
         pmask = (probe >= xlo) & (probe <= xhi)
@@ -518,16 +515,19 @@ class PlotControlsPanel(QObject):
         if self._dataset is not None:
             det = self.detector
             det_probe = self._dataset._detector_probe(det)
-            if self._is_uncalibrated():
+            native, display, scaled = self._effective_x_state()
+            self._x_display = display
+            self._x_scaled = scaled
+            self._update_x_token(display)
+            if display == "px" or native == display:
                 probe_disp = np.asarray(det_probe, dtype=float)
             else:
-                native = hlp.native_x_unit(self._dataset.units)
                 probe_disp = hlp.convert_spectral(
-                    np.asarray(det_probe, dtype=float), native, self._x_display
+                    np.asarray(det_probe, dtype=float), native, display
                 )
             xmin_val = float(np.nanmin(probe_disp))
             xmax_val = float(np.nanmax(probe_disp))
-            if getattr(self, "_x_scaled", False):
+            if scaled:
                 xmin_val /= 1000.0
                 xmax_val /= 1000.0
 
@@ -706,38 +706,74 @@ class PlotControlsPanel(QObject):
         """
         return int(self.smooth_spin.value())
 
+    def _effective_x_state(self) -> tuple[str, str, bool]:
+        """Return live ``(native_unit, display_unit, is_scaled)`` for the active dataset."""
+        if self._dataset is None:
+            return ("nm", "nm", False)
+        if self._is_uncalibrated():
+            return ("px", "px", False)
+        native = hlp.native_x_unit(self._dataset.units)
+        display = self._display_unit()
+        if display != "cm-1":
+            return (native, display, False)
+        probe = np.asarray(self._dataset._detector_probe(self.detector), dtype=float)
+        probe_disp = probe if native == display else hlp.convert_spectral(probe, native, display)
+        finite = probe_disp[np.isfinite(probe_disp)]
+        scaled = bool(
+            finite.size > 0 and float(np.nanmax(np.abs(finite))) > hlp.DISPLAY_SCALE_THRESHOLD
+        )
+        return (native, display, scaled)
+
     def probe_display_unit(self) -> str:
         """Spectral unit currently shown on the X axis (resolved display unit)."""
         return self._display_unit()
 
-    def probe_to_native(self, values):
-        """Convert probe positions from the X display unit to the dataset's native unit."""
+    def probe_is_scaled(self) -> bool:
+        """Whether the active display unit uses the ``10³`` factor in UI controls."""
+        return self._effective_x_state()[2]
+
+    def probe_display_label(self) -> str:
+        """Plain-text spectral unit label shown in prompts and spinboxes."""
+        _, display, is_scaled = self._effective_x_state()
+        return hlp.plain_spectral_unit(display, scaled=is_scaled)
+
+    def probe_to_native(self, values, *, scaled: bool = True):
+        """Convert probe positions from the X display unit to the dataset's native unit.
+
+        When ``scaled=True`` (default), values are assumed to follow the scaled UI
+        controls/prompts (e.g. ``10³ cm⁻¹``); pass ``scaled=False`` (or call
+        :meth:`probe_axis_to_native`) for unscaled matplotlib axis coordinates.
+        """
         if self._dataset is None:
             return values
-        if self._is_uncalibrated():
-            return [float(v) for v in np.atleast_1d(values)]
-        native = hlp.native_x_unit(self._dataset.units)
+        native, display, is_scaled = self._effective_x_state()
         values_list = [float(v) for v in np.atleast_1d(values)]
-        if getattr(self, "_x_scaled", False):
-            values_list = [v * 1000.0 for v in values_list]
-        if native == self._x_display:
+        if display == "px":
             return values_list
-        arr = hlp.convert_spectral(np.asarray(values_list, dtype=float), self._x_display, native)
+        if scaled and is_scaled:
+            values_list = [v * 1000.0 for v in values_list]
+        if native == display:
+            return values_list
+        arr = hlp.convert_spectral(np.asarray(values_list, dtype=float), display, native)
         return [float(v) for v in np.atleast_1d(arr)]
 
-    def probe_from_native(self, values):
+    def probe_axis_to_native(self, values):
+        """Convert unscaled matplotlib contour X coordinates to the native unit."""
+        return self.probe_to_native(values, scaled=False)
+
+    def probe_from_native(self, values, *, scaled: bool = True):
         """Convert probe positions from the dataset's native unit to the X display unit."""
         if self._dataset is None:
             return values
-        if self._is_uncalibrated():
+        native, display, is_scaled = self._effective_x_state()
+        if display == "px":
             return [float(v) for v in np.atleast_1d(values)]
-        native = hlp.native_x_unit(self._dataset.units)
-        if native == self._x_display:
+        if native == display:
             arr = [float(v) for v in np.atleast_1d(values)]
         else:
-            arr = hlp.convert_spectral(np.asarray(values, dtype=float), native, self._x_display)
-            arr = [float(v) for v in np.atleast_1d(arr)]
-        if getattr(self, "_x_scaled", False):
+            conv = hlp.convert_spectral(np.asarray(values, dtype=float), native, display)
+            arr = [float(v) for v in np.atleast_1d(conv)]
+        if scaled and is_scaled:
             arr = [v / 1000.0 for v in arr]
         return arr
 

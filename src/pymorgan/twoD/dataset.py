@@ -9,6 +9,7 @@ Presentation defaults come from the shared :class:`pymorgan.settings.Settings`
 
 from __future__ import annotations
 
+import html
 from os import PathLike
 
 import numpy as np
@@ -455,7 +456,15 @@ class Dataset2D:
             t2=hlp.delay_axis_unit(units, quantity="Population time"),
         )
 
-    def sample_info(self) -> str:
+    @property
+    def has_extended_sample_info(self) -> bool:
+        """Whether extended ('all available') sample metadata is available."""
+        u = self.units or {}
+        full = u.get("sample_info_full")
+        compact = u.get("sample_info")
+        return bool(full) and full != compact
+
+    def sample_info(self, show_all: bool = False) -> str:
         """Return an HTML summary of the 2-D dataset shown in the GUI info box."""
         pump = np.asarray(self.pump, dtype=float)
         probe = np.asarray(self.probe, dtype=float)
@@ -548,15 +557,20 @@ class Dataset2D:
         if self.has_single_scans:
             lines.append(f"<b>Scans:</b> {self._format_active_scans_str()}")
         lines.extend([line_cal, line_type])
-        info_extra = self.units.get("sample_info")
+        u = self.units or {}
+        info_extra = (
+            (u.get("sample_info_full") or u.get("sample_info"))
+            if show_all
+            else u.get("sample_info")
+        )
         if info_extra:
-            formatted_info = info_extra.replace("\n", "<br>")
+            formatted_info = html.escape(str(info_extra), quote=False).replace("\n", "<br>")
             lines.append(f"<b>Sample Info:</b><br>{formatted_info}")
         else:
             lines.append("<b>Sample Info:</b> No additional sample information available.")
         return "<br>".join(lines)
 
-    def sample_info_console(self) -> str:
+    def sample_info_console(self, show_all: bool = False) -> str:
         """Return a plain text, console-friendly summary of the 2-D dataset."""
         pump = np.asarray(self.pump, dtype=float)
         probe = np.asarray(self.probe, dtype=float)
@@ -620,7 +634,12 @@ class Dataset2D:
         if self.has_single_scans:
             lines.append(f"Scans: {self._format_active_scans_str()}")
         lines.extend([line_cal, line_type])
-        info_extra = self.units.get("sample_info")
+        u = self.units or {}
+        info_extra = (
+            (u.get("sample_info_full") or u.get("sample_info"))
+            if show_all
+            else u.get("sample_info")
+        )
         if info_extra:
             lines.append(f"Sample Info:\n{info_extra}")
         else:
@@ -645,9 +664,9 @@ class Dataset2D:
             return "Dataset probe axis (P2DAT header)"
         return "Dataset probe calibration"
 
-    def print_sample_info(self) -> None:
+    def print_sample_info(self, show_all: bool = False) -> None:
         """Print the console-friendly summary of the 2-D dataset."""
-        print(self.sample_info_console())
+        print(self.sample_info_console(show_all=show_all))
 
     def __repr__(self) -> str:  # pragma: no cover - cosmetic
         return (

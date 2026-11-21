@@ -1888,6 +1888,56 @@ def plot_background(
 # --------------------------------------------------------------------------- #
 #                               Kinetic traces                               #
 # --------------------------------------------------------------------------- #
+def _resolve_kinetics_cuts(
+    X_l,
+    plot_wavelengths,
+    Units,
+    settings,
+    *,
+    x_axis_unit: str | None = None,
+    input_unit: str | None = None,
+    round_labels: bool = True,
+):
+    """Snap kinetics cut positions to pixels and format display-unit legend labels."""
+    xplot, XUnits, _, _ = _resolve_x_axis(
+        X_l, Units, settings, x_axis_unit=x_axis_unit, secondary_axis=False
+    )
+    uncal = hlp.is_uncalibrated_probe(Units)
+    if uncal:
+        native_unit = "px"
+        display_unit = "px"
+    else:
+        native_unit = hlp.native_x_unit(Units)
+        xu = x_axis_unit if x_axis_unit is not None else settings.x_axis_unit.value
+        display_unit = hlp.resolve_x_unit(xu, native_unit)
+
+    req = np.atleast_1d(np.asarray(plot_wavelengths, dtype=float))
+    if input_unit is not None and not uncal:
+        if input_unit == "display":
+            src_u = display_unit
+            if XUnits.get("wn_scaled"):
+                req = req * 1000.0
+        else:
+            src_u = hlp.resolve_x_unit(input_unit, native_unit)
+        sel_native = hlp.convert_spectral(req, src_u, native_unit) if src_u != native_unit else req
+    else:
+        sel_native = req
+
+    _, Plt_ID = hlp.find_nearest(X_l, sel_native, unique=True)
+    probe_ltx = "px" if uncal else XUnits["ltx"]
+    wn_scaled = bool(XUnits.get("wn_scaled"))
+    pos_labels: list[str] = []
+    for idx in Plt_ID:
+        disp_val = float(xplot[idx])
+        if wn_scaled:
+            disp_val /= 1000.0
+        val_str = hlp.format_spectral_value(
+            disp_val, unit=display_unit, scaled=wn_scaled, rounded=bool(round_labels)
+        )
+        pos_labels.append(f"{val_str} {probe_ltx}")
+    return Plt_ID, pos_labels
+
+
 def plot_kinetics(
     data,
     plot_wavelengths,
@@ -1907,6 +1957,8 @@ def plot_kinetics(
     show_xlabel=True,
     show_ylabel=True,
     swap_axes=False,
+    x_axis_unit: str | None = None,
+    input_unit: str | None = None,
     **kwargs,
 ):
     """Kinetic traces at the requested ``plot_wavelengths``.
@@ -1922,8 +1974,8 @@ def plot_kinetics(
         Dataset to plot; supplied automatically via ``Dataset1D.plot_kinetics``.
     plot_wavelengths : sequence of float
         Probe positions to cut at, in the dataset's native probe unit (nm,
-        cm-1, ...). Each is snapped to the nearest pixel and duplicates are
-        dropped.
+        cm-1, ...) by default, or in ``input_unit`` if supplied. Each is
+        snapped to the nearest pixel and duplicates are dropped.
     ax : matplotlib.axes.Axes, optional
         Axis to draw into; ``None`` creates a figure sized from
         ``Settings.kinetics_figsize``.
@@ -1955,6 +2007,13 @@ def plot_kinetics(
         ``Settings.round_labels``.
     show_xlabel, show_ylabel : bool, default True
         Draw the X / Y axis labels.
+    x_axis_unit : str, optional
+        Display spectral unit for the trace legend labels (defaults to
+        ``Settings.x_axis_unit``).
+    input_unit : str, optional
+        Unit of ``plot_wavelengths`` (``None`` / ``"native"``, ``"display"``
+        for scaled display units, or an explicit spectral unit such as
+        ``"eV"`` or ``"nm"``).
     **kwargs
         Forwarded to :meth:`matplotlib.axes.Axes.plot`. ``markersize`` and
         ``linewidth`` default to ``Settings.kinetics_marker_size`` and
@@ -2006,12 +2065,19 @@ def plot_kinetics(
     Zavg_C = data._detector_slice(detector)
     Y_t = data.delays
     X_l = _get_probe(data, detector)
-    SelTraces = plot_wavelengths
 
     LinThres = 1
     LinSize = 0.5
 
-    [Plt_val, Plt_ID] = hlp.find_nearest(X_l, SelTraces, unique=True)
+    Plt_ID, pos_labels = _resolve_kinetics_cuts(
+        X_l,
+        plot_wavelengths,
+        Units,
+        s,
+        x_axis_unit=x_axis_unit,
+        input_unit=input_unit,
+        round_labels=bool(round_labels),
+    )
     Nplots = len(Plt_ID)
 
     if created:
@@ -2050,10 +2116,7 @@ def plot_kinetics(
                 yplot[:, i] = Zavg_C[:, Plt_ID[i]]
         else:
             yplot[:, i] = Zavg_C[:, Plt_ID[i]]
-        # Inherit the probe (X-axis) unit; round subject to the setting.
-        value = round(Plt_val[i]) if round_labels else Plt_val[i]
-        _probe_ltx = "px" if hlp.is_uncalibrated_probe(Units) else Units["unitsL_ltx"]
-        lbl = f"{value:g} {_probe_ltx}"
+        lbl = pos_labels[i]
 
         if noise_slice is not None:
             y_noise = noise_slice[:, Plt_ID[i]]
@@ -2294,6 +2357,8 @@ def plot_scan_kinetics(
     round_labels=None,
     show_xlabel=True,
     show_ylabel=True,
+    x_axis_unit: str | None = None,
+    input_unit: str | None = None,
     **kwargs,
 ):
     """Per-scan kinetic traces at requested ``plot_wavelengths``.
@@ -2314,7 +2379,7 @@ def plot_scan_kinetics(
         Dataset to plot; supplied automatically via
         ``Dataset1D.plot_scan_kinetics``.
     plot_wavelengths : sequence of float
-        Probe positions to cut at, in the native probe unit.
+        Probe positions to cut at, in the native probe unit (or ``input_unit``).
     ax : matplotlib.axes.Axes, optional
         Axis to draw into; ``None`` creates a figure sized from
         ``Settings.kinetics_figsize``.
@@ -2342,6 +2407,13 @@ def plot_scan_kinetics(
         ``Settings.round_labels``.
     show_xlabel, show_ylabel : bool, default True
         Draw the X / Y axis labels.
+    x_axis_unit : str, optional
+        Display spectral unit for the trace legend labels and titles (defaults
+        to ``Settings.x_axis_unit``).
+    input_unit : str, optional
+        Unit of ``plot_wavelengths`` (``None`` / ``"native"``, ``"display"``
+        for scaled display units, or an explicit spectral unit such as
+        ``"eV"`` or ``"nm"``).
     **kwargs
         Forwarded to :meth:`matplotlib.axes.Axes.plot`.
 
@@ -2368,7 +2440,15 @@ def plot_scan_kinetics(
     Zb, labels = _bin_scan_matrix(Z, binsize, scan_ids=data.scan_ids)
     n_bin = len(labels)
 
-    Plt_val, Plt_ID = hlp.find_nearest(X_l, plot_wavelengths, unique=True)
+    Plt_ID, pos_labels = _resolve_kinetics_cuts(
+        X_l,
+        plot_wavelengths,
+        Units,
+        s,
+        x_axis_unit=x_axis_unit,
+        input_unit=input_unit,
+        round_labels=bool(round_labels),
+    )
     n_pos = len(Plt_ID)
     traces_cmap = kwargs.pop("traces_cmap", None)
     flipColor = kwargs.pop("flipColor", False)
@@ -2383,14 +2463,12 @@ def plot_scan_kinetics(
     if "linewidth" not in kwargs and "lw" not in kwargs:
         kwargs["linewidth"] = s.kinetics_line_width
 
-    _probe_ltx = "px" if hlp.is_uncalibrated_probe(Units) else Units["unitsL_ltx"]
     if ax is None and n_pos > 1:
         axes_list = []
         for p in range(n_pos):
             sub_fig, sub_where = _new_axes(None, None, layout="constrained")
             sub_fig.set_size_inches(*s.kinetics_figsize)
-            pos_val = round(Plt_val[p]) if round_labels else Plt_val[p]
-            pos_lbl = "%g %s" % (pos_val, _probe_ltx)
+            pos_lbl = pos_labels[p]
             for b in range(n_bin):
                 y = Zb[:, Plt_ID[p], b]
                 if normY:
@@ -2415,8 +2493,7 @@ def plot_scan_kinetics(
         pFig.set_size_inches(*s.kinetics_figsize)
 
     for p in range(n_pos):
-        pos_val = round(Plt_val[p]) if round_labels else Plt_val[p]
-        pos_lbl = "%g %s" % (pos_val, _probe_ltx)
+        pos_lbl = pos_labels[p]
         for b in range(n_bin):
             y = Zb[:, Plt_ID[p], b]
             if normY:
@@ -2432,8 +2509,7 @@ def plot_scan_kinetics(
     _scan_legend(where, s)
     _apply_time_xscale(where, Xscale, Y_t, time_axis_label=time_axis_label, settings=s)
     if created:
-        pos_val0 = round(Plt_val[0]) if round_labels else Plt_val[0]
-        pos_lbl0 = "%g %s" % (pos_val0, _probe_ltx) if n_pos == 1 else None
+        pos_lbl0 = pos_labels[0] if n_pos == 1 else None
         _set_figure_window_title(pFig, "scan kinetics", data, extra=pos_lbl0)
     return where, Y_t, Zb
 

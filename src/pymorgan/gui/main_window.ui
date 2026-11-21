@@ -591,6 +591,28 @@ background-color: DarkSlateGray
                  </property>
                 </widget>
                </item>
+               <item>
+                <widget class="QPushButton" name="PP_advScatter_btn">
+                 <property name="sizePolicy">
+                  <sizepolicy hsizetype="Maximum" vsizetype="Fixed">
+                   <horstretch>0</horstretch>
+                   <verstretch>0</verstretch>
+                  </sizepolicy>
+                 </property>
+                 <property name="maximumSize">
+                  <size>
+                   <width>52</width>
+                   <height>16777215</height>
+                  </size>
+                 </property>
+                 <property name="toolTip">
+                  <string>Open interactive multi-band scatter and background removal dialog</string>
+                 </property>
+                 <property name="text">
+                  <string>Adv...</string>
+                 </property>
+                </widget>
+               </item>
               </layout>
              </item>
              <item>
@@ -2784,6 +2806,22 @@ The magnitude sets the smoothing window width.</string>
             </property>
            <property name="maximumSize"><size><width>290</width><height>16777215</height></size></property></widget>
           </item>
+          <item>
+           <widget class="QCheckBox" name="twoD_show_all_info_chk">
+            <property name="maximumSize">
+             <size>
+              <width>290</width>
+              <height>16777215</height>
+             </size>
+            </property>
+            <property name="toolTip">
+             <string>Toggle between compact measurement summary and all available file metadata</string>
+            </property>
+            <property name="text">
+             <string>Show all available info</string>
+            </property>
+           </widget>
+          </item>
          </layout>
         </item>
         <item>
@@ -4271,6 +4309,7 @@ The magnitude sets the smoothing window width.</string>
     <addaction name="menuChirp" />
     <addaction name="actionEmbedProbeCalH5" />
     <addaction name="separator" />
+    <addaction name="actionAdvancedScatterRemoval" />
     <addaction name="actionSubtractShockwave" />
     <addaction name="actionTimeDerivative" />
     <addaction name="separator" />
@@ -4389,6 +4428,14 @@ The magnitude sets the smoothing window width.</string>
   <action name="actionLoadSpectrum">
    <property name="text">
     <string>&amp;Load &amp;&amp; Plot Overlay Spectrum...</string>
+   </property>
+  </action>
+  <action name="actionAdvancedScatterRemoval">
+   <property name="text">
+    <string>Advanced &amp;Scatter Removal...</string>
+   </property>
+   <property name="toolTip">
+    <string>Open interactive multi-band scatter and background removal dialog</string>
    </property>
   </action>
   <action name="actionSubtractShockwave">

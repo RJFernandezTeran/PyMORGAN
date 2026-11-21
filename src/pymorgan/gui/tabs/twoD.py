@@ -37,6 +37,7 @@ from ...log import get_logger
 from ..busy import busy_guard
 from ..mw_common import (
     _safe_set_limits,
+    delay_prompt_info,
     get_combo_datatype,
 )
 
@@ -825,12 +826,23 @@ class TwoDTabMixin:
         pc.set_probe_lim_native(float(pr_nat[0]), float(pr_nat[1]))
         pc.limitsChanged.emit()
 
-    def _update_twoD_sample_info(self):
-        """Refresh the twoD sample info text box."""
+    def _update_twoD_sample_info(self, _checked: bool = False):
+        """Refresh the twoD sample info text box and toggle visibility."""
         widget = getattr(self, "twoD_SampleInfo_text", None)
-        if widget is None:
+        chk = getattr(self, "twoD_show_all_info_chk", None)
+        ds = self.twoD_dataset
+        if ds is None:
+            if chk is not None:
+                chk.setVisible(False)
+            if widget is not None:
+                widget.setHtml("")
             return
-        widget.setHtml("" if self.twoD_dataset is None else self.twoD_dataset.sample_info())
+        has_full = bool(getattr(ds, "has_extended_sample_info", False))
+        if chk is not None:
+            chk.setVisible(has_full)
+        show_all = bool(chk is not None and chk.isChecked() and has_full)
+        if widget is not None:
+            widget.setHtml(ds.sample_info(show_all=show_all))
 
     def _on_twoD_include_ftir_toggled(self, checked: bool):
         if checked and self.twoD_dataset is not None:
@@ -1266,6 +1278,96 @@ class TwoDTabMixin:
         chk = getattr(self, "twoD_interactive_chk", None)
         return chk.isChecked() if chk is not None else False
 
+    def _twoD_time_unit_ltx(self) -> str:
+        units = getattr(self.twoD_dataset, "units", None)
+        if isinstance(units, dict) and units.get("unitsT_ltx"):
+            return str(units["unitsT_ltx"])
+        return "ps"
+
+    def _ask_twoD_delays(self, active_delay: float) -> list[float] | None:
+        t_unit_plain, t_unit_raw, t_range = delay_prompt_info(self.twoD_dataset)
+        prompt = (
+            f"Delays to plot in {t_unit_plain} (range: {t_range})\n"
+            "Comma-separated (or with units e.g. 500 fs, 1 ns), range (e.g. 1:0.1:5), or 'all':"
+        )
+        return self._ask_values(
+            "Transient spectra slices",
+            prompt,
+            [float(active_delay)],
+            all_values=self.twoD_dataset.delays,
+            target_time_unit=t_unit_raw,
+        )
+
+    def _twoD_display_meta(self, settings=None) -> dict:
+        s = settings or pm.get_settings()
+        to_display, to_native, unit_ltx, native, target, factor = (
+            pm.twoD.plot._display_axes_meta(
+                self.twoD_dataset, getattr(self.twoD_dataset, "units", None), None, s
+            )
+        )
+        scaled = factor != 1.0
+        plain_unit = hlp.plain_spectral_unit(target, scaled=scaled)
+        pump_disp = np.asarray(to_display(self.twoD_dataset.pump), dtype=float)
+        probe_disp = np.asarray(to_display(self.twoD_dataset.probe), dtype=float)
+        pump_lim = (float(np.nanmin(pump_disp)), float(np.nanmax(pump_disp)))
+        probe_lim = (float(np.nanmin(probe_disp)), float(np.nanmax(probe_disp)))
+        dec = max(
+            1,
+            hlp.spectral_precision(
+                [pump_lim[0], pump_lim[1], probe_lim[0], probe_lim[1]], unit=target
+            ),
+        )
+        if scaled:
+            dec = max(dec, 2)
+        return {
+            "to_display": to_display,
+            "to_native": to_native,
+            "unit_ltx": unit_ltx,
+            "native": native,
+            "target": target,
+            "factor": factor,
+            "scaled": scaled,
+            "plain_unit": plain_unit,
+            "pump_disp": pump_disp,
+            "probe_disp": probe_disp,
+            "pump_lim": pump_lim,
+            "probe_lim": probe_lim,
+            "dec": dec,
+        }
+
+    @staticmethod
+    def _rect_span_ok(ax, extents) -> bool:
+        xmin, xmax, ymin, ymax = extents
+        ax_xlim = ax.get_xlim()
+        ax_ylim = ax.get_ylim()
+        x_eps = max(1e-12, abs(ax_xlim[1] - ax_xlim[0]) * 1e-4)
+        y_eps = max(1e-12, abs(ax_ylim[1] - ax_ylim[0]) * 1e-4)
+        return bool(abs(xmax - xmin) >= x_eps and abs(ymax - ymin) >= y_eps)
+
+    def _attach_twoD_rect_selector(self, ax, on_key) -> None:
+        from matplotlib.widgets import RectangleSelector
+
+        selector_kwargs = dict(
+            useblit=True, button=[1], minspanx=0, minspany=0, interactive=True
+        )
+        try:
+            self._rect_selector = RectangleSelector(
+                ax,
+                lambda *_a: None,
+                props=dict(facecolor="orange", edgecolor="darkorange", alpha=0.3, fill=True),
+                **selector_kwargs,
+            )
+        except TypeError:
+            self._rect_selector = RectangleSelector(
+                ax,
+                lambda *_a: None,
+                rectprops=dict(
+                    facecolor="orange", edgecolor="darkorange", alpha=0.3, fill=True
+                ),
+                **selector_kwargs,
+            )
+        self._rect_cid = self.twoDaxes.canvas.mpl_connect("key_press_event", on_key)
+
     def _on_twoD_kinetics_clicked(self):
         """Plot kinetics at coordinates or integrated area for the 2D dataset."""
         if self.twoD_dataset is None:
@@ -1292,12 +1394,19 @@ class TwoDTabMixin:
         if ax is None:
             return
 
+        meta = self._twoD_display_meta(s)
+        to_native = meta["to_native"]
+        u_plain = meta["plain_unit"]
+        p_lo, p_hi = meta["pump_lim"]
+        pr_lo, pr_hi = meta["probe_lim"]
+        dec = meta["dec"]
+
         if choice == "Single Coordinate":
             if self._twoD_interactive():
                 from ..picker import ContourPicker
 
                 self.statusBar().showMessage(
-                    "Interactive kinetics: left-click to pick coordinate(s), right-click to remove last, Enter to plot, Esc to cancel."
+                    f"Interactive kinetics ({u_plain}): left-click to pick coordinate(s), right-click to remove last, Enter to plot, Esc to cancel."
                 )
 
                 def done(points):
@@ -1307,7 +1416,6 @@ class TwoDTabMixin:
                         return
                     self.statusBar().clearMessage()
 
-                    to_native = pm.twoD.plot.native_converter(self.twoD_dataset, settings=s)
                     resolved_coords = []
                     for x, y in points:
                         x_n, y_n = (float(v) for v in to_native([x, y]))
@@ -1318,34 +1426,41 @@ class TwoDTabMixin:
 
                 self._picker = ContourPicker(self.twoDaxes.canvas, ax, "xy", done).start()
             else:
+                p_mid = 0.5 * (p_lo + p_hi)
+                pr_mid = 0.5 * (pr_lo + pr_hi)
+                ex = f"{p_mid:.{dec}f},{pr_mid:.{dec}f}"
                 text, ok = QInputDialog.getText(
                     self,
                     "Kinetics coordinates",
-                    "Enter coordinates as pump,probe (semicolon-separated for multiple, e.g. 1650,1650; 1660,1650):",
+                    f"Enter coordinates in {u_plain} as pump,probe "
+                    f"(pump: {p_lo:.{dec}f} to {p_hi:.{dec}f}, probe: {pr_lo:.{dec}f} to {pr_hi:.{dec}f};\n"
+                    f"semicolon-separated for multiple, e.g. {ex}):",
                 )
                 if not ok or not text.strip():
                     return
                 try:
                     coords = []
                     for term in text.split(";"):
+                        term = term.strip()
+                        if not term:
+                            continue
                         p_str, pr_str = term.split(",")
-                        coords.append((float(p_str), float(pr_str)))
+                        p_nat = float(to_native([float(p_str)])[0])
+                        pr_nat = float(to_native([float(pr_str)])[0])
+                        coords.append((p_nat, pr_nat))
+                    if not coords:
+                        return
                     self._plot_single_coordinates(coords)
                 except Exception as exc:
                     QMessageBox.warning(self, "Invalid Input", f"Error parsing input: {exc}")
 
         else:  # Area Integration
             if self._twoD_interactive():
-                from matplotlib.widgets import RectangleSelector
-
                 self.statusBar().showMessage(
-                    "Draw a rectangle on the contour plot to select the area. Press ENTER to confirm."
+                    f"Draw a rectangle on the contour plot ({u_plain}) to select the area. Press ENTER to confirm."
                 )
                 self._selected_areas = []
                 self._rect_cid = None
-
-                def onselect(eclick, erelease):
-                    pass
 
                 def on_key(event):
                     if event.key == "enter":
@@ -1355,11 +1470,10 @@ class TwoDTabMixin:
                         if not is_visible:
                             return
                         extents = self._rect_selector.extents
-                        xmin, xmax, ymin, ymax = extents
-                        if abs(xmax - xmin) < 1e-5 or abs(ymax - ymin) < 1e-5:
+                        if not self._rect_span_ok(ax, extents):
                             return
+                        xmin, xmax, ymin, ymax = extents
 
-                        to_native = pm.twoD.plot.native_converter(self.twoD_dataset, settings=s)
                         x_nat = tuple(sorted(float(v) for v in to_native([xmin, xmax])))
                         y_nat = tuple(sorted(float(v) for v in to_native([ymin, ymax])))
                         if is_vertical:
@@ -1406,44 +1520,39 @@ class TwoDTabMixin:
                             self._plot_areas_kinetics(self._selected_areas)
                             self._twoD_rerender_preview()
 
-                selector_kwargs = dict(
-                    useblit=True, button=[1], minspanx=5, minspany=5, interactive=True
-                )
-                try:
-                    self._rect_selector = RectangleSelector(
-                        ax,
-                        onselect,
-                        props=dict(
-                            facecolor="orange", edgecolor="darkorange", alpha=0.3, fill=True
-                        ),
-                        **selector_kwargs,
-                    )
-                except TypeError:
-                    self._rect_selector = RectangleSelector(
-                        ax,
-                        onselect,
-                        rectprops=dict(
-                            facecolor="orange", edgecolor="darkorange", alpha=0.3, fill=True
-                        ),
-                        **selector_kwargs,
-                    )
-                self._rect_cid = self.twoDaxes.canvas.mpl_connect("key_press_event", on_key)
+                self._attach_twoD_rect_selector(ax, on_key)
                 self.twoDaxes.canvas.setFocus()
             else:
+                p_span = max(0.0, p_hi - p_lo)
+                pr_span = max(0.0, pr_hi - pr_lo)
+                ex_p_lo = p_lo + 0.35 * p_span
+                ex_p_hi = p_lo + 0.65 * p_span
+                ex_pr_lo = pr_lo + 0.35 * pr_span
+                ex_pr_hi = pr_lo + 0.65 * pr_span
+                ex = f"{ex_p_lo:.{dec}f}:{ex_p_hi:.{dec}f},{ex_pr_lo:.{dec}f}:{ex_pr_hi:.{dec}f}"
                 text, ok = QInputDialog.getText(
                     self,
                     "Area Integration ranges",
-                    "Enter ranges as pump_min:pump_max,probe_min:probe_max (semicolon-separated for multiple, e.g. 1640:1660,1640:1660):",
+                    f"Enter ranges in {u_plain} as pump_min:pump_max,probe_min:probe_max "
+                    f"(pump: {p_lo:.{dec}f} to {p_hi:.{dec}f}, probe: {pr_lo:.{dec}f} to {pr_hi:.{dec}f};\n"
+                    f"semicolon-separated for multiple, e.g. {ex}):",
                 )
                 if not ok or not text.strip():
                     return
                 try:
                     areas = []
                     for term in text.split(";"):
+                        term = term.strip()
+                        if not term:
+                            continue
                         p_str, pr_str = term.split(",")
-                        p_min, p_max = map(float, p_str.split(":"))
-                        pr_min, pr_max = map(float, pr_str.split(":"))
-                        areas.append(((p_min, p_max), (pr_min, pr_max)))
+                        p1, p2 = map(float, p_str.split(":"))
+                        pr1, pr2 = map(float, pr_str.split(":"))
+                        p_nat = tuple(sorted(float(v) for v in to_native([p1, p2])))
+                        pr_nat = tuple(sorted(float(v) for v in to_native([pr1, pr2])))
+                        areas.append((p_nat, pr_nat))
+                    if not areas:
+                        return
                     self._plot_areas_kinetics(areas)
                 except Exception as exc:
                     QMessageBox.warning(self, "Invalid Input", f"Error parsing input: {exc}")
@@ -1457,6 +1566,10 @@ class TwoDTabMixin:
 
         pm.apply_style()
         s = pm.get_settings()
+        meta = self._twoD_display_meta(s)
+        to_display = meta["to_display"]
+        unit_ltx = meta["unit_ltx"]
+        dec = meta["dec"]
 
         fig, ax = plt.subplots(figsize=s.kinetics_figsize)
 
@@ -1465,14 +1578,19 @@ class TwoDTabMixin:
 
         for i, (pump_wn, probe_wn) in enumerate(coords):
             slice_ds = self.twoD_dataset.get_slice_at_pump(pump_wn)
-            actual_pump = self.twoD_dataset.pump[
-                int(np.argmin(np.abs(self.twoD_dataset.pump - pump_wn)))
-            ]
-            actual_probe = self.twoD_dataset.probe[
-                int(np.argmin(np.abs(self.twoD_dataset.probe - probe_wn)))
-            ]
-
-            lbl = f"[{actual_pump:.1f}, {actual_probe:.1f}] cm$^{{-1}}$"
+            actual_pump = float(
+                self.twoD_dataset.pump[
+                    int(np.argmin(np.abs(self.twoD_dataset.pump - pump_wn)))
+                ]
+            )
+            actual_probe = float(
+                self.twoD_dataset.probe[
+                    int(np.argmin(np.abs(self.twoD_dataset.probe - probe_wn)))
+                ]
+            )
+            p_disp = float(to_display(actual_pump))
+            pr_disp = float(to_display(actual_probe))
+            lbl = f"[{p_disp:.{dec}f}, {pr_disp:.{dec}f}] {unit_ltx}"
 
             n_before = len(ax.get_lines())
             plot_kinetics(slice_ds, [probe_wn], ax=ax, fig=fig, normY=self._twoD_norm())
@@ -1497,6 +1615,10 @@ class TwoDTabMixin:
 
         pm.apply_style()
         s = pm.get_settings()
+        meta = self._twoD_display_meta(s)
+        to_display = meta["to_display"]
+        unit_ltx = meta["unit_ltx"]
+        dec = meta["dec"]
 
         fig, ax = plt.subplots(figsize=s.kinetics_figsize)
 
@@ -1540,10 +1662,14 @@ class TwoDTabMixin:
             n_before = len(ax.get_lines())
             plot_kinetics(slice_ds, dummy_probe, ax=ax, fig=fig, normY=self._twoD_norm())
 
+            p_d = sorted(float(v) for v in to_display([p_min, p_max]))
+            pr_d = sorted(float(v) for v in to_display([pr_min, pr_max]))
             # Post-process colour and label
             line = ax.get_lines()[n_before]
             line.set_color(cm[i])
-            line.set_label(f"Int. [{p_min:.1f}:{p_max:.1f}, {pr_min:.1f}:{pr_max:.1f}]")
+            line.set_label(
+                f"Int. [{p_d[0]:.{dec}f}:{p_d[1]:.{dec}f}, {pr_d[0]:.{dec}f}:{pr_d[1]:.{dec}f}] {unit_ltx}"
+            )
 
         ax.legend()
         fig.tight_layout()
@@ -1588,10 +1714,18 @@ class TwoDTabMixin:
         if ax is None:
             return
 
-        to_native = pm.twoD.plot.native_converter(self.twoD_dataset, settings=s)
-        to_display = pm.twoD.plot.display_converter(self.twoD_dataset, settings=s)
-        contour_xlim = tuple(float(v) for v in to_native(ax.get_xlim()))
-        contour_ylim = tuple(float(v) for v in to_native(ax.get_ylim()))
+        meta = self._twoD_display_meta(s)
+        to_native = meta["to_native"]
+        to_display = meta["to_display"]
+        unit_ltx = meta["unit_ltx"]
+        u_plain = meta["plain_unit"]
+        p_lo, p_hi = meta["pump_lim"]
+        pr_lo, pr_hi = meta["probe_lim"]
+        dec = meta["dec"]
+        t_unit_ltx = self._twoD_time_unit_ltx()
+
+        contour_xlim = tuple(sorted(float(v) for v in to_native(ax.get_xlim())))
+        contour_ylim = tuple(sorted(float(v) for v in to_native(ax.get_ylim())))
         contour_pump_lim = contour_ylim if is_vertical else contour_xlim
         contour_probe_lim = contour_xlim if is_vertical else contour_ylim
         dual_sec = self._twoD_dual_axis()
@@ -1631,7 +1765,7 @@ class TwoDTabMixin:
 
                 pumpAll, probeAll, pump_symbol, probe_symbol = self._get_twoD_axis_labels()
                 new_ax.set_xlabel(f"{pump_symbol} = {probe_symbol}")
-                new_ax.set_title(f"Diagonal at $t_2$ = {active_delay:.2f} ps")
+                new_ax.set_title(f"Diagonal at $t_2$ = {active_delay:.2f} {t_unit_ltx}")
                 new_ax.set_xlim(contour_pump_lim)
                 new_ax.legend()
                 fig.tight_layout()
@@ -1670,7 +1804,9 @@ class TwoDTabMixin:
 
                     pumpAll, probeAll, pump_symbol, probe_symbol = self._get_twoD_axis_labels()
                     new_ax.set_xlabel(f"{pump_symbol} ({probe_symbol} = {pump_symbol} {offset:+.1f})")
-                    new_ax.set_title(f"Off-diagonal Cut (offset={offset:+.1f} {nat_ltx}) at $t_2$ = {active_delay:.2f} ps")
+                    new_ax.set_title(
+                        f"Off-diagonal Cut (offset={offset:+.1f} {nat_ltx}) at $t_2$ = {active_delay:.2f} {t_unit_ltx}"
+                    )
                     new_ax.legend()
                     fig.tight_layout()
                     plt.show(block=False)
@@ -1678,17 +1814,19 @@ class TwoDTabMixin:
                     QMessageBox.warning(self, "Plot failed", str(exc))
 
         elif choice == "Anti-diagonal":
-            w1_mid = float(np.mean(self.twoD_dataset.pump))
-            w3_mid = float(np.mean(self.twoD_dataset.probe))
-            w1_val, ok1 = QInputDialog.getDouble(
-                self, "Anti-diagonal Centre", f"Centre pump ({nat_unit}):", w1_mid, float(np.min(self.twoD_dataset.pump)), float(np.max(self.twoD_dataset.pump)), 1
+            w1_mid_d = 0.5 * (p_lo + p_hi)
+            w3_mid_d = 0.5 * (pr_lo + pr_hi)
+            w1_disp, ok1 = QInputDialog.getDouble(
+                self, "Anti-diagonal Centre", f"Centre pump ({u_plain}):", w1_mid_d, p_lo, p_hi, dec
             )
             if ok1:
-                w3_val, ok2 = QInputDialog.getDouble(
-                    self, "Anti-diagonal Centre", f"Centre probe ({nat_unit}):", w3_mid, float(np.min(self.twoD_dataset.probe)), float(np.max(self.twoD_dataset.probe)), 1
+                w3_disp, ok2 = QInputDialog.getDouble(
+                    self, "Anti-diagonal Centre", f"Centre probe ({u_plain}):", w3_mid_d, pr_lo, pr_hi, dec
                 )
                 if ok2:
                     try:
+                        w1_val = float(to_native([w1_disp])[0])
+                        w3_val = float(to_native([w3_disp])[0])
                         rel_disp, signal = self.twoD_dataset.antidiagonal(centre=(w1_val, w3_val), t2=active_delay, method="cubic")
                         slice_ds = SliceDataset1D(
                             delays=[active_delay],
@@ -1717,7 +1855,9 @@ class TwoDTabMixin:
                             if nat_unit == "cm-1"
                             else f"Relative Displacement ({nat_ltx})"
                         )
-                        new_ax.set_title(f"Anti-diagonal Cut at ({w1_val:.1f}, {w3_val:.1f}) | $t_2$ = {active_delay:.2f} ps")
+                        new_ax.set_title(
+                            f"Anti-diagonal Cut at ({w1_disp:.{dec}f}, {w3_disp:.{dec}f}) {unit_ltx} | $t_2$ = {active_delay:.2f} {t_unit_ltx}"
+                        )
                         new_ax.legend()
                         fig.tight_layout()
                         plt.show(block=False)
@@ -1725,17 +1865,19 @@ class TwoDTabMixin:
                         QMessageBox.warning(self, "Plot failed", str(exc))
 
         elif choice == "Combined Diagonal + Anti-diagonal (Normalised)":
-            w1_mid = float(np.mean(self.twoD_dataset.pump))
-            w3_mid = float(np.mean(self.twoD_dataset.probe))
-            w1_val, ok1 = QInputDialog.getDouble(
-                self, "Cut Centre", "Centre pump wavenumber w1 (cm⁻¹):", w1_mid, float(np.min(self.twoD_dataset.pump)), float(np.max(self.twoD_dataset.pump)), 1
+            w1_mid_d = 0.5 * (p_lo + p_hi)
+            w3_mid_d = 0.5 * (pr_lo + pr_hi)
+            w1_disp, ok1 = QInputDialog.getDouble(
+                self, "Cut Centre", f"Centre pump ({u_plain}):", w1_mid_d, p_lo, p_hi, dec
             )
             if ok1:
-                w3_val, ok2 = QInputDialog.getDouble(
-                    self, "Cut Centre", "Centre probe wavenumber w3 (cm⁻¹):", w3_mid, float(np.min(self.twoD_dataset.probe)), float(np.max(self.twoD_dataset.probe)), 1
+                w3_disp, ok2 = QInputDialog.getDouble(
+                    self, "Cut Centre", f"Centre probe ({u_plain}):", w3_mid_d, pr_lo, pr_hi, dec
                 )
                 if ok2:
                     try:
+                        w1_val = float(to_native([w1_disp])[0])
+                        w3_val = float(to_native([w3_disp])[0])
                         rel_disp, norm_diag, norm_antidiag = self.twoD_dataset.compare_diag_antidiag(centre=(w1_val, w3_val), t2=active_delay, method="cubic")
 
                         fig, new_ax = plt.subplots(figsize=(7.5, 4.5))
@@ -1748,7 +1890,9 @@ class TwoDTabMixin:
                             else f"Relative Displacement ({nat_ltx})"
                         )
                         new_ax.set_ylabel("Normalised Intensity (max = 1.0)")
-                        new_ax.set_title(f"Combined Diagonal & Anti-diagonal Profiles at ({w1_val:.1f}, {w3_val:.1f}) | $t_2$ = {active_delay:.2f} ps")
+                        new_ax.set_title(
+                            f"Combined Diagonal & Anti-diagonal Profiles at ({w1_disp:.{dec}f}, {w3_disp:.{dec}f}) {unit_ltx} | $t_2$ = {active_delay:.2f} {t_unit_ltx}"
+                        )
                         new_ax.grid(True, linestyle=":", alpha=0.6)
                         new_ax.legend(loc="best")
 
@@ -1772,7 +1916,7 @@ class TwoDTabMixin:
         elif choice == "Along fixed pump WN":
             if self._twoD_interactive():
                 self.statusBar().showMessage(
-                    "Interactive slice: click a pump wavenumber on the plot."
+                    f"Interactive slice: click a pump position ({u_plain}) on the plot."
                 )
 
                 def done(points):
@@ -1780,12 +1924,7 @@ class TwoDTabMixin:
                     if not points:
                         return
                     pump_wn = float(to_native([points[0]])[0])
-                    t2_delays = self._ask_values(
-                        "Transient spectra slices",
-                        "Delays to plot (comma-separated or range e.g. 1:0.1:5, 'all'):",
-                        [active_delay],
-                        all_values=self.twoD_dataset.delays,
-                    )
+                    t2_delays = self._ask_twoD_delays(active_delay)
                     if t2_delays:
                         self._plot_pump_slice(pump_wn, t2_delays, contour_probe_lim)
 
@@ -1794,27 +1933,22 @@ class TwoDTabMixin:
             else:
                 val, ok = QInputDialog.getDouble(
                     self,
-                    "Pump wavenumber",
-                    "Enter pump wavenumber (cm⁻¹):",
-                    float(np.mean(self.twoD_dataset.pump)),
-                    float(self.twoD_dataset.pump[0]),
-                    float(self.twoD_dataset.pump[-1]),
-                    1,
+                    "Pump position",
+                    f"Enter pump ({u_plain}, {p_lo:.{dec}f} to {p_hi:.{dec}f}):",
+                    0.5 * (p_lo + p_hi),
+                    p_lo,
+                    p_hi,
+                    dec,
                 )
                 if ok:
-                    t2_delays = self._ask_values(
-                        "Transient spectra slices",
-                        "Delays to plot (comma-separated or range e.g. 1:0.1:5, 'all'):",
-                        [active_delay],
-                        all_values=self.twoD_dataset.delays,
-                    )
+                    t2_delays = self._ask_twoD_delays(active_delay)
                     if t2_delays:
-                        self._plot_pump_slice(val, t2_delays, contour_probe_lim)
+                        self._plot_pump_slice(float(to_native([val])[0]), t2_delays, contour_probe_lim)
 
         elif choice == "Along fixed probe WN":
             if self._twoD_interactive():
                 self.statusBar().showMessage(
-                    "Interactive slice: click a probe wavenumber on the plot."
+                    f"Interactive slice: click a probe position ({u_plain}) on the plot."
                 )
 
                 def done(points):
@@ -1822,12 +1956,7 @@ class TwoDTabMixin:
                     if not points:
                         return
                     probe_wn = float(to_native([points[0]])[0])
-                    t2_delays = self._ask_values(
-                        "Transient spectra slices",
-                        "Delays to plot (comma-separated or range e.g. 1:0.1:5, 'all'):",
-                        [active_delay],
-                        all_values=self.twoD_dataset.delays,
-                    )
+                    t2_delays = self._ask_twoD_delays(active_delay)
                     if t2_delays:
                         self._plot_probe_slice(probe_wn, t2_delays, contour_pump_lim)
 
@@ -1836,34 +1965,24 @@ class TwoDTabMixin:
             else:
                 val, ok = QInputDialog.getDouble(
                     self,
-                    "Probe wavenumber",
-                    "Enter probe wavenumber (cm⁻¹):",
-                    float(np.mean(self.twoD_dataset.probe)),
-                    float(self.twoD_dataset.probe[0]),
-                    float(self.twoD_dataset.probe[-1]),
-                    1,
+                    "Probe position",
+                    f"Enter probe ({u_plain}, {pr_lo:.{dec}f} to {pr_hi:.{dec}f}):",
+                    0.5 * (pr_lo + pr_hi),
+                    pr_lo,
+                    pr_hi,
+                    dec,
                 )
                 if ok:
-                    t2_delays = self._ask_values(
-                        "Transient spectra slices",
-                        "Delays to plot (comma-separated or range e.g. 1:0.1:5, 'all'):",
-                        [active_delay],
-                        all_values=self.twoD_dataset.delays,
-                    )
+                    t2_delays = self._ask_twoD_delays(active_delay)
                     if t2_delays:
-                        self._plot_probe_slice(val, t2_delays, contour_pump_lim)
+                        self._plot_probe_slice(float(to_native([val])[0]), t2_delays, contour_pump_lim)
 
         elif choice == "Integrate along pump axis":
             if self._twoD_interactive():
-                from matplotlib.widgets import RectangleSelector
-
                 self.statusBar().showMessage(
-                    "Draw a rectangle to specify the pump integration range. Press ENTER to confirm."
+                    f"Draw a rectangle to specify the pump integration range ({u_plain}). Press ENTER to confirm."
                 )
                 self._rect_cid = None
-
-                def onselect(eclick, erelease):
-                    pass
 
                 def on_key(event):
                     if event.key == "enter":
@@ -1873,9 +1992,9 @@ class TwoDTabMixin:
                         if not is_visible:
                             return
                         extents = self._rect_selector.extents
-                        xmin, xmax, ymin, ymax = extents
-                        if abs(xmax - xmin) < 1e-5 or abs(ymax - ymin) < 1e-5:
+                        if not self._rect_span_ok(ax, extents):
                             return
+                        xmin, xmax, ymin, ymax = extents
 
                         raw_pump = (ymin, ymax) if is_vertical else (xmin, xmax)
                         pump_range = tuple(sorted(float(v) for v in to_native(raw_pump)))
@@ -1887,57 +2006,33 @@ class TwoDTabMixin:
                         self._rect_selector = None
                         self.statusBar().clearMessage()
 
-                        t2_delays = self._ask_values(
-                            "Transient spectra slices",
-                            "Delays to plot (comma-separated or range e.g. 1:0.1:5, 'all'):",
-                            [active_delay],
-                            all_values=self.twoD_dataset.delays,
-                        )
+                        t2_delays = self._ask_twoD_delays(active_delay)
                         if t2_delays:
                             self._plot_integrate_pump_slice(
                                 pump_range, t2_delays, contour_probe_lim
                             )
                         self._twoD_rerender_preview()
 
-                selector_kwargs = dict(
-                    useblit=True, button=[1], minspanx=5, minspany=5, interactive=True
-                )
-                try:
-                    self._rect_selector = RectangleSelector(
-                        ax,
-                        onselect,
-                        props=dict(
-                            facecolor="orange", edgecolor="darkorange", alpha=0.3, fill=True
-                        ),
-                        **selector_kwargs,
-                    )
-                except TypeError:
-                    self._rect_selector = RectangleSelector(
-                        ax,
-                        onselect,
-                        rectprops=dict(
-                            facecolor="orange", edgecolor="darkorange", alpha=0.3, fill=True
-                        ),
-                        **selector_kwargs,
-                    )
-                self._rect_cid = self.twoDaxes.canvas.mpl_connect("key_press_event", on_key)
+                self._attach_twoD_rect_selector(ax, on_key)
                 self.twoDaxes.canvas.setFocus()
             else:
+                p_span = max(0.0, p_hi - p_lo)
+                ex_lo = p_lo + 0.35 * p_span
+                ex_hi = p_lo + 0.65 * p_span
                 text, ok = QInputDialog.getText(
-                    self, "Pump Integration range", "Enter pump range as min:max (e.g. 1640:1660):"
+                    self,
+                    "Pump Integration range",
+                    f"Enter pump range in {u_plain} as min:max "
+                    f"({p_lo:.{dec}f} to {p_hi:.{dec}f}, e.g. {ex_lo:.{dec}f}:{ex_hi:.{dec}f}):",
                 )
                 if ok and ":" in text:
                     try:
-                        p_min, p_max = map(float, text.split(":"))
-                        t2_delays = self._ask_values(
-                            "Transient spectra slices",
-                            "Delays to plot (comma-separated or range e.g. 1:0.1:5, 'all'):",
-                            [active_delay],
-                            all_values=self.twoD_dataset.delays,
-                        )
+                        p1, p2 = map(float, text.split(":"))
+                        pump_range = tuple(sorted(float(v) for v in to_native([p1, p2])))
+                        t2_delays = self._ask_twoD_delays(active_delay)
                         if t2_delays:
                             self._plot_integrate_pump_slice(
-                                (p_min, p_max), t2_delays, contour_probe_lim
+                                pump_range, t2_delays, contour_probe_lim
                             )
                     except ValueError:
                         logger.debug(
@@ -1946,15 +2041,10 @@ class TwoDTabMixin:
 
         elif choice == "Integrate along probe axis":
             if self._twoD_interactive():
-                from matplotlib.widgets import RectangleSelector
-
                 self.statusBar().showMessage(
-                    "Draw a rectangle to specify the probe integration range. Press ENTER to confirm."
+                    f"Draw a rectangle to specify the probe integration range ({u_plain}). Press ENTER to confirm."
                 )
                 self._rect_cid = None
-
-                def onselect(eclick, erelease):
-                    pass
 
                 def on_key(event):
                     if event.key == "enter":
@@ -1964,9 +2054,9 @@ class TwoDTabMixin:
                         if not is_visible:
                             return
                         extents = self._rect_selector.extents
-                        xmin, xmax, ymin, ymax = extents
-                        if abs(xmax - xmin) < 1e-5 or abs(ymax - ymin) < 1e-5:
+                        if not self._rect_span_ok(ax, extents):
                             return
+                        xmin, xmax, ymin, ymax = extents
 
                         raw_probe = (xmin, xmax) if is_vertical else (ymin, ymax)
                         probe_range = tuple(sorted(float(v) for v in to_native(raw_probe)))
@@ -1978,59 +2068,33 @@ class TwoDTabMixin:
                         self._rect_selector = None
                         self.statusBar().clearMessage()
 
-                        t2_delays = self._ask_values(
-                            "Transient spectra slices",
-                            "Delays to plot (comma-separated or range e.g. 1:0.1:5, 'all'):",
-                            [active_delay],
-                            all_values=self.twoD_dataset.delays,
-                        )
+                        t2_delays = self._ask_twoD_delays(active_delay)
                         if t2_delays:
                             self._plot_integrate_probe_slice(
                                 probe_range, t2_delays, contour_pump_lim
                             )
                         self._twoD_rerender_preview()
 
-                selector_kwargs = dict(
-                    useblit=True, button=[1], minspanx=5, minspany=5, interactive=True
-                )
-                try:
-                    self._rect_selector = RectangleSelector(
-                        ax,
-                        onselect,
-                        props=dict(
-                            facecolor="orange", edgecolor="darkorange", alpha=0.3, fill=True
-                        ),
-                        **selector_kwargs,
-                    )
-                except TypeError:
-                    self._rect_selector = RectangleSelector(
-                        ax,
-                        onselect,
-                        rectprops=dict(
-                            facecolor="orange", edgecolor="darkorange", alpha=0.3, fill=True
-                        ),
-                        **selector_kwargs,
-                    )
-                self._rect_cid = self.twoDaxes.canvas.mpl_connect("key_press_event", on_key)
+                self._attach_twoD_rect_selector(ax, on_key)
                 self.twoDaxes.canvas.setFocus()
             else:
+                pr_span = max(0.0, pr_hi - pr_lo)
+                ex_lo = pr_lo + 0.35 * pr_span
+                ex_hi = pr_lo + 0.65 * pr_span
                 text, ok = QInputDialog.getText(
                     self,
                     "Probe Integration range",
-                    "Enter probe range as min:max (e.g. 1640:1660):",
+                    f"Enter probe range in {u_plain} as min:max "
+                    f"({pr_lo:.{dec}f} to {pr_hi:.{dec}f}, e.g. {ex_lo:.{dec}f}:{ex_hi:.{dec}f}):",
                 )
                 if ok and ":" in text:
                     try:
-                        pr_min, pr_max = map(float, text.split(":"))
-                        t2_delays = self._ask_values(
-                            "Transient spectra slices",
-                            "Delays to plot (comma-separated or range e.g. 1:0.1:5, 'all'):",
-                            [active_delay],
-                            all_values=self.twoD_dataset.delays,
-                        )
+                        pr1, pr2 = map(float, text.split(":"))
+                        probe_range = tuple(sorted(float(v) for v in to_native([pr1, pr2])))
+                        t2_delays = self._ask_twoD_delays(active_delay)
                         if t2_delays:
                             self._plot_integrate_probe_slice(
-                                (pr_min, pr_max), t2_delays, contour_pump_lim
+                                probe_range, t2_delays, contour_pump_lim
                             )
                     except ValueError:
                         logger.debug(
@@ -2040,7 +2104,7 @@ class TwoDTabMixin:
         elif choice == "Along several pump WN":
             if self._twoD_interactive():
                 self.statusBar().showMessage(
-                    "Interactive slice: left-click to pick pump wavenumbers, right-click to undo, Enter to plot."
+                    f"Interactive slice: left-click to pick pump positions ({u_plain}), right-click to undo, Enter to plot."
                 )
 
                 def done(points):
@@ -2054,17 +2118,19 @@ class TwoDTabMixin:
                 self._picker = ContourPicker(self.twoDaxes.canvas, ax, picker_axis, done).start()
             else:
                 vals = self._ask_values(
-                    "Pump wavenumbers",
-                    "Enter pump wavenumbers (comma-separated):",
-                    [float(np.mean(self.twoD_dataset.pump))],
+                    "Pump positions",
+                    f"Enter pump positions in {u_plain} ({p_lo:.{dec}f} to {p_hi:.{dec}f}, comma-separated):",
+                    [round(0.5 * (p_lo + p_hi), dec)],
+                    all_values=meta["pump_disp"],
                 )
                 if vals:
-                    self._plot_several_pump_slices(vals, active_delay, contour_probe_lim)
+                    vals_nat = [float(v) for v in to_native(vals)]
+                    self._plot_several_pump_slices(vals_nat, active_delay, contour_probe_lim)
 
         elif choice == "Along several probe WN":
             if self._twoD_interactive():
                 self.statusBar().showMessage(
-                    "Interactive slice: left-click to pick probe wavenumbers, right-click to undo, Enter to plot."
+                    f"Interactive slice: left-click to pick probe positions ({u_plain}), right-click to undo, Enter to plot."
                 )
 
                 def done(points):
@@ -2078,12 +2144,14 @@ class TwoDTabMixin:
                 self._picker = ContourPicker(self.twoDaxes.canvas, ax, picker_axis, done).start()
             else:
                 vals = self._ask_values(
-                    "Probe wavenumbers",
-                    "Enter probe wavenumbers (comma-separated):",
-                    [float(np.mean(self.twoD_dataset.probe))],
+                    "Probe positions",
+                    f"Enter probe positions in {u_plain} ({pr_lo:.{dec}f} to {pr_hi:.{dec}f}, comma-separated):",
+                    [round(0.5 * (pr_lo + pr_hi), dec)],
+                    all_values=meta["probe_disp"],
                 )
                 if vals:
-                    self._plot_several_probe_slices(vals, active_delay, contour_pump_lim)
+                    vals_nat = [float(v) for v in to_native(vals)]
+                    self._plot_several_probe_slices(vals_nat, active_delay, contour_pump_lim)
 
     def _twoD_native_unit(self) -> tuple[str, str]:
         """Return ``(unit_token, latex_label)`` for ``self.twoD_dataset``'s native spectral axis."""
@@ -2293,7 +2361,7 @@ class TwoDTabMixin:
             labels.append(lbl)
 
         ax.set_xlabel(probeAll)
-        ax.set_title(f"{pump_symbol} slices at $t_2$ = {t2:.2f} ps")
+        ax.set_title(f"{pump_symbol} slices at $t_2$ = {t2:.2f} {self._twoD_time_unit_ltx()}")
         ax.set_xlim(xlim)
 
         leg = ax.legend(
@@ -2347,7 +2415,7 @@ class TwoDTabMixin:
             labels.append(lbl)
 
         ax.set_xlabel(pumpAll)
-        ax.set_title(f"{probe_symbol} slices at $t_2$ = {t2:.2f} ps")
+        ax.set_title(f"{probe_symbol} slices at $t_2$ = {t2:.2f} {self._twoD_time_unit_ltx()}")
         ax.set_xlim(xlim)
 
         leg = ax.legend(
@@ -2983,17 +3051,19 @@ class TwoDTabMixin:
         if ax is None:
             return
 
-        if self._twoD_interactive():
-            from matplotlib.widgets import RectangleSelector
+        meta = self._twoD_display_meta(s)
+        to_native = meta["to_native"]
+        u_plain = meta["plain_unit"]
+        p_lo, p_hi = meta["pump_lim"]
+        pr_lo, pr_hi = meta["probe_lim"]
+        dec = meta["dec"]
 
+        if self._twoD_interactive():
             self._cancel_roi_selector()  # a previous request may still be armed
             self.statusBar().showMessage(
-                "Draw a rectangle on the contour plot to define the analysis region. Press ENTER to confirm."
+                f"Draw a rectangle on the contour plot ({u_plain}) to define the analysis region. Press ENTER to confirm."
             )
             self._rect_cid = None
-
-            def onselect(eclick, erelease):
-                pass
 
             def on_key(event):
                 if event.key == "enter":
@@ -3001,14 +3071,13 @@ class TwoDTabMixin:
                     if self._rect_selector is not None and getattr(self._rect_selector, "visible", True):
                         try:
                             extents = self._rect_selector.extents
-                            xmin, xmax, ymin, ymax = extents
-                            if abs(xmax - xmin) > 1e-5 and abs(ymax - ymin) > 1e-5:
+                            if self._rect_span_ok(ax, extents):
+                                xmin, xmax, ymin, ymax = extents
                                 has_drawn_rect = True
                         except Exception:
                             pass
 
                     if has_drawn_rect:
-                        to_native = pm.twoD.plot.native_converter(self.twoD_dataset, settings=s)
                         x_nat = tuple(sorted(float(v) for v in to_native([xmin, xmax])))
                         y_nat = tuple(sorted(float(v) for v in to_native([ymin, ymax])))
                         if is_vertical:
@@ -3019,7 +3088,6 @@ class TwoDTabMixin:
                             probe_range = y_nat
                     else:
                         # Default to current view limits of the 2D plot axis
-                        to_native = pm.twoD.plot.native_converter(self.twoD_dataset, settings=s)
                         x_nat = tuple(sorted(float(v) for v in to_native(ax.get_xlim())))
                         y_nat = tuple(sorted(float(v) for v in to_native(ax.get_ylim())))
 
@@ -3040,26 +3108,7 @@ class TwoDTabMixin:
 
                     self._run_analysis_with_roi(pump_range, probe_range)
 
-            selector_kwargs = dict(
-                useblit=True, button=[1], minspanx=5, minspany=5, interactive=True
-            )
-            try:
-                self._rect_selector = RectangleSelector(
-                    ax,
-                    onselect,
-                    props=dict(facecolor="orange", edgecolor="darkorange", alpha=0.3, fill=True),
-                    **selector_kwargs,
-                )
-            except TypeError:
-                self._rect_selector = RectangleSelector(
-                    ax,
-                    onselect,
-                    rectprops=dict(
-                        facecolor="orange", edgecolor="darkorange", alpha=0.3, fill=True
-                    ),
-                    **selector_kwargs,
-                )
-            self._rect_cid = self.twoDaxes.canvas.mpl_connect("key_press_event", on_key)
+            self._attach_twoD_rect_selector(ax, on_key)
             # Focus has to be given once the caller has returned: a slot running
             # under ``busy_guard`` has the tab widget disabled, and a disabled
             # parent silently rejects setFocus(), which would leave ENTER dead.
@@ -3068,7 +3117,9 @@ class TwoDTabMixin:
             text, ok = QInputDialog.getText(
                 self,
                 "Analysis region",
-                "Enter analysis region as pump_min:pump_max,probe_min:probe_max (leave empty for entire range):",
+                f"Enter analysis region in {u_plain} as pump_min:pump_max,probe_min:probe_max "
+                f"(pump: {p_lo:.{dec}f} to {p_hi:.{dec}f}, probe: {pr_lo:.{dec}f} to {pr_hi:.{dec}f}; "
+                "leave empty for entire range):",
             )
             if not ok:
                 return
@@ -3077,10 +3128,10 @@ class TwoDTabMixin:
             if text.strip():
                 try:
                     p_part, pr_part = text.split(",")
-                    p_min, p_max = map(float, p_part.split(":"))
-                    pr_min, pr_max = map(float, pr_part.split(":"))
-                    pump_range = (p_min, p_max)
-                    probe_range = (pr_min, pr_max)
+                    p1, p2 = map(float, p_part.split(":"))
+                    pr1, pr2 = map(float, pr_part.split(":"))
+                    pump_range = tuple(sorted(float(v) for v in to_native([p1, p2])))
+                    probe_range = tuple(sorted(float(v) for v in to_native([pr1, pr2])))
                 except Exception as exc:
                     QMessageBox.warning(self, "Invalid Input", f"Error parsing ranges: {exc}")
                     return
