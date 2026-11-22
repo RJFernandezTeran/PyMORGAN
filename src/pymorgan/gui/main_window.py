@@ -1563,7 +1563,7 @@ class MainWindow(
         # Set gap spacing in selectors layout
         selectors_layout = getattr(self, "twoD_selectors_layout", None)
         if selectors_layout is not None:
-            selectors_layout.setSpacing(15)
+            selectors_layout.setSpacing(6)
 
         # Wire "Apply and reprocess" button and live shot-rotation spinner in Phasing/FT sub-tab
         self._connect("twoD_apply_reprocess_btn", self.twoD_reprocess_data)

@@ -2197,4 +2197,40 @@ def test_sample_info_visibility_and_popup_dialogs(qapp, tmp_path, monkeypatch):
         win.close()
 
 
+def test_twoD_file_explorer_size_and_tooltips(qapp, tmp_path):
+    """2D dataset browser provides ample width/height for long filenames plus hover tooltips."""
+    from pymorgan.gui.mw_common import set_combo_datatype
+
+    subdir = tmp_path / "very_long_subfolder_name_for_two_dimensional_measurements"
+    subdir.mkdir()
+    long_name = "IrHCOP3_DCM_OTTLE_+700mV_2DIR_20k64_PROCESSED_DET1_very_long_name.p2dat"
+    p2_info = synthetic.make_synthetic_p2dat(tmp_path / long_name)
+
+    win = MainWindow(init_rootdir=False)
+    try:
+        win.show()
+        win.MainTabs.setCurrentIndex(1)
+        set_combo_datatype(win.twoD_datatype_cbx, "P2DAT")
+        win.RootDir_field.setText(str(tmp_path))
+        win._on_rootdir_changed()
+        win.twoD_load_path(str(p2_info["path"]), data_type="P2DAT")
+        qapp.processEvents()
+
+        assert win.twoD_datagrp.width() >= 420
+        assert win.twoD_datagrp.height() >= 240
+        assert win.twoD_datafolderlist_lst.width() >= 320
+        assert win.twoD_datafolderlist_lst.height() >= 150
+
+        model = win._twoD_folder_model
+        labels_tips = {
+            model.item(row).text(): model.item(row).toolTip()
+            for row in range(model.rowCount())
+        }
+        assert labels_tips[long_name] == long_name
+        assert labels_tips[f"[{subdir.name}]"] == f"[{subdir.name}]"
+    finally:
+        win.close()
+
+
+
 

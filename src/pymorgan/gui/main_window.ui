@@ -2081,7 +2081,7 @@ The magnitude sets the smoothing window width.</string>
          <number>6</number>
         </property>
         <item>
-         <layout class="QVBoxLayout" name="twoDLeftColumn">
+         <layout class="QVBoxLayout" name="twoDLeftColumn" stretch="4,0,0,1,0">
           <property name="spacing">
            <number>6</number>
           </property>
@@ -2097,8 +2097,26 @@ The magnitude sets the smoothing window width.</string>
           <property name="bottomMargin">
            <number>0</number>
           </property>
-          <item stretch="3">
+          <item>
            <widget class="QGroupBox" name="twoD_datagrp">
+            <property name="sizePolicy">
+             <sizepolicy hsizetype="Preferred" vsizetype="Expanding">
+              <horstretch>0</horstretch>
+              <verstretch>0</verstretch>
+             </sizepolicy>
+            </property>
+            <property name="minimumSize">
+             <size>
+              <width>420</width>
+              <height>250</height>
+             </size>
+            </property>
+            <property name="maximumSize">
+             <size>
+              <width>460</width>
+              <height>16777215</height>
+             </size>
+            </property>
             <property name="styleSheet">
              <string notr="true">font: bold</string>
             </property>
@@ -2221,24 +2239,35 @@ The magnitude sets the smoothing window width.</string>
                    <property name="styleSheet">
                     <string notr="true">font: normal</string>
                    </property>
-                  <property name="maximumSize"><size><width>80</width><height>16777215</height></size></property></widget>
+                  <property name="maximumSize">
+                   <size>
+                    <width>76</width>
+                    <height>16777215</height>
+                   </size>
+                  </property>
+                 </widget>
                  </item>
                 </layout>
                </item>
               </layout>
              </item>
             </layout>
-           <property name="maximumSize"><size><width>290</width><height>16777215</height></size></property></widget>
-          </item>
-          <item stretch="1">
-           <widget class="QTabWidget" name="twoD_subtabs">
-            <property name="sizePolicy">
-             <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
-              <horstretch>0</horstretch>
-              <verstretch>1</verstretch>
-             </sizepolicy>
-            </property>
-            <property name="maximumSize"><size><width>16777215</width><height>400</height></size></property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QTabWidget" name="twoD_subtabs">
+             <property name="sizePolicy">
+              <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
+               <horstretch>0</horstretch>
+               <verstretch>1</verstretch>
+              </sizepolicy>
+             </property>
+             <property name="maximumSize">
+              <size>
+               <width>460</width>
+               <height>310</height>
+              </size>
+             </property>
             <property name="currentIndex">
              <number>0</number>
             </property>
@@ -2771,10 +2800,10 @@ The magnitude sets the smoothing window width.</string>
                </item>
               </layout>
              </widget>
-           <property name="maximumSize"><size><width>290</width><height>16777215</height></size></property></widget>
-          </item>
-          <item>
-           <widget class="QGroupBox" name="twoD_analysis_grp">
+            </widget>
+           </item>
+           <item>
+            <widget class="QGroupBox" name="twoD_analysis_grp">
             <property name="styleSheet">
              <string notr="true">font: bold; color: #4a148c;</string>
             </property>
@@ -2858,10 +2887,22 @@ The magnitude sets the smoothing window width.</string>
               </widget>
              </item>
             </layout>
-           <property name="maximumSize"><size><width>290</width><height>16777215</height></size></property></widget>
+           <property name="maximumSize"><size><width>460</width><height>16777215</height></size></property></widget>
           </item>
           <item>
            <widget class="QTextEdit" name="twoD_SampleInfo_text">
+            <property name="minimumSize">
+             <size>
+              <width>0</width>
+              <height>60</height>
+             </size>
+            </property>
+            <property name="maximumSize">
+             <size>
+              <width>460</width>
+              <height>100</height>
+             </size>
+            </property>
             <property name="styleSheet">
              <string notr="true" />
             </property>
@@ -2876,13 +2917,13 @@ The magnitude sets the smoothing window width.</string>
 &lt;html&gt;&lt;head&gt;&lt;meta name=&quot;qrichtext&quot; content=&quot;1&quot; /&gt;&lt;/head&gt;&lt;body&gt;
 &lt;p&gt;No additional sample info available.&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
             </property>
-           <property name="maximumSize"><size><width>290</width><height>16777215</height></size></property></widget>
+           </widget>
           </item>
           <item>
            <widget class="QWidget" name="twoD_sampleInfo_bar" native="true">
             <property name="maximumSize">
              <size>
-              <width>290</width>
+              <width>460</width>
               <height>16777215</height>
              </size>
             </property>

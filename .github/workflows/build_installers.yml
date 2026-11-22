@@ -153,13 +153,37 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout PyMORGAN
+        uses: actions/checkout@v4
+
       - name: Download all built artifacts
         uses: actions/download-artifact@v4
         with:
           path: release_artifacts
           merge-multiple: true
 
-      - name: Create GitHub Release
+      - name: Check for custom release notes
+        id: notes
+        shell: bash
+        run: |
+          notes_file="docs/release_notes/${GITHUB_REF_NAME}.md"
+          if [ -f "$notes_file" ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "path=$notes_file" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub Release (with release notes)
+        if: steps.notes.outputs.exists == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release_artifacts/*
+          body_path: ${{ steps.notes.outputs.path }}
+          generate_release_notes: false
+
+      - name: Create GitHub Release (auto-generated notes)
+        if: steps.notes.outputs.exists != 'true'
         uses: softprops/action-gh-release@v2
         with:
           files: release_artifacts/*

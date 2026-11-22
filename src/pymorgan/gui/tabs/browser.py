@@ -227,6 +227,7 @@ class DatasetBrowserMixin:
     def _add_dir_item(self, label: str, path: Path, model=None):
         """Append a navigable folder row, shown as ``[label]``."""
         item = QStandardItem(f"[{label}]")
+        item.setToolTip(f"[{label}]")
         item.setForeground(QBrush(QColor(150, 150, 150)))
         item.setData(str(path), _PATH_ROLE)
         item.setData(True, _ISDIR_ROLE)
@@ -236,6 +237,7 @@ class DatasetBrowserMixin:
     def _add_dataset_item(self, label: str, path: Path, model=None, is_valid: bool = True):
         """Append a loadable dataset row (loads on selection). If not valid, shown grayed out."""
         item = QStandardItem(label)
+        item.setToolTip(label)
         item.setData(str(path), _PATH_ROLE)
         item.setEditable(False)
         if not is_valid:
