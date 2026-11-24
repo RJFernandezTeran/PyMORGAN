@@ -17,7 +17,7 @@ import re
 from pathlib import Path
 
 import numpy as np
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import (
     QAction,
     QActionGroup,
@@ -54,6 +54,7 @@ from pymorgan.oneD.load import (
     parse_scan_selection,
 )
 
+from ...log import get_logger
 from ..busy import busy_guard
 from ..mw_common import (
     _DEFAULT_SPEC_DELAYS,
@@ -61,6 +62,22 @@ from ..mw_common import (
     _safe_set_limits,
     delay_prompt_info,
     get_combo_datatype,
+)
+
+logger = get_logger(__name__)
+
+_ALREADY_CORRECTED_DATA_TYPES = frozenset(
+    {
+        "PDAT",
+        "SVD-recomposed",
+        "Wavelength-Stitched",
+        "Timescale-Stitched",
+        "Anisotropy",
+        "Magic_Angle",
+        "Polarization_Diff",
+        "Parallel",
+        "Perpendicular",
+    }
 )
 
 
@@ -179,6 +196,8 @@ class OneDTabMixin:
         ):
             return
         meta = describe_dataset(dt, path)
+        if hasattr(self, "_cancel_1d_box_crop"):
+            self._cancel_1d_box_crop()
         if reset_selection:
             self._reset_state_selection()
         kwargs = {}
@@ -241,6 +260,7 @@ class OneDTabMixin:
             "actionStitchTimescale",
             "actionSendToPyRATE",
             "actionShiftT0",
+            "actionCropDataset",
             "actionFitChirp",
             "actionLoadChirpCorr",
             "actionAdvancedScatterRemoval",
@@ -770,7 +790,7 @@ class OneDTabMixin:
         sub = getattr(self, "PP_SubtactBkg_chk", None)
         if sub is not None:
             sub.blockSignals(True)
-            sub.setChecked(self.dataset.data_type != "PDAT")
+            sub.setChecked(self.dataset.data_type not in _ALREADY_CORRECTED_DATA_TYPES)
             sub.blockSignals(False)
         if hasattr(self, "_update_adv_scatter_btn_style"):
             self._update_adv_scatter_btn_style()
@@ -1482,28 +1502,34 @@ class OneDTabMixin:
         """Apply the chosen ScatterRemovalResult to the active workspace."""
         if self.dataset is None:
             return
-        self.dataset.apply_scatter_removal(result)
+        try:
+            self.dataset.apply_scatter_removal(result)
 
-        sub = getattr(self, "PP_SubtactBkg_chk", None)
-        if sub is not None and not sub.isChecked():
-            sub.blockSignals(True)
-            sub.setChecked(True)
-            sub.blockSignals(False)
+            sub = getattr(self, "PP_SubtactBkg_chk", None)
+            if sub is not None and not sub.isChecked():
+                sub.blockSignals(True)
+                sub.setChecked(True)
+                sub.blockSignals(False)
 
-        if hasattr(self, "_update_adv_scatter_btn_style"):
-            self._update_adv_scatter_btn_style()
-        if getattr(self, "plot_controls", None) is not None:
-            self.plot_controls.set_dataset(self.dataset)
-        self._preview_contour()
-        self._update_sample_info()
+            if hasattr(self, "_update_adv_scatter_btn_style"):
+                self._update_adv_scatter_btn_style()
+            if getattr(self, "plot_controls", None) is not None:
+                self.plot_controls.set_dataset(self.dataset)
+            self._preview_contour()
+            self._update_sample_info()
 
-        n_enabled = sum(1 for b in result.bands if b.enabled)
-        method = result.params.get("method", "local_svd")
-        per_scan_txt = "per-scan" if result.metrics.get("used_per_scan") else "averaged"
-        self.statusBar().showMessage(
-            f"Applied advanced scatter removal ({method}, {n_enabled} band(s), {per_scan_txt})"
-        )
-        self._notify_oneD_history_changed(dirty=True)
+            n_enabled = sum(1 for b in result.bands if b.enabled)
+            method = result.params.get("method", "local_svd")
+            per_scan_txt = "per-scan" if result.metrics.get("used_per_scan") else "averaged"
+            self.statusBar().showMessage(
+                f"Applied advanced scatter removal ({method}, {n_enabled} band(s), {per_scan_txt})"
+            )
+            self._notify_oneD_history_changed(dirty=True)
+        except Exception as exc:
+            logger.exception("Failed to apply scatter removal: %s", exc)
+            QMessageBox.critical(
+                self, "Scatter Removal Failed", f"Could not apply scatter removal:\n{exc}"
+            )
 
     def _on_scatter_reset(self):
         """Reset advanced scatter removal and restore static pre-zero background."""
@@ -1559,10 +1585,26 @@ class OneDTabMixin:
         dlg.exec()
 
     def _on_svd_dataset_applied(self, new_ds):
-        self.dataset = new_ds
-        self._preview_contour()
-        self._update_sample_info()
-        self.statusBar().showMessage(f"Applied SVD recomposition to active workspace ({new_ds.source}).")
+        self._apply_failed = False
+        prev_ds = self.dataset
+        try:
+            self.dataset = new_ds
+            if getattr(self, "plot_controls", None) is not None:
+                self.plot_controls.set_dataset(new_ds)
+            self._setup_background_controls()
+            self._preview_contour()
+            self._update_sample_info()
+            self.statusBar().showMessage(
+                f"Applied SVD recomposition to active workspace ({new_ds.source})."
+            )
+            self._notify_oneD_history_changed(dirty=True)
+        except Exception as exc:
+            self._apply_failed = True
+            self.dataset = prev_ds
+            logger.exception("Failed to apply SVD recomposition: %s", exc)
+            QMessageBox.critical(
+                self, "Apply SVD Failed", f"Could not apply SVD recomposition:\n{exc}"
+            )
 
     @busy_guard("Calculating polarization anisotropy...")
     def _calculate_anisotropy(self):
@@ -1579,13 +1621,27 @@ class OneDTabMixin:
         dlg.exec()
 
     def _on_anisotropy_applied(self, new_ds):
-        self.dataset = new_ds
-        if getattr(self, "plot_controls", None) is not None:
-            self.plot_controls.set_dataset(new_ds)
-        self._preview_contour()
-        self._update_sample_info()
-        dtype_name = getattr(new_ds, "data_type", "Polarization calculation")
-        self.statusBar().showMessage(f"Applied {dtype_name} to active workspace ({new_ds.source}).")
+        prev_ds = self.dataset
+        try:
+            self.dataset = new_ds
+            if getattr(self, "plot_controls", None) is not None:
+                self.plot_controls.set_dataset(new_ds)
+            self._setup_background_controls()
+            self._preview_contour()
+            self._update_sample_info()
+            dtype_name = getattr(new_ds, "data_type", "Polarization calculation")
+            self.statusBar().showMessage(
+                f"Applied {dtype_name} to active workspace ({new_ds.source})."
+            )
+            self._notify_oneD_history_changed(dirty=True)
+        except Exception as exc:
+            self.dataset = prev_ds
+            logger.exception("Failed to apply polarization calculation: %s", exc)
+            QMessageBox.critical(
+                self,
+                "Apply Anisotropy Failed",
+                f"Could not apply calculated dataset:\n{exc}",
+            )
 
     @busy_guard("Stitching wavelength windows...")
     def _stitch_wavelength(self):
@@ -1616,10 +1672,183 @@ class OneDTabMixin:
         dlg.exec()
 
     def _on_stitch_applied(self, new_ds):
-        self.dataset = new_ds
-        self._preview_contour()
-        self._update_sample_info()
-        self.statusBar().showMessage(f"Applied stitched dataset to active workspace ({new_ds.source}).")
+        prev_ds = self.dataset
+        try:
+            self.dataset = new_ds
+            if getattr(self, "plot_controls", None) is not None:
+                self.plot_controls.set_dataset(new_ds)
+            self._setup_background_controls()
+            self._preview_contour()
+            self._update_sample_info()
+            self.statusBar().showMessage(
+                f"Applied stitched dataset to active workspace ({new_ds.source})."
+            )
+            self._notify_oneD_history_changed(dirty=True)
+        except Exception as exc:
+            self.dataset = prev_ds
+            logger.exception("Failed to apply stitched dataset: %s", exc)
+            QMessageBox.critical(
+                self, "Apply Stitch Failed", f"Could not apply stitched dataset:\n{exc}"
+            )
+
+    def _cancel_1d_box_crop(self, *, clear_status: bool = False) -> None:
+        """Tear down any active interactive crop rectangle on the 1D contour plot."""
+        rect = getattr(self, "_1d_crop_rect", None)
+        if rect is not None:
+            with contextlib.suppress(Exception):
+                rect.set_active(False)
+                rect.set_visible(False)
+            self._1d_crop_rect = None
+        cid = getattr(self, "_1d_crop_key_cid", None)
+        if cid is not None and getattr(self, "PPaxes", None) is not None:
+            with contextlib.suppress(Exception):
+                self.PPaxes.canvas.mpl_disconnect(cid)
+        self._1d_crop_key_cid = None
+        pc = getattr(self, "plot_controls", None)
+        if pc is not None and hasattr(pc, "set_crop_mode"):
+            pc.set_crop_mode(False)
+        if getattr(self, "PPaxes", None) is not None:
+            with contextlib.suppress(Exception):
+                self.PPaxes.canvas.draw_idle()
+        if clear_status:
+            self.statusBar().clearMessage()
+
+    def _toggle_1d_box_crop(self, active: bool) -> None:
+        """Start or cancel interactive box cropping directly on the 1D contour canvas."""
+        if not active:
+            self._cancel_1d_box_crop(clear_status=True)
+            return
+
+        ax = getattr(getattr(self, "PPaxes", None), "ax", None)
+        if self.dataset is None or ax is None:
+            pc = getattr(self, "plot_controls", None)
+            if pc is not None and hasattr(pc, "set_crop_mode"):
+                pc.set_crop_mode(False)
+            return
+
+        self._cancel_1d_box_crop()
+        pc = getattr(self, "plot_controls", None)
+        if pc is not None and hasattr(pc, "set_crop_mode"):
+            pc.set_crop_mode(True)
+
+        from matplotlib.widgets import RectangleSelector
+
+        sel_kw = dict(useblit=True, button=[1], minspanx=0, minspany=0, interactive=True)
+        try:
+            self._1d_crop_rect = RectangleSelector(
+                ax,
+                lambda *_a: None,
+                props=dict(
+                    facecolor="orange", edgecolor="darkorange", linewidth=1.5, alpha=0.25, fill=True
+                ),
+                **sel_kw,
+            )
+        except TypeError:
+            self._1d_crop_rect = RectangleSelector(
+                ax,
+                lambda *_a: None,
+                rectprops=dict(facecolor="orange", edgecolor="darkorange", alpha=0.25, fill=True),
+                **sel_kw,
+            )
+
+        def _on_key(event):
+            if event.key == "escape":
+                self._cancel_1d_box_crop(clear_status=True)
+                return
+            if event.key in ("enter", "return"):
+                rect = getattr(self, "_1d_crop_rect", None)
+                if rect is None:
+                    return
+                extents = rect.extents
+                xmin, xmax, ymin, ymax = (float(v) for v in extents)
+                ax_xlim = ax.get_xlim()
+                ax_ylim = ax.get_ylim()
+                x_eps = max(1e-12, abs(ax_xlim[1] - ax_xlim[0]) * 1e-4)
+                y_eps = max(1e-12, abs(ax_ylim[1] - ax_ylim[0]) * 1e-4)
+                if abs(xmax - xmin) < x_eps or abs(ymax - ymin) < y_eps:
+                    return
+
+                if pc is not None and hasattr(pc, "probe_axis_to_native"):
+                    pr_vals = pc.probe_axis_to_native([xmin, xmax])
+                else:
+                    pr_vals = [xmin, xmax]
+                pr_lo, pr_hi = sorted(float(v) for v in pr_vals)
+                t_lo, t_hi = sorted((ymin, ymax))
+                self._cancel_1d_box_crop(clear_status=True)
+                self._open_1d_crop_dialog(
+                    initial_bounds={
+                        "tmin": t_lo,
+                        "tmax": t_hi,
+                        "probe_min": pr_lo,
+                        "probe_max": pr_hi,
+                    }
+                )
+
+        self._1d_crop_key_cid = self.PPaxes.canvas.mpl_connect("key_press_event", _on_key)
+        self.statusBar().showMessage(
+            "Box crop: drag a rectangle on the contour plot, press ENTER to open Crop dialog (ESC to cancel)."
+        )
+        QTimer.singleShot(0, self.PPaxes.canvas.setFocus)
+
+    def _open_1d_crop_dialog(self, initial_bounds: dict[str, float] | None = None) -> None:
+        """Open the interactive Crop Dataset dialog for the active 1D dataset."""
+        if self.dataset is None:
+            return
+        self._cancel_1d_box_crop()
+        from pymorgan.gui.crop_dialog import CropDialog
+
+        view_bounds = None
+        pc = getattr(self, "plot_controls", None)
+        if pc is not None:
+            try:
+                x_lo, x_hi = sorted(float(v) for v in pc.probe_axis_to_native(pc.xlim()))
+                y_lo, y_hi = sorted(float(v) for v in pc.ylim())
+                view_bounds = {
+                    "probe_min": x_lo,
+                    "probe_max": x_hi,
+                    "tmin": y_lo,
+                    "tmax": y_hi,
+                }
+            except Exception:
+                view_bounds = None
+
+        dlg = CropDialog(
+            self,
+            self.dataset,
+            initial_bounds=initial_bounds,
+            view_bounds=view_bounds,
+        )
+        dlg.dataset_cropped.connect(self._on_1d_cropped)
+        dlg.exec()
+
+    def _on_1d_cropped(self, cropped_ds) -> None:
+        """Refresh 1D UI after ``CropDialog`` applies an in-place crop."""
+        try:
+            self.dataset = cropped_ds
+            delays = np.asarray(self.dataset.delays, dtype=float)
+            finite_d = delays[np.isfinite(delays)]
+            if finite_d.size:
+                lo, hi = float(finite_d.min()), float(finite_d.max())
+                for box_name in ("PP_bkg_tmin", "PP_bkg_tmax"):
+                    box = getattr(self, box_name, None)
+                    if box is not None:
+                        box.blockSignals(True)
+                        box.setRange(lo, hi)
+                        box.setValue(float(np.clip(box.value(), lo, hi)))
+                        box.blockSignals(False)
+            if getattr(self, "plot_controls", None) is not None:
+                self.plot_controls.set_dataset(self.dataset)
+            self._preview_contour()
+            self._update_sample_info()
+            self._notify_oneD_history_changed(dirty=True)
+            self.statusBar().showMessage(
+                f"Cropped 1D dataset ({len(self.dataset.delays)} delays \u00d7 {len(self.dataset.probe)} spectral pts)."
+            )
+        except Exception as exc:
+            logger.exception("Failed to refresh workspace after 1D crop: %s", exc)
+            QMessageBox.critical(
+                self, "Crop Refresh Failed", f"Could not update workspace after crop:\n{exc}"
+            )
 
     def _launch_pyrate_ta(self):
         """Launch companion package PyRATE-TA."""

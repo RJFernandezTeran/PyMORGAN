@@ -471,6 +471,8 @@ class TwoDTabMixin:
         ):
             return
 
+        if hasattr(self, "_cancel_2d_box_crop"):
+            self._cancel_2d_box_crop()
         self._cancel_pending_twoD_shot_rotation()
         load_seq = self._next_twoD_op_seq()
 
@@ -3328,6 +3330,149 @@ class TwoDTabMixin:
                 logger.debug("Could not deactivate the previous ROI selector.", exc_info=True)
             self.twoDaxes.canvas.draw_idle()
         self._rect_selector = None
+        pc = getattr(self, "twoD_plot_controls", None)
+        if pc is not None and hasattr(pc, "set_crop_mode"):
+            pc.set_crop_mode(False)
+
+    def _cancel_2d_box_crop(self, *, clear_status: bool = False) -> None:
+        """Tear down any active interactive box-crop selector on the 2D contour canvas."""
+        self._cancel_roi_selector()
+        if clear_status:
+            self.statusBar().clearMessage()
+
+    def _toggle_2d_box_crop(self, active: bool) -> None:
+        """Start or cancel interactive box cropping directly on the 2D contour canvas."""
+        if not active:
+            self._cancel_2d_box_crop(clear_status=True)
+            return
+
+        ax = getattr(getattr(self, "twoDaxes", None), "ax", None)
+        if self.twoD_dataset is None or ax is None:
+            pc = getattr(self, "twoD_plot_controls", None)
+            if pc is not None and hasattr(pc, "set_crop_mode"):
+                pc.set_crop_mode(False)
+            return
+
+        self._cancel_2d_box_crop()
+        pc = getattr(self, "twoD_plot_controls", None)
+        if pc is not None and hasattr(pc, "set_crop_mode"):
+            pc.set_crop_mode(True)
+
+        s = pm.get_settings()
+        pump_axis_val = s.pump_axis
+        if hasattr(pump_axis_val, "value"):
+            pump_axis_val = pump_axis_val.value
+        is_vertical = pump_axis_val == "Vertical"
+        meta = self._twoD_display_meta(s)
+        to_native = meta["to_native"]
+        u_plain = meta["plain_unit"]
+
+        def _on_key(event):
+            if event.key == "escape":
+                self._cancel_2d_box_crop(clear_status=True)
+                return
+            if event.key in ("enter", "return"):
+                if getattr(self, "_rect_selector", None) is None:
+                    return
+                extents = self._rect_selector.extents
+                if not self._rect_span_ok(ax, extents):
+                    return
+                xmin, xmax, ymin, ymax = (float(v) for v in extents)
+                x_nat = tuple(sorted(float(v) for v in to_native([xmin, xmax])))
+                y_nat = tuple(sorted(float(v) for v in to_native([ymin, ymax])))
+                if is_vertical:
+                    pump_range = y_nat
+                    probe_range = x_nat
+                else:
+                    pump_range = x_nat
+                    probe_range = y_nat
+                self._cancel_2d_box_crop(clear_status=True)
+                self._open_2d_crop_dialog(
+                    initial_bounds={
+                        "pump_min": pump_range[0],
+                        "pump_max": pump_range[1],
+                        "probe_min": probe_range[0],
+                        "probe_max": probe_range[1],
+                    }
+                )
+
+        self._attach_twoD_rect_selector(ax, _on_key)
+        self.statusBar().showMessage(
+            f"Box crop ({u_plain}): drag a rectangle on the 2D plot, press ENTER to open Crop dialog (ESC to cancel)."
+        )
+        QTimer.singleShot(0, self.twoDaxes.canvas.setFocus)
+
+    def _open_2d_crop_dialog(self, initial_bounds: dict[str, float] | None = None) -> None:
+        """Open the interactive Crop Dataset dialog for the active 2D dataset."""
+        if self.twoD_dataset is None:
+            return
+        self._cancel_2d_box_crop()
+        from pymorgan.gui.crop_dialog import CropDialog
+
+        view_bounds = None
+        pc = getattr(self, "twoD_plot_controls", None)
+        if pc is not None:
+            try:
+                to_native = self._twoD_display_meta()["to_native"]
+                pu_lo, pu_hi = sorted(float(v) for v in to_native(list(pc.pump_lim())))
+                pr_lo, pr_hi = sorted(float(v) for v in to_native(list(pc.probe_lim())))
+                view_bounds = {
+                    "pump_min": pu_lo,
+                    "pump_max": pu_hi,
+                    "probe_min": pr_lo,
+                    "probe_max": pr_hi,
+                }
+            except Exception:
+                view_bounds = None
+
+        dlg = CropDialog(
+            self,
+            self.twoD_dataset,
+            initial_bounds=initial_bounds,
+            view_bounds=view_bounds,
+        )
+        dlg.dataset_cropped.connect(self._on_2d_cropped)
+        dlg.exec()
+
+    def _on_2d_cropped(self, cropped_ds) -> None:
+        """Refresh 2D UI after ``CropDialog`` applies an in-place crop."""
+        try:
+            self.twoD_dataset = cropped_ds
+            self._update_twoD_delay_list()
+            scat_delay = getattr(self, "twoD_sub_scat_delay", None)
+            if scat_delay is not None and len(self.twoD_dataset.delays) > 0:
+                scat_delay.blockSignals(True)
+                scat_delay.setRange(1, len(self.twoD_dataset.delays))
+                scat_delay.setValue(min(scat_delay.value(), len(self.twoD_dataset.delays)))
+                scat_delay.blockSignals(False)
+            pixel_spin = getattr(self, "twoD_other_pixel_spin", None)
+            if pixel_spin is not None and getattr(self.twoD_dataset, "probe", None) is not None:
+                n_px = len(self.twoD_dataset.probe)
+                pixel_spin.blockSignals(True)
+                pixel_spin.setRange(0, n_px)
+                if pixel_spin.value() > n_px:
+                    pixel_spin.setValue(0)
+                pixel_spin.blockSignals(False)
+            if getattr(self, "twoD_plot_controls", None) is not None:
+                lst_delays = getattr(self, "twoD_t2delay_lst", None)
+                active_idx = lst_delays.currentIndex().row() if lst_delays is not None else 0
+                if active_idx < 0 or active_idx >= len(self.twoD_dataset.delays):
+                    active_idx = 0
+                self.twoD_plot_controls.set_dataset(self.twoD_dataset, active_idx)
+            self._twoD_preview_contour()
+            self._update_twoD_sample_info()
+            if hasattr(self, "_twoD_update_other_plot"):
+                self._twoD_update_other_plot()
+            self._notify_twoD_history_changed(dirty=True)
+            self.statusBar().showMessage(
+                f"Cropped 2D dataset ({len(self.twoD_dataset.pump)} pump \u00d7 "
+                f"{len(self.twoD_dataset.probe)} probe \u00d7 {len(self.twoD_dataset.delays)} t2)."
+            )
+        except Exception as exc:
+            logger.exception("Failed to refresh workspace after 2D crop: %s", exc)
+            QMessageBox.critical(
+                self, "Crop Refresh Failed", f"Could not update 2D workspace after crop:\n{exc}"
+            )
 
     def _launch_roi_selector(self):
         s = pm.get_settings()

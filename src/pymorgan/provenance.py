@@ -215,6 +215,7 @@ def _capture_snapshot(ds: Any, *, include_single_scans: bool = False) -> dict[st
             "bkg_ss": getattr(ds, "bkg_ss", None),
             "nscans": getattr(ds, "nscans", np.nan),
             "total_scans": getattr(ds, "total_scans", None),
+            "counts": _copy_if_array(getattr(ds, "counts", None)),
             "cal_source": getattr(ds, "cal_source", None),
             "cal_level": getattr(ds, "cal_level", None),
             "units": dict(ds.units) if isinstance(getattr(ds, "units", None), dict) else {},
@@ -256,6 +257,16 @@ def _capture_snapshot(ds: Any, *, include_single_scans: bool = False) -> dict[st
             ),
             "active_state": getattr(ds, "active_state", None),
             "active_detector": getattr(ds, "active_detector", None),
+            "detector_probes": (
+                {k: _copy_if_array(v) for k, v in ds.detector_probes.items()}
+                if getattr(ds, "detector_probes", None)
+                else None
+            ),
+            "detector_data": (
+                {k: _copy_if_array(v) for k, v in ds.detector_data.items()}
+                if getattr(ds, "detector_data", None)
+                else None
+            ),
             "shot_rotation": int(getattr(ds, "shot_rotation", 0) or 0),
             "_is_corrected": bool(getattr(ds, "_is_corrected", False)),
             "nscans": int(getattr(ds, "nscans", 1) or 1),
@@ -299,6 +310,7 @@ def _restore_snapshot(ds: Any, snap: Mapping[str, Any]) -> None:
         ds.bkg_ss = snap["bkg_ss"]
         ds.nscans = snap["nscans"]
         ds.total_scans = snap["total_scans"]
+        ds.counts = _copy_if_array(snap.get("counts"))
         ds.cal_source = snap["cal_source"]
         ds.cal_level = snap["cal_level"]
         ds.units = dict(snap["units"])
@@ -330,6 +342,12 @@ def _restore_snapshot(ds: Any, snap: Mapping[str, Any]) -> None:
         ds.active_state = snap["active_state"]
         if hasattr(ds, "active_detector") or snap.get("active_detector") is not None:
             ds.active_detector = snap.get("active_detector")
+        if hasattr(ds, "detector_probes") or snap.get("detector_probes") is not None:
+            dp = snap.get("detector_probes")
+            ds.detector_probes = {k: _copy_if_array(v) for k, v in dp.items()} if dp is not None else None
+        if hasattr(ds, "detector_data") or snap.get("detector_data") is not None:
+            dd = snap.get("detector_data")
+            ds.detector_data = {k: _copy_if_array(v) for k, v in dd.items()} if dd is not None else None
         ds.shot_rotation = int(snap["shot_rotation"])
         ds._is_corrected = bool(snap["_is_corrected"])
         ds.nscans = int(snap["nscans"])

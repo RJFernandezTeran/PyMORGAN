@@ -1029,12 +1029,12 @@ def test_stitch_wavelength_blend(uv_vis_nir_datasets):
     assert np.isclose(res.probe[0], 350, atol=2)
     assert np.isclose(res.probe[-1], 1200, atol=2)
     assert len(res.delays) == len(ds_nir.delays)
-    assert res.Z.shape == (len(res.delays), len(res.probe))
+    assert res.Z.shape == (len(res.delays), len(res.probe), 1)
 
     # Verify to_dataset()
     ds_stitched = res.to_dataset()
     assert isinstance(ds_stitched, pm.Dataset1D)
-    assert ds_stitched.Z.shape == (len(res.delays), len(res.probe))
+    assert ds_stitched.Z.shape == (len(res.delays), len(res.probe), 1)
 
 
 def test_stitch_wavelength_cutover(uv_vis_nir_datasets):

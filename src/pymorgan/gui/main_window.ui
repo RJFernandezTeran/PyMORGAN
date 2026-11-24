@@ -1343,11 +1343,55 @@ font: bold</string>
               </widget>
              </item>
              <item row="3" column="5">
-              <widget class="QPushButton" name="PC_restore">
-               <property name="text">
-                <string>Restore Limits</string>
+              <layout class="QHBoxLayout" name="PC_restoreCropRow">
+               <property name="spacing">
+                <number>4</number>
                </property>
-              </widget>
+               <property name="leftMargin">
+                <number>0</number>
+               </property>
+               <property name="topMargin">
+                <number>0</number>
+               </property>
+               <property name="rightMargin">
+                <number>0</number>
+               </property>
+               <property name="bottomMargin">
+                <number>0</number>
+               </property>
+               <item>
+                <widget class="QPushButton" name="PC_restore">
+                 <property name="text">
+                  <string>Restore Limits</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QPushButton" name="PC_cropBox">
+                 <property name="minimumSize">
+                  <size>
+                   <width>30</width>
+                   <height>24</height>
+                  </size>
+                 </property>
+                 <property name="maximumSize">
+                  <size>
+                   <width>32</width>
+                   <height>26</height>
+                  </size>
+                 </property>
+                 <property name="toolTip">
+                  <string>Interactive box crop: drag a rectangle on the contour plot, press Enter to open Crop dialog (Esc or click again to cancel)</string>
+                 </property>
+                 <property name="text">
+                  <string>✂</string>
+                 </property>
+                 <property name="checkable">
+                  <bool>true</bool>
+                 </property>
+                </widget>
+               </item>
+              </layout>
              </item>
              <item row="1" column="3">
               <widget class="QDoubleSpinBox" name="PC_yMax">
@@ -3454,14 +3498,58 @@ The magnitude sets the smoothing window width.</string>
               </widget>
              </item>
              <item row="3" column="1">
-              <widget class="QPushButton" name="twoD_PC_sync">
-               <property name="styleSheet">
-                <string notr="true">background-color: #e0e0e0; font-weight: bold; color: black;</string>
+              <layout class="QHBoxLayout" name="twoD_PC_syncCropRow">
+               <property name="spacing">
+                <number>4</number>
                </property>
-               <property name="text">
-                <string>Sync Limits</string>
+               <property name="leftMargin">
+                <number>0</number>
                </property>
-              </widget>
+               <property name="topMargin">
+                <number>0</number>
+               </property>
+               <property name="rightMargin">
+                <number>0</number>
+               </property>
+               <property name="bottomMargin">
+                <number>0</number>
+               </property>
+               <item>
+                <widget class="QPushButton" name="twoD_PC_sync">
+                 <property name="styleSheet">
+                  <string notr="true">background-color: #e0e0e0; font-weight: bold; color: black;</string>
+                 </property>
+                 <property name="text">
+                  <string>Sync Limits</string>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QPushButton" name="twoD_PC_cropBox">
+                 <property name="minimumSize">
+                  <size>
+                   <width>30</width>
+                   <height>24</height>
+                  </size>
+                 </property>
+                 <property name="maximumSize">
+                  <size>
+                   <width>32</width>
+                   <height>26</height>
+                  </size>
+                 </property>
+                 <property name="toolTip">
+                  <string>Interactive box crop: drag a rectangle on the 2D contour plot, press Enter to open Crop dialog (Esc or click again to cancel)</string>
+                 </property>
+                 <property name="text">
+                  <string>✂</string>
+                 </property>
+                 <property name="checkable">
+                  <bool>true</bool>
+                 </property>
+                </widget>
+               </item>
+              </layout>
              </item>
              <item row="4" column="0" colspan="3">
               <widget class="QCheckBox" name="twoD_PC_showLines">
@@ -4475,6 +4563,7 @@ The magnitude sets the smoothing window width.</string>
      <addaction name="actionStitchTimescale" />
     </widget>
     <addaction name="actionShiftT0" />
+    <addaction name="actionCropDataset" />
     <addaction name="menuChirp" />
     <addaction name="actionEmbedProbeCalH5" />
     <addaction name="separator" />
@@ -4732,6 +4821,14 @@ The magnitude sets the smoothing window width.</string>
    </property>
    <property name="toolTip">
     <string>Shift the delay time axis so a chosen point becomes the new t0</string>
+   </property>
+  </action>
+  <action name="actionCropDataset">
+   <property name="text">
+    <string>&amp;Crop Dataset...</string>
+   </property>
+   <property name="toolTip">
+    <string>Crop the active 1D or 2D dataset along delay and spectral axes</string>
    </property>
   </action>
   <action name="actionFitChirp">

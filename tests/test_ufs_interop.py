@@ -379,3 +379,204 @@ def test_gui_export_hdf5_and_glotaran_actions(qapp, tmp_path, monkeypatch):
         assert h5_2d_out.is_file()
     finally:
         win.close()
+
+
+# --------------------------------------------------------------------------- #
+#           Helios UFS Edge Cases & load_1D/load_2D Auto-Detection            #
+# --------------------------------------------------------------------------- #
+def test_ufs_descending_probe_sorted_ascending(tmp_path):
+    probe_desc = np.array([700.0, 620.0, 540.0, 460.0])
+    delays = np.array([-1.0, 0.5, 2.0])
+    # Distinct column values per probe point to verify column permutation matches axis sort
+    sig = np.outer(np.array([1.0, 2.0, 3.0]), np.array([70.0, 62.0, 54.0, 46.0]))
+    ufs_path = _write_synthetic_ufs(
+        tmp_path / "desc.ufs",
+        probe=probe_desc,
+        delays=delays,
+        signal=sig,
+        z_unit="DA",
+    )
+
+    _, probe_out, sig_out, _ = parse_ufs(ufs_path)
+    assert np.all(np.diff(probe_out) > 0)
+    assert np.allclose(probe_out, probe_desc[::-1])
+    assert np.allclose(sig_out, sig[:, ::-1], atol=1e-9)
+
+    ds = pm.load_1D(ufs_path, data_type="Helios_UFS")
+    assert np.allclose(ds.probe, probe_desc[::-1])
+    assert np.allclose(ds.Zavg_R[:, :, 0], sig[:, ::-1], atol=1e-9)
+
+
+def test_ufs_pix_unit_normalized_to_px(tmp_path):
+    probe = np.arange(10.0, 16.0)
+    delays = np.array([-1.0, 0.0, 2.0, 5.0])
+    sig = np.ones((4, 6)) * 3.0
+    mat_wl_t = np.ascontiguousarray((sig / 1000.0).T)
+
+    buf = bytearray()
+    buf += _pack_ufs_string("Version2")
+    buf += _pack_ufs_string("Pixels")
+    buf += _pack_ufs_string("pix")
+    buf += struct.pack(">i", len(probe))
+    buf += probe.astype(">f8").tobytes()
+    buf += _pack_ufs_string("Time")
+    buf += _pack_ufs_string("ps")
+    buf += struct.pack(">i", len(delays))
+    buf += delays.astype(">f8").tobytes()
+    buf += _pack_ufs_string("Absorption")
+    buf += _pack_ufs_string("DA")
+    buf += struct.pack(">ii", mat_wl_t.shape[0], mat_wl_t.shape[1])
+    buf += mat_wl_t.astype(">f8").tobytes()
+    ufs_path = tmp_path / "pixels.ufs"
+    ufs_path.write_bytes(bytes(buf))
+
+    _, _, _, meta = parse_ufs(ufs_path)
+    assert meta["unitsL"] == "px"
+
+    ds = pm.load_1D(ufs_path, data_type="Helios_UFS")
+    assert ds.units["unitsL_ltx"] == "px"
+    assert ds.units["unitsL_lbl"] == "Pixel"
+    assert pm.helpers.units2dic("pixels", "ps", "mOD")["unitsL_ltx"] == "px"
+
+
+def test_ufs_quality_masking_tiny_signal_preserved_and_warning(tmp_path, caplog):
+    import logging
+
+    probe = np.linspace(450.0, 650.0, 5)
+    delays = np.array([-0.5, 0.0, 1.0, 5.0])
+    # All legitimate small/normal signals first: must keep status="ok" and preserve 1e-10 mOD
+    clean_sig = np.full((4, 5), 2.5)
+    clean_sig[1, 1] = 1e-10
+    clean_path = _write_synthetic_ufs(
+        tmp_path / "clean_tiny.ufs",
+        probe=probe,
+        delays=delays,
+        signal=clean_sig,
+        z_unit="mOD",
+    )
+    _, _, clean_out, clean_meta = parse_ufs(clean_path)
+    assert clean_meta["ufs_quality"]["n_filled"] == 0
+    assert clean_meta["ufs_quality"]["status"] == "ok"
+    assert np.isclose(clean_out[1, 1], 1e-10, rtol=1e-6)
+
+    # Inject >20% corrupted cells: NaN, extreme spike >=1e5 mOD, and IEEE subnormal <1e-300
+    bad_sig = np.full((4, 5), 4.0)
+    bad_sig[0, :] = np.nan
+    bad_sig[1, 0] = 2.0e6
+    bad_sig[2, 3] = 1e-315  # 7 / 20 = 35% > 0.2
+    bad_path = _write_synthetic_ufs(
+        tmp_path / "corrupted.ufs",
+        probe=probe,
+        delays=delays,
+        signal=bad_sig,
+        z_unit="mOD",
+    )
+
+    _, _, fixed_out, bad_meta = parse_ufs(bad_path)
+    qual = bad_meta["ufs_quality"]
+    assert qual["status"] == "cleaned"
+    assert qual["n_filled"] >= 7
+    assert qual["filled_fraction"] > 0.2
+    assert np.all(np.isfinite(fixed_out))
+    assert np.max(np.abs(fixed_out)) < 100.0
+
+    with caplog.at_level(logging.WARNING, logger="pymorgan"):
+        ds = pm.load_1D(bad_path, data_type="Helios_UFS")
+    assert ds.units["ufs_quality"]["filled_fraction"] > 0.2
+    assert "padded/invalid cells interpolated" in ds.units.get("sample_info_full", "")
+    assert any("invalid/padded cells interpolated" in rec.message for rec in caplog.records)
+
+
+def test_ufs_loader_alias_and_load_1d(tmp_path):
+    from pymorgan.oneD.load import get_loader, read_Helios_UFS
+
+    assert get_loader("UFS") is read_Helios_UFS
+    assert get_loader("ufs") is read_Helios_UFS
+
+    ufs_path = _write_synthetic_ufs(tmp_path / "alias.ufs")
+    ds_alias = pm.load_1D(ufs_path, data_type="UFS")
+    ds_full = pm.load_1D(ufs_path, data_type="Helios_UFS")
+    assert np.allclose(ds_alias.Zavg_R, ds_full.Zavg_R)
+
+
+def test_ufs_folder_filter_and_bg_chirp_fallback(tmp_path):
+    from pymorgan.oneD.load import _find_helios_main_ufs, _helios_ufs_file_filter
+
+    # Folder with ONLY processed -bg -chirp.ufs falls back cleanly
+    only_proc = tmp_path / "only_processed"
+    only_proc.mkdir()
+    proc_file = _write_synthetic_ufs(only_proc / "meas-bg -chirp.ufs")
+    corr_file = _write_synthetic_ufs(only_proc / "meas-CORRECTED.ufs")
+    assert _helios_ufs_file_filter(proc_file) is False
+    assert _helios_ufs_file_filter(corr_file) is False
+    assert _find_helios_main_ufs(only_proc) in {proc_file, corr_file}
+    ds_fallback = pm.load_1D(only_proc, data_type="Helios_UFS")
+    assert isinstance(ds_fallback, Dataset1D)
+
+    # Folder with both raw and processed prefers the raw .ufs and shows only raw in filter
+    both_dir = tmp_path / "raw_and_proc"
+    both_dir.mkdir()
+    both_proc = _write_synthetic_ufs(both_dir / "meas-bg -chirp.ufs")
+    raw_file = _write_synthetic_ufs(both_dir / "meas.ufs")
+    assert _helios_ufs_file_filter(raw_file) is True
+    assert _helios_ufs_file_filter(both_proc) is False
+    assert _find_helios_main_ufs(both_dir) == raw_file
+
+
+def test_ufs_converted_matrix_fallback(tmp_path):
+    probe = np.linspace(450.0, 650.0, 6)
+    delays = np.array([-0.5, 0.0, 1.0, 5.0])
+    sig_mod = np.outer(np.array([0.2, 1.0, 2.0, 0.5]), np.linspace(1.0, 6.0, 6))
+    mat_wl_t = np.ascontiguousarray((sig_mod / 1000.0).T)
+
+    # Third-party CSV->UFS writer: omit z_unit string and supply mismatched (n1, n2)
+    buf = bytearray()
+    buf += _pack_ufs_string("Version2")
+    buf += _pack_ufs_string("Wavelength")
+    buf += _pack_ufs_string("nm")
+    buf += struct.pack(">i", len(probe))
+    buf += probe.astype(">f8").tobytes()
+    buf += _pack_ufs_string("Time")
+    buf += _pack_ufs_string("ps")
+    buf += struct.pack(">i", len(delays))
+    buf += delays.astype(">f8").tobytes()
+    buf += _pack_ufs_string("Absorption")
+    buf += _pack_ufs_string("DA")
+    buf += struct.pack(">ii", 999, 999)  # wrong dimensions -> triggers _fallback_converted_ufs_matrix
+    buf += mat_wl_t.astype(">f8").tobytes()
+    buf += _pack_ufs_string("Sample: ConvertedCSV\rComments: Third-party")
+    conv_path = tmp_path / "converted.ufs"
+    conv_path.write_bytes(bytes(buf))
+
+    delays_out, probe_out, sig_out, meta = parse_ufs(conv_path)
+    assert np.allclose(delays_out, delays)
+    assert np.allclose(probe_out, probe)
+    assert np.allclose(sig_out, sig_mod, atol=1e-6)
+    assert "ConvertedCSV" in meta.get("sample_info_full", "")
+
+
+def test_load_1d_and_2d_auto_detect_and_format_hint(tmp_path):
+    import synthetic
+
+    ufs_path = _write_synthetic_ufs(tmp_path / "auto.ufs")
+    pdat_info = synthetic.make_synthetic_pdat(tmp_path / "auto.pdat")
+    p2_info = synthetic.make_synthetic_p2dat(tmp_path / "auto.p2dat")
+
+    # Omitting data_type or passing "auto" resolves the true loader
+    ds_ufs_auto = pm.load_1D(ufs_path)
+    assert ds_ufs_auto.data_type == "Helios_UFS"
+    ds_pdat_auto = pm.load_1D(pdat_info["path"], data_type="auto")
+    assert ds_pdat_auto.data_type == "PDAT"
+
+    ds_2d_auto = pm.load_2D(p2_info["path"])
+    assert isinstance(ds_2d_auto, Dataset2D)
+    h5_2d = ds_2d_auto.to_hdf5(tmp_path / "auto_2d.h5")
+    ds_2d_h5 = pm.load_2D(h5_2d, data_type="auto")
+    assert isinstance(ds_2d_h5, Dataset2D)
+
+    # Mismatched explicit data_type raises ValueError with detected format hint
+    with pytest.raises(ValueError, match="Helios_UFS"):
+        pm.load_1D(ufs_path, data_type="PDAT")
+
+    with pytest.raises(ValueError, match="HDF5_2D|Detected format"):
+        pm.load_2D(h5_2d, data_type="P2DAT")

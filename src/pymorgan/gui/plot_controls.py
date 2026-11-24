@@ -144,6 +144,7 @@ class PlotControlsPanel(QObject):
 
     renderRequested = pyqtSignal()  # needs a full re-plot
     limitsChanged = pyqtSignal()  # only re-apply X/Y limits
+    cropBoxToggled = pyqtSignal(bool)  # scissors box-crop mode toggled
 
     def __init__(self, host, parent=None):
         super().__init__(parent)
@@ -165,6 +166,7 @@ class PlotControlsPanel(QObject):
         for attr, name in _WIDGETS.items():
             setattr(self, attr, getattr(host, name, None))
         self._lbl_xunit = getattr(host, "PC_lblXUnit", None)
+        self.crop_btn = getattr(host, "PC_cropBox", None)
 
         # The choice combos are authoritative from Settings, not the .ui items.
         self._populate_choice_combo(self.cmb_scale, "time_axis_scale")
@@ -276,6 +278,16 @@ class PlotControlsPanel(QObject):
         self.cmb_cmap.currentTextChanged.connect(lambda v: self._on_setting("cmap", v))
         self.cmb_xunit.currentTextChanged.connect(self._on_xunit_changed)
         self.secondary_chk.toggled.connect(self._on_secondary_toggled)
+        if getattr(self, "crop_btn", None) is not None:
+            self.crop_btn.toggled.connect(self.cropBoxToggled.emit)
+
+    def set_crop_mode(self, active: bool) -> None:
+        """Synchronize the 1D scissors toggle button state without re-emitting."""
+        btn = getattr(self, "crop_btn", None)
+        if btn is not None:
+            btn.blockSignals(True)
+            btn.setChecked(bool(active))
+            btn.blockSignals(False)
 
     # ------------------------------------------------------------------ #
     #                                Slots                               #
@@ -844,6 +856,7 @@ class PlotControlsPanel2D(QObject):
 
     renderRequested = pyqtSignal()  # needs a full re-plot
     limitsChanged = pyqtSignal()  # only re-apply limits
+    cropBoxToggled = pyqtSignal(bool)  # scissors box-crop mode toggled
 
     def __init__(self, host, parent=None):
         super().__init__(parent)
@@ -857,6 +870,7 @@ class PlotControlsPanel2D(QObject):
 
         for attr, name in _WIDGETS_2D.items():
             setattr(self, attr, getattr(host, name, None))
+        self.crop_btn = getattr(host, "twoD_PC_cropBox", None)
 
         for btn, axis_name in ((self.pump_order_btn, "Pump"), (self.probe_order_btn, "Probe")):
             if btn is not None:
@@ -993,6 +1007,16 @@ class PlotControlsPanel2D(QObject):
             self.pump_order_btn.toggled.connect(self._on_pump_order_toggled)
         if self.probe_order_btn is not None:
             self.probe_order_btn.toggled.connect(self._on_probe_order_toggled)
+        if getattr(self, "crop_btn", None) is not None:
+            self.crop_btn.toggled.connect(self.cropBoxToggled.emit)
+
+    def set_crop_mode(self, active: bool) -> None:
+        """Synchronize the 2D scissors toggle button state without re-emitting."""
+        btn = getattr(self, "crop_btn", None)
+        if btn is not None:
+            btn.blockSignals(True)
+            btn.setChecked(bool(active))
+            btn.blockSignals(False)
 
     @staticmethod
     def _sync_order_button(btn, axis_name: str, descending: bool) -> None:

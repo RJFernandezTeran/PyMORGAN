@@ -186,7 +186,7 @@ def units2dic(unitsL, unitsT, unitsZ):
         case "eV":
             unitsL_lbl = "Energy"
             unitsL_ltx = r"eV"
-        case "px" | "pixels" | "pixel":
+        case "px" | "pix" | "pixels" | "pixel":
             unitsL_lbl = "Pixel"
             unitsL_ltx = r"px"
         case _:

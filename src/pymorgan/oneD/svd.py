@@ -174,7 +174,9 @@ class SVDResult:
         from pymorgan.oneD.dataset import Dataset1D
 
         k_val = self.k if k is None else int(np.clip(k, 1, self.n_components))
-        recomposed = self.recompose(k_val)
+        recomposed = np.asarray(self.recompose(k_val), dtype=float)
+        if recomposed.ndim == 2:
+            recomposed = recomposed[:, :, np.newaxis]
         u = dict(self.units) if self.units else {}
         if units:
             u.update(units)
@@ -185,7 +187,11 @@ class SVDResult:
             delays=np.copy(self.delays),
             probe=np.copy(self.probe),
             units=u,
+            nscans=np.nan,
+            Zss_R=None,
+            Zstdv=np.zeros_like(recomposed),
             source=src,
+            data_type="SVD-recomposed",
         )
         ds.Zavg_C = np.copy(recomposed)
         return ds

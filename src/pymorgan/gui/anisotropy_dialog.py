@@ -391,11 +391,14 @@ class AnisotropyDialog(QDialog):
         if not filepath:
             return
         try:
+            written_msg = filepath
             if filepath.endswith(".h5") or filepath.endswith(".hdf5") or "h5" in selected_filter.lower():
                 ds_to_export.save_hdf5(filepath)
             else:
-                ds_to_export.export_pdat(filepath)
-            QMessageBox.information(self, "Export Complete", f"{comp_name} exported to:\n{filepath}")
+                written = ds_to_export.to_pdat(filepath)
+                if written:
+                    written_msg = "\n".join(str(p) for p in written)
+            QMessageBox.information(self, "Export Complete", f"{comp_name} exported to:\n{written_msg}")
         except Exception as exc:
             logger.exception("Export failed: %s", exc)
             QMessageBox.critical(self, "Export Failed", f"Could not export dataset:\n{exc}")

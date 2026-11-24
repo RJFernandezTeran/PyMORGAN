@@ -642,11 +642,12 @@ class SVDDialog(QDialog):
         )
         if reply == QMessageBox.StandardButton.Yes:
             self.dataset_applied.emit(recomp_ds)
-            QMessageBox.information(
-                self,
-                "Applied",
-                f"Active workspace updated with SVD rank-{k} recomposed signal.",
-            )
+            if not getattr(self.parent(), "_apply_failed", False):
+                QMessageBox.information(
+                    self,
+                    "Applied",
+                    f"Active workspace updated with SVD rank-{k} recomposed signal.",
+                )
 
     def _export_recomposed(self):
         """Export the rank-k recomposed dataset to a file (PDAT, HDF5, or CSV)."""
@@ -664,8 +665,11 @@ class SVDDialog(QDialog):
 
         try:
             recomp_ds = self.svd_res.to_dataset(k=k)
+            written_msg = filepath
             if filepath.endswith(".pdat") or "pdat" in selected_filter.lower():
-                recomp_ds.export_pdat(filepath)
+                written = recomp_ds.to_pdat(filepath)
+                if written:
+                    written_msg = "\n".join(str(p) for p in written)
             elif filepath.endswith(".h5") or filepath.endswith(".hdf5") or "h5" in selected_filter.lower():
                 recomp_ds.save_hdf5(filepath)
             else:
@@ -677,7 +681,7 @@ class SVDDialog(QDialog):
                     for t_idx, d in enumerate(self.svd_res.delays):
                         writer.writerow([str(d)] + [f"{v:.6e}" for v in recon[t_idx, :]])
 
-            QMessageBox.information(self, "Export Complete", f"Recomposed data exported to:\n{filepath}")
+            QMessageBox.information(self, "Export Complete", f"Recomposed data exported to:\n{written_msg}")
         except Exception as exc:
             logger.exception("Export failed: %s", exc)
             QMessageBox.critical(self, "Export Failed", f"Could not export data:\n{exc}")

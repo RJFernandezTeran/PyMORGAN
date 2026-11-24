@@ -310,6 +310,7 @@ class MainWindow(
             "PP_ShowSSbutton": "Plot loaded steady-state absorption and/or emission spectra",
             "PP_ClearSSbutton": "Clear currently loaded steady-state spectra",
             "PC_restore": "Restore default zoom and axis limits for 1D plots",
+            "PC_cropBox": "Interactive box crop: drag a rectangle on the contour plot, press Enter to open Crop dialog (Esc or click again to cancel)",
             "twoD_reloadData_btn": "Reload current 2D dataset from file",
             "twoD_apply_changes_btn": "Apply phase and FT settings and reload 2D dataset",
             "twoD_save_probe_cal_btn": "Save probe wavelength calibration to file",
@@ -329,6 +330,7 @@ class MainWindow(
             "twoD_integral_dynamics_btn": "Integrate 2D spectral volume ROI across population delays",
             "twoD_PC_restore": "Restore default zoom and axis limits for 2D preview",
             "twoD_PC_sync": "Synchronize 2D plot axis limits across subtabs",
+            "twoD_PC_cropBox": "Interactive box crop: drag a rectangle on the 2D contour plot, press Enter to open Crop dialog (Esc or click again to cancel)",
             "PP_sampleInfo_popup_btn": "Open full sample info in a larger window (read-only, copyable)",
             "twoD_sampleInfo_popup_btn": "Open full sample info in a larger window (read-only, copyable)",
         }
@@ -412,6 +414,23 @@ class MainWindow(
                 "QPushButton:hover:enabled { background-color: #e2e8f0; color: #0f172a; }"
                 "QPushButton:checked { color: #0369a1; background-color: #e0f2fe; border: 1px solid #7dd3fc; }"
                 "QPushButton:checked:hover:enabled { background-color: #bae6fd; color: #0369a1; }"
+                f"QPushButton:disabled {{ color: {_DISABLED_LIGHT_FG}; background-color: {_DISABLED_LIGHT_BG}; border: 1px solid {_DISABLED_LIGHT_BORDER}; }}"
+            )
+
+        def crop_toggle_style() -> str:
+            if dark:
+                return (
+                    "QPushButton { font-weight: bold; font-size: 14px; color: #e2e8f0; background-color: #1e293b; border: 1px solid #334155; border-radius: 4px; padding: 0px; }"
+                    "QPushButton:hover:enabled { background-color: #334155; color: #f8fafc; }"
+                    "QPushButton:checked { color: #fde68a; background-color: #92400e; border: 1px solid #f59e0b; }"
+                    "QPushButton:checked:hover:enabled { background-color: #d97706; color: #ffffff; }"
+                    f"QPushButton:disabled {{ color: {_DISABLED_DARK_FG}; background-color: {_DISABLED_DARK_BG}; border: 1px solid {_DISABLED_DARK_BORDER}; }}"
+                )
+            return (
+                "QPushButton { font-weight: bold; font-size: 14px; color: #1e293b; background-color: #f1f5f9; border: 1px solid #cbd5e1; border-radius: 4px; padding: 0px; }"
+                "QPushButton:hover:enabled { background-color: #e2e8f0; color: #0f172a; }"
+                "QPushButton:checked { color: #9a3412; background-color: #fef3c7; border: 1px solid #f59e0b; }"
+                "QPushButton:checked:hover:enabled { background-color: #fde68a; color: #7c2d12; }"
                 f"QPushButton:disabled {{ color: {_DISABLED_LIGHT_FG}; background-color: {_DISABLED_LIGHT_BG}; border: 1px solid {_DISABLED_LIGHT_BORDER}; }}"
             )
 
@@ -1163,6 +1182,8 @@ class MainWindow(
             ),
             "twoD_PC_pumpOrder": order_toggle_style(),
             "twoD_PC_probeOrder": order_toggle_style(),
+            "PC_cropBox": crop_toggle_style(),
+            "twoD_PC_cropBox": crop_toggle_style(),
         }
 
         # Apply mapped styles
@@ -1729,6 +1750,7 @@ class MainWindow(
             "actionQuit": self.close,
             # Pre-processing
             "actionShiftT0": self._shift_t0,
+            "actionCropDataset": self._crop_dataset,
             "actionFitChirp": self._fit_chirp,
             "actionLoadChirpCorr": self._load_chirp_corr,
             "actionEmbedProbeCalH5": self._embed_calibrated_probe_in_h5,
@@ -2496,6 +2518,9 @@ class MainWindow(
         act_glot = getattr(self, "actionExportGlotaran", None)
         if act_glot is not None:
             act_glot.setEnabled(bool(has_1d))
+        act_crop = getattr(self, "actionCropDataset", None)
+        if act_crop is not None:
+            act_crop.setEnabled(bool(has_1d or has_2d))
 
     def _update_embed_cal_h5_action_state(self):
         """Enable the embed-calibration action only when an .h5 dataset is active."""
@@ -2519,8 +2544,21 @@ class MainWindow(
             enabled = False
         act.setEnabled(bool(enabled))
 
+    def _crop_dataset(self):
+        """Open the interactive Crop Dataset dialog for the active 1D or 2D tab."""
+        tabs = getattr(self, "MainTabs", None)
+        idx = tabs.currentIndex() if tabs is not None else 0
+        if idx == 0 and getattr(self, "dataset", None) is not None:
+            self._open_1d_crop_dialog()
+        elif idx == 1 and getattr(self, "twoD_dataset", None) is not None:
+            self._open_2d_crop_dialog()
+
     def _on_main_tabs_changed(self, index: int):
         """Enable / disable actions and menus based on current tab index."""
+        if index != 0 and hasattr(self, "_cancel_1d_box_crop"):
+            self._cancel_1d_box_crop()
+        if index != 1 and hasattr(self, "_cancel_2d_box_crop"):
+            self._cancel_2d_box_crop()
         act_1d = getattr(self, "actionExportPDAT", None)
         act_2d = getattr(self, "actionExportP2DAT", None)
         if act_1d is not None:
@@ -2765,6 +2803,7 @@ class MainWindow(
             self.plot_controls = PlotControlsPanel(self)
             self.plot_controls.renderRequested.connect(self._render_timer.start)
             self.plot_controls.limitsChanged.connect(self._apply_view_limits)
+            self.plot_controls.cropBoxToggled.connect(self._toggle_1d_box_crop)
 
         if getattr(self, "twoD_PC_box", None) is None:
             self.twoD_plot_controls = None
@@ -2772,6 +2811,7 @@ class MainWindow(
             self.twoD_plot_controls = PlotControlsPanel2D(self)
             self.twoD_plot_controls.renderRequested.connect(self._twoD_render_timer.start)
             self.twoD_plot_controls.limitsChanged.connect(self._twoD_apply_view_limits)
+            self.twoD_plot_controls.cropBoxToggled.connect(self._toggle_2d_box_crop)
 
     def _rerender_preview(self):
         """Re-draw the embedded contour (Z scale or a global setting changed)."""

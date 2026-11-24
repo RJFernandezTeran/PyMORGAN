@@ -43,6 +43,7 @@ LoaderResult = tuple[Any, Any, Any, dict, Any, Any, Any]
 Loader = Callable[[str], LoaderResult]
 
 _LOADERS: dict[str, Loader] = {}
+_LOADER_ALIASES: dict[str, str] = {"ufs": "Helios_UFS"}
 
 
 def register_loader(*names: str) -> Callable[[Loader], Loader]:
@@ -58,12 +59,14 @@ def register_loader(*names: str) -> Callable[[Loader], Loader]:
 
 def get_loader(name: str) -> Loader:
     """Return the loader registered for ``name`` or raise ``KeyError``."""
-    try:
+    if name in _LOADERS:
         return _LOADERS[name]
-    except KeyError:
-        raise KeyError(
-            f"No 1-D loader registered for {name!r}. Available: {available_loaders()}"
-        ) from None
+    alias = _LOADER_ALIASES.get(str(name).strip().lower())
+    if alias and alias in _LOADERS:
+        return _LOADERS[alias]
+    raise KeyError(
+        f"No 1-D loader registered for {name!r}. Available: {available_loaders()}"
+    )
 
 
 def available_loaders() -> list[str]:
@@ -4938,6 +4941,20 @@ def _find_helios_main_ufs(folder: Path, dataset_name: str | None = None) -> Path
     if main_files:
         return main_files[0]
 
+    # Fall back to processed Surface Xplorer files (-bg, -chirp, -CORRECTED) when no raw .ufs exists.
+    fallback_files = sorted(
+        [
+            f
+            for f in folder.glob("*.ufs")
+            if f.is_file()
+            and not re.search(r"_scan\d+$", f.stem, re.IGNORECASE)
+            and _has_valid_ufs_header(f)
+        ],
+        key=lambda f: f.name.lower(),
+    )
+    if fallback_files:
+        return fallback_files[0]
+
     raise FileNotFoundError(f"No valid Surface Xplorer dataset (.ufs) found in {folder}.")
 
 
@@ -5004,13 +5021,75 @@ def _parse_ufs_metadata_string(raw_meta: str) -> tuple[dict[str, str], str, str]
     return fields, compact, full
 
 
+def _find_ufs_trailing_note(buf: bytes) -> tuple[str, int]:
+    """Locate a trailing length-prefixed UFS metadata note, returning ``(text, offset)``."""
+    import struct
+
+    total = len(buf)
+    for marker in (b"Converted from", b"Date:", b"Sample:"):
+        start = 0
+        while True:
+            idx = buf.find(marker, start)
+            if idx < 0:
+                break
+            if idx >= 4:
+                (n_bytes,) = struct.unpack_from(">i", buf, idx - 4)
+                if 0 < n_bytes < 20000 and idx + n_bytes <= total:
+                    tail = buf[idx : idx + n_bytes]
+                    if tail.startswith(marker):
+                        return tail.decode("utf-8", errors="replace"), idx - 4
+            start = idx + 1
+    return "", total
+
+
+def _fallback_converted_ufs_matrix(
+    buf: bytes,
+    after_z_lbl: int,
+    float_dtype: str,
+    n_ax1: int,
+    n_ax2: int,
+) -> tuple[str, np.ndarray, str] | None:
+    """Recover matrix + metadata from third-party ``csv->ufs`` files missing ``(n1, n2)``."""
+    item_sz = 8 if float_dtype == ">f8" else 4
+    n_cells = n_ax1 * n_ax2
+    if n_cells <= 0:
+        return None
+    total = len(buf)
+
+    def _plausible_score(arr_1d: np.ndarray) -> float:
+        absv = np.abs(arr_1d)
+        ok = np.isfinite(arr_1d) & (absv < 1e2) & ((arr_1d == 0.0) | (absv > 1e-300))
+        return float(np.mean(ok))
+
+    note, note_offset = _find_ufs_trailing_note(buf)
+    if note and note_offset < total:
+        offset = note_offset - n_cells * item_sz
+        if offset >= after_z_lbl and offset + n_cells * item_sz <= total:
+            raw = np.frombuffer(buf, dtype=float_dtype, count=n_cells, offset=offset).astype(
+                np.float64
+            )
+            if _plausible_score(raw) > 0.8:
+                return "", raw.reshape((n_ax1, n_ax2)), note
+
+    for pad in (0, 4, 8, 12, 16):
+        offset = after_z_lbl + pad
+        if offset >= 0 and offset + n_cells * item_sz <= total:
+            raw = np.frombuffer(buf, dtype=float_dtype, count=n_cells, offset=offset).astype(
+                np.float64
+            )
+            if _plausible_score(raw) > 0.8:
+                return "", raw.reshape((n_ax1, n_ax2)), note
+    return None
+
+
 def parse_ufs(file_path: Path | str) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]:
     """Parse a Surface Xplorer ``.ufs`` binary file into ``(delays, probe, sig_mod, meta)``.
 
     Supports ``Version2`` (64-bit big-endian IEEE floats ``>f8``) and ``Version1``
     (32-bit big-endian floats ``>f4``). Converts ``DA`` / ``OD`` signal values to
-    ``mOD`` (``* 1000.0``) unless ``z_unit`` already indicates ``mOD``, and
-    transposes ``[Nwl x Ndelays]`` into ``[Ndelays x Npixels]``.
+    ``mOD`` (``* 1000.0``) unless ``z_unit`` already indicates ``mOD``, sorts
+    descending probe axes ascending, tracks interpolated padding quality, and
+    includes a fallback for third-party ``csv -> ufs`` conversion outputs.
     """
     import struct
 
@@ -5060,26 +5139,37 @@ def parse_ufs(file_path: Path | str) -> tuple[np.ndarray, np.ndarray, np.ndarray
     ax2_unit = _read_str()
     ax2 = _read_farray(float_dtype)
     z_lbl = _read_str()
-    z_unit = _read_str()
-
-    if pos + 8 > total:
-        raise ValueError(f"Truncated UFS matrix dimensions in {p}")
-    n1, n2 = struct.unpack_from(">ii", buf, pos)
-    pos += 8
-    if n1 < 0 or n2 < 0 or pos + n1 * n2 * item_sz > total:
-        raise ValueError(f"Invalid UFS matrix shape ({n1}, {n2}) in {p}")
-    mat = (
-        np.frombuffer(buf, dtype=float_dtype, count=n1 * n2, offset=pos)
-        .astype(np.float64)
-        .reshape((n1, n2))
-    )
-    pos += n1 * n2 * item_sz
+    after_z_lbl = pos
 
     raw_meta = ""
-    if pos + 4 <= total:
-        (meta_len,) = struct.unpack_from(">i", buf, pos)
-        if 0 <= meta_len <= total - (pos + 4):
-            raw_meta = _read_str()
+    try:
+        z_unit = _read_str()
+        if pos + 8 > total:
+            raise ValueError(f"Truncated UFS matrix dimensions in {p}")
+        n1, n2 = struct.unpack_from(">ii", buf, pos)
+        pos += 8
+        if n1 < 0 or n2 < 0 or pos + n1 * n2 * item_sz > total:
+            raise ValueError(f"Invalid UFS matrix shape ({n1}, {n2}) in {p}")
+        if sorted((n1, n2)) != sorted((len(ax1), len(ax2))):
+            raise ValueError(
+                f"UFS matrix dimensions ({n1}, {n2}) do not match axes ({len(ax1)}, {len(ax2)}) in {p}"
+            )
+        mat = (
+            np.frombuffer(buf, dtype=float_dtype, count=n1 * n2, offset=pos)
+            .astype(np.float64)
+            .reshape((n1, n2))
+        )
+        pos += n1 * n2 * item_sz
+
+        if pos + 4 <= total:
+            (meta_len,) = struct.unpack_from(">i", buf, pos)
+            if 0 <= meta_len <= total - (pos + 4):
+                raw_meta = _read_str()
+    except (ValueError, struct.error):
+        fallback = _fallback_converted_ufs_matrix(buf, after_z_lbl, float_dtype, len(ax1), len(ax2))
+        if fallback is None:
+            raise
+        z_unit, mat, raw_meta = fallback
 
     # Determine spectral (probe) vs delay axis
     ax1_is_time = "time" in ax1_lbl.lower() or ax1_unit.strip().lower() in ("ps", "ns", "fs")
@@ -5103,15 +5193,35 @@ def parse_ufs(file_path: Path | str) -> tuple[np.ndarray, np.ndarray, np.ndarray
         )
 
     is_mod = "mod" in z_unit.lower() or "mod" in z_lbl.lower()
-    sig_mod = _interpolate_nonfinite_2d(sig.copy() if is_mod else sig * 1000.0)
+    sig_working = sig.copy() if is_mod else sig * 1000.0
+
+    # Treat non-finite, extreme padding (>= 1e2 OD / 1e5 mOD), and subnormal fragments as invalid
+    is_subnormal = (sig != 0.0) & (np.abs(sig) < 1e-300)
+    is_absurd = np.isfinite(sig_working) & (np.abs(sig_working) >= 1e5)
+    invalid_mask = (~np.isfinite(sig_working)) | is_subnormal | is_absurd
+    n_filled = int(np.count_nonzero(invalid_mask))
+    filled_fraction = float(n_filled / sig_working.size) if sig_working.size else 0.0
+    if n_filled:
+        sig_working = np.where(invalid_mask, np.nan, sig_working)
+
+    sig_mod = _interpolate_nonfinite_2d(sig_working)
+
+    if probe.size > 1 and np.all(np.isfinite(probe)) and probe[0] > probe[-1]:
+        if np.all(np.diff(probe) <= 0):
+            order = np.argsort(probe)
+            probe = probe[order]
+            sig_mod = sig_mod[:, order]
 
     fields, compact_info, full_info = _parse_ufs_metadata_string(raw_meta)
 
     pu_low = (probe_unit or "").strip().lower()
-    if "cm" in pu_low or "wavenumber" in probe_lbl.lower():
+    pl_low = (probe_lbl or "").strip().lower()
+    if "cm" in pu_low or "wavenumber" in pl_low:
         units_L = "cm^{-1}"
-    elif "ev" in pu_low or "energy" in probe_lbl.lower():
+    elif "ev" in pu_low or "energy" in pl_low:
         units_L = "eV"
+    elif pu_low in ("px", "pix", "pixel", "pixels") or "pixel" in pl_low:
+        units_L = "px"
     else:
         units_L = "nm"
 
@@ -5135,6 +5245,11 @@ def parse_ufs(file_path: Path | str) -> tuple[np.ndarray, np.ndarray, np.ndarray
         "fields": fields,
         "sample_info": compact_info,
         "sample_info_full": full_info,
+        "ufs_quality": {
+            "filled_fraction": filled_fraction,
+            "n_filled": n_filled,
+            "status": "ok" if n_filled == 0 else "cleaned",
+        },
     }
     return delays, probe, sig_mod, meta
 
@@ -5237,10 +5352,26 @@ def read_Helios_UFS(datafilename: str, dataset_name: str | None = None) -> Loade
 
     Units = hlp.units2dic(meta["unitsL"], meta["unitsT"], "x1E3")
     Units["cal_source"] = "Dataset probe axis (UFS)"
+    if meta.get("ufs_quality"):
+        Units["ufs_quality"] = meta["ufs_quality"]
+        frac = float(meta["ufs_quality"].get("filled_fraction", 0.0))
+        if frac > 0.2:
+            logger.warning(
+                "UFS file %s had %.1f%% invalid/padded cells interpolated.",
+                main_file.name,
+                frac * 100.0,
+            )
     if meta.get("sample_info"):
         Units["sample_info"] = meta["sample_info"]
     if meta.get("sample_info_full"):
-        Units["sample_info_full"] = meta["sample_info_full"]
+        full_info = meta["sample_info_full"]
+        if meta.get("ufs_quality") and float(meta["ufs_quality"].get("filled_fraction", 0.0)) > 0.2:
+            pct = float(meta["ufs_quality"]["filled_fraction"]) * 100.0
+            full_info = f"{full_info}\nUFS quality: {pct:.1f}% padded/invalid cells interpolated"
+        Units["sample_info_full"] = full_info
+    elif meta.get("ufs_quality") and float(meta["ufs_quality"].get("filled_fraction", 0.0)) > 0.2:
+        pct = float(meta["ufs_quality"]["filled_fraction"]) * 100.0
+        Units["sample_info_full"] = f"UFS quality: {pct:.1f}% padded/invalid cells interpolated"
     if meta.get("fields"):
         Units["ufs_metadata"] = meta["fields"]
     return Zavg_R, delays, probe, Units, Nscans, Zss_R, Zstdv, scan_ids

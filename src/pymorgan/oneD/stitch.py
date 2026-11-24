@@ -76,7 +76,7 @@ class StitchResult:
 
     @property
     def Z(self) -> np.ndarray:
-        """Stitched 2D data matrix."""
+        """Stitched data matrix ``[Ndelays x Npixels x 1]``."""
         return self.dataset.Z
 
     def to_dataset(self) -> Dataset1D:
@@ -326,16 +326,23 @@ def stitch_wavelength(
         actual_cutover = None
 
     # 7. Construct Resulting Dataset1D
+    out_z_3d = np.asarray(out_z, dtype=float)
+    if out_z_3d.ndim == 2:
+        out_z_3d = out_z_3d[:, :, np.newaxis]
     units = dict(ds1.units or {})
     src_name = f"Wavelength-Stitched ({getattr(ds1, 'source', 'ds1')} + {getattr(ds2, 'source', 'ds2')})"
     res_ds = Dataset1D(
-        Zavg_R=out_z,
+        Zavg_R=out_z_3d,
         delays=np.copy(t_out),
         probe=np.copy(out_wl),
         units=units,
+        nscans=np.nan,
+        Zss_R=None,
+        Zstdv=np.zeros_like(out_z_3d),
         source=src_name,
+        data_type="Wavelength-Stitched",
     )
-    res_ds.Zavg_C = np.copy(out_z)
+    res_ds.Zavg_C = np.copy(out_z_3d)
 
     return StitchResult(
         dataset=res_ds,
@@ -592,19 +599,26 @@ def stitch_time(
     joined_z = weights[:, np.newaxis] * fs_interp_t + (1.0 - weights[:, np.newaxis]) * ns_interp_t
 
     # 6. Construct Resulting Dataset1D in ns
+    joined_z_3d = np.asarray(joined_z, dtype=float)
+    if joined_z_3d.ndim == 2:
+        joined_z_3d = joined_z_3d[:, :, np.newaxis]
     units = dict(ds_fs.units or {})
     units["unitsT_lbl"] = "Delay"
     units["unitsT_ltx"] = "ns"
     src_name = f"Timescale-Stitched ({getattr(ds_fs, 'source', 'fs')} + {getattr(ds_ns, 'source', 'ns')})"
 
     res_ds = Dataset1D(
-        Zavg_R=joined_z,
+        Zavg_R=joined_z_3d,
         delays=joined_t,
         probe=np.copy(master_wl),
         units=units,
+        nscans=np.nan,
+        Zss_R=None,
+        Zstdv=np.zeros_like(joined_z_3d),
         source=src_name,
+        data_type="Timescale-Stitched",
     )
-    res_ds.Zavg_C = np.copy(joined_z)
+    res_ds.Zavg_C = np.copy(joined_z_3d)
 
     return StitchResult(
         dataset=res_ds,

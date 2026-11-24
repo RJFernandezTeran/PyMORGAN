@@ -400,38 +400,76 @@ class Dataset2D:
     # ----------------------------------------------------------------- #
     @classmethod
     def from_file(
-        cls, path: str | PathLike, data_type: str = "P2DAT", progress_tracker=None
+        cls,
+        path: str | PathLike,
+        data_type: str | None = None,
+        progress_tracker=None,
     ) -> Dataset2D:
-        """Load a 2-D dataset from ``path`` using the loader for ``data_type``."""
-        if data_type == "HDF5_2D":
-            from .load import load_2D_hdf5
+        """Load a 2-D dataset from ``path`` using ``data_type`` (auto-detected when omitted)."""
+        from pathlib import Path
 
-            ds = load_2D_hdf5(path)
-            if ds.data_type and "original_data_type" not in ds.units:
-                ds.units["original_data_type"] = ds.data_type
-            ds.data_type = data_type
-            ds.source = str(path)
-            return ds
+        explicit_type = data_type is not None and str(data_type).strip().lower() != "auto"
+        if not explicit_type:
+            from ..detect import detect_format
 
-        loader = get_map_loader(data_type)
-        if data_type in (
-            "MESS_2DIR",
-            "PyMESS_2D",
-            "QuickControl_2D",
-            "UoS_2DIR",
-            "RAL_RAW",
-            "RAL_Proc",
-        ) or getattr(loader, "__name__", None) in (
-            "read_MESS_2DIR",
-            "read_PyMESS_2D",
-            "read_QuickControl_2D",
-            "read_UoS_2DIR",
-            "read_RAL_RAW",
-            "read_RAL_Proc",
-        ):
-            res = loader(str(path), progress_tracker=progress_tracker)
-        else:
-            res = loader(str(path))
+            match = detect_format(path)
+            if match is not None and match.dimension == "2D":
+                data_type = match.data_type
+                path = match.resolved_path
+            else:
+                data_type = "P2DAT"
+
+        assert data_type is not None
+        loader = None
+        if data_type != "HDF5_2D":
+            loader = get_map_loader(data_type)
+
+        try:
+            if data_type == "HDF5_2D":
+                from .load import load_2D_hdf5
+
+                ds = load_2D_hdf5(path)
+                if ds.data_type and "original_data_type" not in ds.units:
+                    ds.units["original_data_type"] = ds.data_type
+                ds.data_type = data_type
+                ds.source = str(path)
+                return ds
+
+            assert loader is not None
+            if data_type in (
+                "MESS_2DIR",
+                "PyMESS_2D",
+                "QuickControl_2D",
+                "UoS_2DIR",
+                "RAL_RAW",
+                "RAL_Proc",
+            ) or getattr(loader, "__name__", None) in (
+                "read_MESS_2DIR",
+                "read_PyMESS_2D",
+                "read_QuickControl_2D",
+                "read_UoS_2DIR",
+                "read_RAL_RAW",
+                "read_RAL_Proc",
+            ):
+                res = loader(str(path), progress_tracker=progress_tracker)
+            else:
+                res = loader(str(path))
+        except (KeyError, FileNotFoundError):
+            raise
+        except Exception as exc:
+            if explicit_type:
+                from ..detect import detect_format
+
+                match = detect_format(path)
+                if match is not None and (
+                    match.dimension != "2D" or match.data_type != data_type
+                ):
+                    raise ValueError(
+                        f"{exc} (Detected format for {Path(path).name!r}: {match.dimension} "
+                        f"{match.data_type!r}; try data_type={match.data_type!r} or omit "
+                        f"data_type for auto-detection.)"
+                    ) from exc
+            raise
         if len(res) == 11:
             (
                 Z,
@@ -1029,19 +1067,33 @@ class Dataset2D:
         ):
             return self
 
+        if t2_min is not None and t2_max is not None and float(t2_min) > float(t2_max):
+            t2_min, t2_max = t2_max, t2_min
+        if pump_min is not None and pump_max is not None and float(pump_min) > float(pump_max):
+            pump_min, pump_max = pump_max, pump_min
+        if probe_min is not None and probe_max is not None and float(probe_min) > float(probe_max):
+            probe_min, probe_max = probe_max, probe_min
+
         def _do():
             if t2_min is not None or t2_max is not None:
+                old_nt2 = len(self.delays)
                 t_low = -np.inf if t2_min is None else float(t2_min)
                 t_high = np.inf if t2_max is None else float(t2_max)
-                t_mask = (self.delays >= t_low) & (self.delays <= t_high)
-                if not np.any(t_mask):
+                t2_mask = (self.delays >= t_low) & (self.delays <= t_high)
+                if not np.any(t2_mask):
                     raise ValueError(f"No t2 delays fall in range [{t_low}, {t_high}]")
-                self.delays = self.delays[t_mask]
-                self.Z_R = self.Z_R[:, :, t_mask]
+                self.delays = self.delays[t2_mask]
+                self.Z_R = self.Z_R[:, :, t2_mask]
                 if self.Z_C is not None:
-                    self.Z_C = self.Z_C[:, :, t_mask]
+                    self.Z_C = self.Z_C[:, :, t2_mask]
+                if getattr(self, "detector_data", None):
+                    for det_name, cube in list(self.detector_data.items()):
+                        arr = np.asarray(cube)
+                        if arr.ndim == 3 and arr.shape[2] == old_nt2:
+                            self.detector_data[det_name] = arr[:, :, t2_mask]
 
             if pump_min is not None or pump_max is not None:
+                old_npump = len(self.pump)
                 p_low = -np.inf if pump_min is None else float(pump_min)
                 p_high = np.inf if pump_max is None else float(pump_max)
                 pu_mask = (self.pump >= p_low) & (self.pump <= p_high)
@@ -1051,8 +1103,14 @@ class Dataset2D:
                 self.Z_R = self.Z_R[pu_mask, :, :]
                 if self.Z_C is not None:
                     self.Z_C = self.Z_C[pu_mask, :, :]
+                if getattr(self, "detector_data", None):
+                    for det_name, cube in list(self.detector_data.items()):
+                        arr = np.asarray(cube)
+                        if arr.ndim == 3 and arr.shape[0] == old_npump:
+                            self.detector_data[det_name] = arr[pu_mask, :, :]
 
             if probe_min is not None or probe_max is not None:
+                old_nprobe = len(self.probe)
                 pr_low = -np.inf if probe_min is None else float(probe_min)
                 pr_high = np.inf if probe_max is None else float(probe_max)
                 pr_probe = self.probe[:, 0] if self.probe.ndim > 1 else self.probe
@@ -1063,6 +1121,20 @@ class Dataset2D:
                 self.Z_R = self.Z_R[:, pr_mask, :]
                 if self.Z_C is not None:
                     self.Z_C = self.Z_C[:, pr_mask, :]
+                if getattr(self, "detector_data", None):
+                    det_probes = getattr(self, "detector_probes", None) or {}
+                    for det_name, cube in list(self.detector_data.items()):
+                        arr = np.asarray(cube)
+                        if det_name in det_probes:
+                            dp = np.asarray(det_probes[det_name], dtype=float)
+                            dp_1d = dp[:, 0] if dp.ndim > 1 else dp
+                            d_mask = (dp_1d >= pr_low) & (dp_1d <= pr_high)
+                            if np.any(d_mask):
+                                det_probes[det_name] = dp[d_mask] if dp.ndim == 1 else dp[d_mask, :]
+                                if arr.ndim == 3 and arr.shape[1] == len(dp_1d):
+                                    self.detector_data[det_name] = arr[:, d_mask, :]
+                        elif arr.ndim == 3 and arr.shape[1] == old_nprobe:
+                            self.detector_data[det_name] = arr[:, pr_mask, :]
 
         params = {
             k: float(v)
@@ -1819,6 +1891,12 @@ class Dataset2D:
         return res
 
 
-def load_2D(path: str | PathLike, data_type: str = "P2DAT", progress_tracker=None) -> Dataset2D:
-    """Convenience wrapper for :meth:`Dataset2D.from_file`."""
+def load_2D(
+    path: str | PathLike, data_type: str | None = None, progress_tracker=None
+) -> Dataset2D:
+    """Convenience wrapper for :meth:`Dataset2D.from_file`.
+
+    When ``data_type`` is ``None`` (default) or ``"auto"``, :func:`pymorgan.detect_format`
+    infers the format automatically (falling back to ``"P2DAT"``).
+    """
     return Dataset2D.from_file(path, data_type=data_type, progress_tracker=progress_tracker)

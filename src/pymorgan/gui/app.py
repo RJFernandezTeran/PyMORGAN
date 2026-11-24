@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 import time
+import traceback
 from pathlib import Path
 
 from ..log import get_logger
 
 logger = get_logger(__name__)
+
+_IN_EXCEPTHOOK = False
 
 _START_TIME = time.perf_counter()
 
@@ -180,6 +184,81 @@ def _install_file_open_filter(app, window):
     return filt
 
 
+def install_gui_excepthook(app_name: str = "PyMORGAN") -> None:
+    """Install Qt-safe global exception hooks so ``pythonw`` builds report crashes.
+
+    Unhandled exceptions are logged with full tracebacks and, when a graphical
+    Qt session is active (outside headless/pytest runs), surfaced in a critical
+    ``QMessageBox`` with expandable traceback details instead of terminating the
+    GUI silently.
+    """
+
+    def _can_show_dialog() -> bool:
+        if os.environ.get("QT_QPA_PLATFORM", "").lower() == "offscreen":
+            return False
+        if "PYTEST_CURRENT_TEST" in os.environ:
+            return False
+        try:
+            from PyQt6.QtWidgets import QApplication
+
+            return QApplication.instance() is not None
+        except Exception:
+            return False
+
+    def _excepthook(exc_type, exc_value, exc_tb):
+        global _IN_EXCEPTHOOK
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc_value, exc_tb)
+            return
+        if _IN_EXCEPTHOOK:
+            sys.__excepthook__(exc_type, exc_value, exc_tb)
+            return
+
+        _IN_EXCEPTHOOK = True
+        try:
+            tb_text = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+            logger.error(
+                "Unhandled exception in %s",
+                app_name,
+                exc_info=(exc_type, exc_value, exc_tb),
+            )
+            if _can_show_dialog():
+                try:
+                    from PyQt6.QtWidgets import QApplication, QMessageBox
+
+                    parent = QApplication.activeWindow()
+                    box = QMessageBox(parent)
+                    box.setIcon(QMessageBox.Icon.Critical)
+                    box.setWindowTitle(f"Unexpected Error in {app_name}")
+                    box.setText(
+                        f"An unexpected error occurred in {app_name}:\n\n"
+                        f"{exc_type.__name__}: {exc_value}"
+                    )
+                    box.setDetailedText(tb_text)
+                    box.exec()
+                    return
+                except Exception:
+                    logger.debug("Failed to display GUI error dialog", exc_info=True)
+            if sys.stderr is not None:
+                sys.stderr.write(tb_text)
+                sys.stderr.flush()
+        finally:
+            _IN_EXCEPTHOOK = False
+
+    def _thread_excepthook(args: threading.ExceptHookArgs):
+        if issubclass(args.exc_type, SystemExit):
+            return
+        logger.error(
+            "Unhandled exception in worker thread %s of %s",
+            getattr(getattr(args, "thread", None), "name", "<unknown>"),
+            app_name,
+            exc_info=(args.exc_type, args.exc_value, args.exc_traceback),
+        )
+
+    sys.excepthook = _excepthook
+    threading.excepthook = _thread_excepthook
+
+
 def main(argv: list[str] | None = None) -> int:
     """Create the QApplication, show the main window and run the event loop."""
     t_start = _START_TIME if "_START_TIME" in globals() else time.perf_counter()
@@ -219,6 +298,7 @@ def main(argv: list[str] | None = None) -> int:
     from PyQt6.QtWidgets import QApplication, QStyleFactory
 
     app = QApplication.instance() or QApplication(args)
+    install_gui_excepthook("PyMORGAN")
     from PyQt6.QtGui import QIcon
 
     _icon = Path(__file__).with_name("icons") / "pirate-hat.png"

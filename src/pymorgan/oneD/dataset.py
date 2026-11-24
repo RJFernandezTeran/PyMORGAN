@@ -104,6 +104,8 @@ class Dataset1D:
         counts=None,
     ):
         self.Zavg_R = np.asarray(Zavg_R)
+        if self.Zavg_R.ndim == 2:
+            self.Zavg_R = self.Zavg_R[:, :, np.newaxis]
         self.delays = np.asarray(delays)
         self.probe = np.asarray(probe)
         default_u = {
@@ -117,7 +119,13 @@ class Dataset1D:
         self.units = {**default_u, **(units or {})}
         self.nscans = nscans
         self.Zss_R = Zss_R
-        self.Zstdv = Zstdv
+        if Zstdv is not None:
+            zstdv_arr = np.asarray(Zstdv)
+            if zstdv_arr.ndim == 2:
+                zstdv_arr = zstdv_arr[:, :, np.newaxis]
+            self.Zstdv = zstdv_arr
+        else:
+            self.Zstdv = None
         self.source = source
         self.data_type = data_type
         self.scan_ids = scan_ids
@@ -157,31 +165,67 @@ class Dataset1D:
     #                          Load (construction)                      #
     # ----------------------------------------------------------------- #
     @classmethod
-    def from_file(cls, path: str | PathLike, data_type: str = "PDAT", **loader_kwargs) -> Dataset1D:
-        """Load a dataset from ``path`` using the loader for ``data_type``.
+    def from_file(
+        cls, path: str | PathLike, data_type: str | None = None, **loader_kwargs
+    ) -> Dataset1D:
+        """Load a dataset from ``path`` using ``data_type`` (auto-detected when omitted).
 
         Extra keyword arguments are forwarded to the loader (e.g. ``spectrum``,
         ``slowmod`` and ``anisotropy`` for the MESS_TRIR reader). Loaders that
         take no options simply receive none.
         """
-        if data_type == "HDF5" and not loader_kwargs:
-            import h5py
+        explicit_type = data_type is not None and str(data_type).strip().lower() != "auto"
+        if not explicit_type:
+            from ..detect import detect_format
 
-            p = Path(path)
-            if p.is_file() and h5py.is_hdf5(p):
-                with h5py.File(p, "r") as f:
-                    if "delays" in f and "Zavg_R" in f:
-                        from .load import load_1D_hdf5
+            match = detect_format(path)
+            if match is not None and match.dimension == "1D":
+                data_type = match.data_type
+                path = match.resolved_path
+            else:
+                data_type = "PDAT"
 
-                        ds = load_1D_hdf5(p)
-                        if ds.data_type and "original_data_type" not in ds.units:
-                            ds.units["original_data_type"] = ds.data_type
-                        ds.data_type = data_type
-                        ds.source = str(path)
-                        return ds
+        assert data_type is not None
+        loader = None
+        if not (data_type == "HDF5" and not loader_kwargs):
+            loader = get_loader(data_type)
 
-        loader = get_loader(data_type)
-        res = loader(str(path), **loader_kwargs)
+        try:
+            if data_type == "HDF5" and not loader_kwargs:
+                import h5py
+
+                p = Path(path)
+                if p.is_file() and h5py.is_hdf5(p):
+                    with h5py.File(p, "r") as f:
+                        if "delays" in f and "Zavg_R" in f:
+                            from .load import load_1D_hdf5
+
+                            ds = load_1D_hdf5(p)
+                            if ds.data_type and "original_data_type" not in ds.units:
+                                ds.units["original_data_type"] = ds.data_type
+                            ds.data_type = data_type
+                            ds.source = str(path)
+                            return ds
+                loader = get_loader(data_type)
+
+            assert loader is not None
+            res = loader(str(path), **loader_kwargs)
+        except (KeyError, FileNotFoundError):
+            raise
+        except Exception as exc:
+            if explicit_type:
+                from ..detect import detect_format
+
+                match = detect_format(path)
+                if match is not None and (
+                    match.dimension != "1D" or match.data_type != data_type
+                ):
+                    raise ValueError(
+                        f"{exc} (Detected format for {Path(path).name!r}: {match.dimension} "
+                        f"{match.data_type!r}; try data_type={match.data_type!r} or omit "
+                        f"data_type for auto-detection.)"
+                    ) from exc
+            raise
         counts = None
         if len(res) >= 9:
             Zavg_R, delays, probe, units, nscans, Zss_R, Zstdv, scan_ids, counts = res[:9]
@@ -409,8 +453,14 @@ class Dataset1D:
         if tmin is None and tmax is None and probe_min is None and probe_max is None:
             return self
 
+        if tmin is not None and tmax is not None and float(tmin) > float(tmax):
+            tmin, tmax = tmax, tmin
+        if probe_min is not None and probe_max is not None and float(probe_min) > float(probe_max):
+            probe_min, probe_max = probe_max, probe_min
+
         def _do():
             if tmin is not None or tmax is not None:
+                old_nt = len(self.delays)
                 t_low = -np.inf if tmin is None else float(tmin)
                 t_high = np.inf if tmax is None else float(tmax)
                 t_mask = (self.delays >= t_low) & (self.delays <= t_high)
@@ -428,8 +478,27 @@ class Dataset1D:
                     self.Zss_C = self.Zss_C[t_mask]
                 if self.Zstdv is not None:
                     self.Zstdv = self.Zstdv[t_mask]
+                if (
+                    getattr(self, "_orig_Zstdv", None) is not None
+                    and self._orig_Zstdv.shape[0] == old_nt
+                ):
+                    self._orig_Zstdv = self._orig_Zstdv[t_mask]
+                if (
+                    isinstance(self.counts, np.ndarray)
+                    and self.counts.ndim >= 1
+                    and self.counts.shape[0] == old_nt
+                ):
+                    self.counts = self.counts[t_mask]
+                if (
+                    isinstance(self.units, dict)
+                    and isinstance(self.units.get("rms"), np.ndarray)
+                    and self.units["rms"].shape[0] == old_nt
+                ):
+                    self.units = dict(self.units)
+                    self.units["rms"] = self.units["rms"][t_mask]
 
             if probe_min is not None or probe_max is not None:
+                old_np = len(self.probe)
                 p_low = -np.inf if probe_min is None else float(probe_min)
                 p_high = np.inf if probe_max is None else float(probe_max)
 
@@ -461,6 +530,37 @@ class Dataset1D:
                     self.Zstdv = (
                         self.Zstdv[:, p_mask] if self.Zstdv.ndim == 2 else self.Zstdv[:, p_mask, :]
                     )
+                if (
+                    getattr(self, "_orig_Zstdv", None) is not None
+                    and self._orig_Zstdv.ndim >= 2
+                    and self._orig_Zstdv.shape[1] == old_np
+                ):
+                    self._orig_Zstdv = (
+                        self._orig_Zstdv[:, p_mask]
+                        if self._orig_Zstdv.ndim == 2
+                        else self._orig_Zstdv[:, p_mask, :]
+                    )
+                if (
+                    isinstance(self.counts, np.ndarray)
+                    and self.counts.ndim >= 2
+                    and self.counts.shape[1] == old_np
+                ):
+                    self.counts = (
+                        self.counts[:, p_mask]
+                        if self.counts.ndim == 2
+                        else self.counts[:, p_mask, :]
+                    )
+                if (
+                    isinstance(self.units, dict)
+                    and isinstance(self.units.get("rms"), np.ndarray)
+                    and self.units["rms"].ndim >= 2
+                    and self.units["rms"].shape[1] == old_np
+                ):
+                    self.units = dict(self.units)
+                    rms_arr = self.units["rms"]
+                    self.units["rms"] = (
+                        rms_arr[:, p_mask] if rms_arr.ndim == 2 else rms_arr[:, p_mask, :]
+                    )
                 if self.bkg_avg is not None:
                     self.bkg_avg = (
                         self.bkg_avg[p_mask] if self.bkg_avg.ndim == 1 else self.bkg_avg[p_mask, :]
@@ -469,6 +569,10 @@ class Dataset1D:
                     self.bkg_ss = (
                         self.bkg_ss[p_mask] if self.bkg_ss.ndim == 1 else self.bkg_ss[p_mask, :]
                     )
+
+            if isinstance(self.units, dict) and "counts" in self.units and self.counts is not None:
+                self.units = dict(self.units)
+                self.units["counts"] = self.counts
 
             self._scatter_removal_result = None
             self._scatter_removal_params = None
@@ -2334,10 +2438,11 @@ class Dataset1D:
         )
 
 
-def load_1D(path: str | PathLike, data_type: str = "PDAT", **loader_kwargs) -> Dataset1D:
+def load_1D(path: str | PathLike, data_type: str | None = None, **loader_kwargs) -> Dataset1D:
     """Convenience wrapper for :meth:`Dataset1D.from_file`.
 
-    Extra keyword arguments are forwarded to the selected loader (e.g.
-    ``spectrum`` / ``slowmod`` / ``anisotropy`` for MESS_TRIR).
+    When ``data_type`` is ``None`` (default) or ``"auto"``, :func:`pymorgan.detect_format`
+    infers the format automatically (falling back to ``"PDAT"``). Extra keyword
+    arguments are forwarded to the selected loader.
     """
     return Dataset1D.from_file(path, data_type=data_type, **loader_kwargs)
